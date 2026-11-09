@@ -11,10 +11,10 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
       `bin/commands/<name>.mjs` (credits/ledger/rates are stubs until M1.9b), shared stderr
       logger with `[colab]` prefix, `--json` flag plumbing, exit codes per DESIGN. Exit: `node
       bin/orca-colab.mjs --help` lists commands. — Done: CLI entry, 13 command handlers, `--json` and `[colab]` stderr plumbing (`test/cli-scaffold.test.mjs`).
-- [ ] **M1.2 State + config.** `bin/lib/colab-home.mjs` (home dir via `os.homedir()`, 0700 dir, atomic
+- [x] **M1.2 State + config.** `bin/lib/colab-home.mjs` (home dir via `os.homedir()`, 0700 dir, atomic
       JSON write tmp+rename, 0600 for config; config shape per DESIGN with `accounts: [{ label: "default",
       notebookUrl? }]` and `defaultAccount: "default"` from day one), `bin/lib/session-store.mjs` (list/read/write/delete
-      sessions, "default session" rule). `node --test` for atomic write and default-session selection.
+      sessions, "default session" rule). `node --test` for atomic write and default-session selection. — Done: atomic 0600 config/session persistence and default-session selection (`test/state-and-sessions.test.mjs`).
 - [ ] **M1.3 Doctor.** `bin/lib/tailscale-cli.mjs` (locate binary, `status --json` parse: BackendState,
       Self, Peer map), `bin/lib/doctor.mjs` (checks per DESIGN, structured result), `doctor` command
       output. Test with a fixture status JSON.
