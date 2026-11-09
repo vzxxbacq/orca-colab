@@ -15,9 +15,9 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
       JSON write tmp+rename, 0600 for config; config shape per DESIGN with `accounts: [{ label: "default",
       notebookUrl? }]` and `defaultAccount: "default"` from day one), `bin/lib/session-store.mjs` (list/read/write/delete
       sessions, "default session" rule). `node --test` for atomic write and default-session selection. — Done: atomic 0600 config/session persistence and default-session selection (`test/state-and-sessions.test.mjs`).
-- [ ] **M1.3 Doctor.** `bin/lib/tailscale-cli.mjs` (locate binary, `status --json` parse: BackendState,
+- [x] **M1.3 Doctor.** `bin/lib/tailscale-cli.mjs` (locate binary, `status --json` parse: BackendState,
       Self, Peer map), `bin/lib/doctor.mjs` (checks per DESIGN, structured result), `doctor` command
-      output. Test with a fixture status JSON.
+      output. Test with a fixture status JSON. — Done: Tailscale locator/status parser and structured prerequisite checks (`test/doctor.test.mjs`).
 - [ ] **M1.4 Setup.** Prompts (`node:readline/promises`) or flags; `bin/lib/ssh-keypair.mjs` (ed25519,
       comment `orca-colab`); writes config; prints prefill values; `bin/lib/open-url.mjs` and
       `bin/lib/clipboard.mjs` (pbcopy / wl-copy / xclip / clip.exe, graceful fallback).
