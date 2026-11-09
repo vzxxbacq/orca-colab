@@ -48,6 +48,7 @@ test("setup writes config and generates SSH keypair without leaking authKey to s
       env: {},
       homeDir: tmpHome,
       now: () => "2026-11-09T12:00:00.000Z",
+      copyClipboard: () => ({ copied: true, tool: "pbcopy" }),
       runKeygen: (_bin, _args, { privateKeyPath, publicKeyPath }) => {
         writeFileSync(privateKeyPath, "FAKE_PRIV\n", { mode: 0o600 });
         writeFileSync(publicKeyPath, `${fakePub}\n`, { mode: 0o644 });

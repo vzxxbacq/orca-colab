@@ -1,6 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
 import { CliError, EXIT_OK, log, writeJson } from "../lib/cli-output.mjs";
+import { copyToClipboard } from "../lib/clipboard.mjs";
 import {
   getColabPaths,
   isValidAuthKey,
@@ -11,6 +12,14 @@ import {
 import { BOOTSTRAP_NOTEBOOK_COLAB_URL, openUrl } from "../lib/open-url.mjs";
 import { ensureSshKeypair } from "../lib/ssh-keypair.mjs";
 import { getTailscaleStatus } from "../lib/tailscale-cli.mjs";
+
+function isPublicGithubNotebookUrl(url) {
+  if (!url) return false;
+  return (
+    url === BOOTSTRAP_NOTEBOOK_COLAB_URL ||
+    url.includes("colab.research.google.com/github/")
+  );
+}
 
 export async function run(
   argv,
@@ -24,6 +33,7 @@ export async function run(
     isTTY = Boolean(process.stdin.isTTY),
     runKeygen = null,
     openBrowser = openUrl,
+    copyClipboard = copyToClipboard,
     now = () => new Date().toISOString(),
   },
 ) {
@@ -121,6 +131,19 @@ export async function run(
     }
     log(`Bootstrap notebook: ${BOOTSTRAP_NOTEBOOK_COLAB_URL}`, stderr);
 
+    const pasteLine = loginServer
+      ? `${authKey} ${loginServer} ${keypair.publicKey}`
+      : `${authKey} ${keypair.publicKey}`;
+    const clip = copyClipboard(pasteLine, { env });
+    if (clip.copied) {
+      log(
+        loginServer
+          ? "Copied '<authkey> <loginServer> <pubkey>' to clipboard for the Colab PASTE field."
+          : "Copied '<authkey> <pubkey>' to clipboard for the Colab PASTE field.",
+        stderr,
+      );
+    }
+
     let notebookUrl =
       opts["notebook-url"] !== undefined
         ? opts["notebook-url"].trim()
@@ -135,11 +158,22 @@ export async function run(
           openBrowser(BOOTSTRAP_NOTEBOOK_COLAB_URL, { env });
         }
       }
-      const urlHint = notebookUrl ? ` [Enter to keep ${notebookUrl}]` : " [optional, Enter to skip]";
+      const urlHint =
+        notebookUrl && !isPublicGithubNotebookUrl(notebookUrl)
+          ? ` [Enter to keep ${notebookUrl}]`
+          : " [optional, Enter to skip]";
       const enteredUrl = await ask(`Paste your Drive notebook copy URL${urlHint}: `);
       if (enteredUrl) {
         notebookUrl = enteredUrl;
       }
+    }
+
+    if (isPublicGithubNotebookUrl(notebookUrl)) {
+      log(
+        "Note: ignoring public GitHub notebook URL (not a personal Google Drive '/drive/' copy); 'up' will open the bootstrap notebook and copy PASTE credentials to your clipboard.",
+        stderr,
+      );
+      notebookUrl = "";
     }
 
     const accounts = existing?.accounts ? [...existing.accounts] : [{ label: "default" }];

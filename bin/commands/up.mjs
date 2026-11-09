@@ -127,7 +127,17 @@ export async function run(
   const account = resolveAccount(config, opts.account);
   const publicKey = readFileSync(paths.publicKeyPath, "utf8").trim();
 
-  if (account.notebookUrl) {
+  const pasteLine = config.loginServer
+    ? `${config.authKey} ${config.loginServer} ${publicKey}`
+    : `${config.authKey} ${publicKey}`;
+  const clip = copyClipboard(pasteLine, { env });
+  const hasPersonalDriveCopy = Boolean(
+    account.notebookUrl &&
+      account.notebookUrl !== BOOTSTRAP_NOTEBOOK_COLAB_URL &&
+      !account.notebookUrl.includes("colab.research.google.com/github/"),
+  );
+
+  if (hasPersonalDriveCopy) {
     if (!opts["no-open"]) {
       openBrowser(account.notebookUrl, {
         env,
@@ -139,10 +149,6 @@ export async function run(
       stderr,
     );
   } else {
-    const pasteLine = config.loginServer
-      ? `${config.authKey} ${config.loginServer} ${publicKey}`
-      : `${config.authKey} ${publicKey}`;
-    const clip = copyClipboard(pasteLine, { env });
     if (!opts["no-open"]) {
       openBrowser(BOOTSTRAP_NOTEBOOK_COLAB_URL, {
         env,
