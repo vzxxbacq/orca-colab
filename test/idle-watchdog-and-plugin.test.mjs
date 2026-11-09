@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import {
   evaluateBudgetAlert,
@@ -6,7 +9,9 @@ import {
 } from "../bin/lib/idle-watchdog.mjs";
 import activateWorker, { deactivate as deactivateWorker } from "../worker/main.mjs";
 
-test("worker/main.mjs activates and registers commands and panel handlers cleanly", async () => {
+test("worker/main.mjs activates and registers commands and panel handlers cleanly", async (t) => {
+  const tmpHome = mkdtempSync(path.join(os.tmpdir(), "orca-colab-worker-"));
+  t.after(() => rmSync(tmpHome, { recursive: true, force: true }));
   const registeredCommands = new Map();
   const registeredPanels = new Map();
   let statusBarState = null;
@@ -38,7 +43,7 @@ test("worker/main.mjs activates and registers commands and panel handlers cleanl
     log() {},
   };
 
-  await activateWorker(fakeOrca);
+  await activateWorker(fakeOrca, { homeDir: tmpHome });
   try {
     assert.equal(registeredCommands.has("colab.up"), true);
     assert.equal(registeredCommands.has("colab.down"), true);

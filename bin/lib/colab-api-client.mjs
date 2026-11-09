@@ -144,57 +144,135 @@ export async function assignRuntime({
   accessToken,
   gpu = "T4",
   highRam = false,
+  reuseExisting = true,
+  excludeRuntimeIds = [],
+  maxAttempts = 3,
+  onProgress = null,
   publicApiDomain = COLAB_OAUTH_CONFIG.colabPublicApiDomain,
   fetchImpl = fetch,
   signal,
 } = {}) {
   const runtimeSpec = normalizeRuntimeSpec({ gpu, highRam });
-  const createUrl = new URL("/v1beta/runtimes", publicApiDomain);
-  createUrl.searchParams.set("requestId", randomUUID());
+  const excluded = new Set(
+    (excludeRuntimeIds || []).map((id) => stripResourcePrefix(id, "runtimes/")),
+  );
 
-  let operation = await colabJsonRequest(createUrl, {
-    method: "POST",
-    accessToken,
-    body: { runtimeSpec },
-    fetchImpl,
-    signal,
-  });
+  if (reuseExisting) {
+    try {
+      const existingList = await listRuntimes({
+        accessToken,
+        publicApiDomain,
+        fetchImpl,
+        signal,
+      });
+      for (const rt of existingList) {
+        const rtId = stripResourcePrefix(rt?.name || "", "runtimes/");
+        if (
+          rtId &&
+          !excluded.has(rtId) &&
+          rt?.connectionInfo?.url &&
+          rt?.connectionInfo?.token &&
+          rt?.runtimeSpec?.variant === runtimeSpec.variant &&
+          (rt?.runtimeSpec?.accelerator || "NONE") === runtimeSpec.accelerator
+        ) {
+          if (typeof onProgress === "function") {
+            onProgress(
+              `Reusing active Colab ${gpu} runtime (${rtId})...`,
+            );
+          }
+          return {
+            id: rtId,
+            name: rt.name,
+            runtimeSpec: rt.runtimeSpec || runtimeSpec,
+            endpoint: rt.connectionInfo.endpoint || rtId,
+            baseUrl: rt.connectionInfo.url,
+            token: rt.connectionInfo.token,
+            tokenExpiry: rt.connectionInfo.expireTime || null,
+          };
+        }
+      }
+    } catch {
+      // Proceed to fresh runtime creation if listing fails.
+    }
+  }
 
-  if (!operation.done && operation.name) {
-    const opId = stripResourcePrefix(operation.name, "operations/");
-    const waitUrl = new URL(
-      `/v1/operations/${encodeURIComponent(opId)}:wait`,
-      publicApiDomain,
-    );
-    waitUrl.searchParams.set("timeout", "200s");
-    operation = await colabJsonRequest(waitUrl, {
-      method: "GET",
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (signal?.aborted) {
+      throw new Error("Runtime assignment aborted.");
+    }
+    if (attempt > 1 && typeof onProgress === "function") {
+      onProgress(
+        `Colab GPU pool busy; retrying ${gpu} assignment (attempt ${attempt}/${maxAttempts})...`,
+      );
+    }
+
+    const createUrl = new URL("/v1beta/runtimes", publicApiDomain);
+    createUrl.searchParams.set("requestId", randomUUID());
+
+    let operation = await colabJsonRequest(createUrl, {
+      method: "POST",
       accessToken,
+      body: { runtimeSpec },
       fetchImpl,
       signal,
     });
+
+    const opName = operation.name;
+    let pollCount = 0;
+    while (!operation.done && opName && pollCount < 10) {
+      pollCount += 1;
+      const opId = stripResourcePrefix(opName, "operations/");
+      const waitUrl = new URL(
+        `/v1/operations/${encodeURIComponent(opId)}:wait`,
+        publicApiDomain,
+      );
+      waitUrl.searchParams.set("timeout", "200s");
+      operation = await colabJsonRequest(waitUrl, {
+        method: "GET",
+        accessToken,
+        fetchImpl,
+        signal,
+      });
+    }
+
+    if (operation.error) {
+      const msg = operation.error.message || JSON.stringify(operation.error);
+      lastError = new Error(`Colab runtime assignment failed: ${msg}`);
+      const isTransientDeadline =
+        msg.includes("deadline exceeded") || msg.includes("assignWithRetry");
+      if (isTransientDeadline && attempt < maxAttempts) {
+        await new Promise((r) => setTimeout(r, 1500));
+        continue;
+      }
+      throw lastError;
+    }
+
+    const runtime = operation.response || operation;
+    if (
+      !runtime?.name ||
+      !runtime?.connectionInfo?.url ||
+      !runtime?.connectionInfo?.token
+    ) {
+      throw new Error(
+        "Colab runtime assignment returned incomplete connectionInfo.",
+      );
+    }
+
+    const runtimeId = stripResourcePrefix(runtime.name, "runtimes/");
+    return {
+      id: runtimeId,
+      name: runtime.name,
+      runtimeSpec: runtime.runtimeSpec || runtimeSpec,
+      endpoint: runtime.connectionInfo.endpoint || runtimeId,
+      baseUrl: runtime.connectionInfo.url,
+      token: runtime.connectionInfo.token,
+      tokenExpiry: runtime.connectionInfo.expireTime || null,
+    };
   }
 
-  if (operation.error) {
-    const msg = operation.error.message || JSON.stringify(operation.error);
-    throw new Error(`Colab runtime assignment failed: ${msg}`);
-  }
-
-  const runtime = operation.response || operation;
-  if (!runtime?.name || !runtime?.connectionInfo?.url || !runtime?.connectionInfo?.token) {
-    throw new Error("Colab runtime assignment returned incomplete connectionInfo.");
-  }
-
-  const runtimeId = stripResourcePrefix(runtime.name, "runtimes/");
-  return {
-    id: runtimeId,
-    name: runtime.name,
-    runtimeSpec: runtime.runtimeSpec || runtimeSpec,
-    endpoint: runtime.connectionInfo.endpoint || runtimeId,
-    baseUrl: runtime.connectionInfo.url,
-    token: runtime.connectionInfo.token,
-    tokenExpiry: runtime.connectionInfo.expireTime || null,
-  };
+  throw lastError || new Error("Colab runtime assignment failed.");
 }
 
 export async function getConsumptionUserInfo({
@@ -517,15 +595,27 @@ export async function execCommandOverTty({
 } = {}) {
   const runId = randomBytes(6).toString("hex");
   const startMarker = `__ORCA_START_${runId}__`;
+  const modeB64Marker = `__ORCA_MODE_B64_${runId}__`;
   const endPrefix = `__ORCA_END_${runId}:`;
   const endSuffix = `__`;
 
+  const cmdList =
+    Array.isArray(command) && command.length > 1
+      ? command.map((a) => String(a))
+      : null;
+  const cmdStr = Array.isArray(command)
+    ? command.join(" ")
+    : String(command || "");
+
   const payload = JSON.stringify({
-    cmd: Array.isArray(command) ? command.join(" ") : String(command || ""),
+    runId,
+    cmd: cmdStr,
+    cmdList,
     cwd: cwd || null,
     env: envVars || {},
     stdinB64: stdinBase64 || null,
     startMarker,
+    modeB64Marker,
     endPrefix,
     endSuffix,
   });
@@ -540,13 +630,26 @@ export async function execCommandOverTty({
     "env = os.environ.copy()",
     'for k, v in (cfg.get("env") or {}).items():',
     "    env[str(k)] = str(v)",
-    'sys.stdout.write("\\n" + cfg["startMarker"] + "\\n")',
+    'sys.stdout.write("\\n" + cfg["startMarker"] + "\\n" + cfg["modeB64Marker"] + "\\n")',
     "sys.stdout.flush()",
     'stdin_bytes = base64.b64decode(cfg["stdinB64"]) if cfg.get("stdinB64") else None',
-    'proc = subprocess.Popen(cfg["cmd"], shell=True, env=env, stdin=subprocess.PIPE if stdin_bytes is not None else subprocess.DEVNULL, stdout=sys.stdout, stderr=sys.stderr)',
+    'cmd_arg = cfg["cmdList"] if cfg.get("cmdList") else cfg["cmd"]',
+    'use_shell = False if cfg.get("cmdList") else True',
+    "proc = subprocess.Popen(cmd_arg, shell=use_shell, env=env, stdin=subprocess.PIPE if stdin_bytes is not None else subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)",
     "if stdin_bytes is not None:",
     "    proc.stdin.write(stdin_bytes)",
     "    proc.stdin.close()",
+    "seq = 0",
+    "fd = proc.stdout.fileno()",
+    "while True:",
+    "    chunk = os.read(fd, 1024)",
+    "    if not chunk:",
+    "        break",
+    "    for i in range(0, len(chunk), 36):",
+    '        b64 = base64.b64encode(chunk[i:i+36]).decode("ascii")',
+    '        sys.stdout.write("\\n__ORCA_B64_" + cfg["runId"] + "_" + str(seq) + ":" + b64 + "__\\n")',
+    "        seq += 1",
+    "    sys.stdout.flush()",
     "rc = proc.wait()",
     'sys.stdout.write("\\n" + cfg["endPrefix"] + str(rc) + cfg["endSuffix"] + "\\n")',
     "sys.stdout.flush()",
@@ -563,6 +666,8 @@ export async function execCommandOverTty({
     let rawBuffer = "";
     let started = false;
     let emittedLen = 0;
+    const seenSeqs = new Set();
+    let framedOutput = "";
 
     const ws = new WebSocketImpl(wsUrl.toString(), {
       headers: {
@@ -615,6 +720,11 @@ export async function execCommandOverTty({
       );
     }
 
+    const b64FrameRegex = new RegExp(
+      `__ORCA_B64_${runId}_(\\d+):([A-Za-z0-9+/=]+)__`,
+      "g",
+    );
+
     const processIncoming = (rawText) => {
       let chunk = rawText;
       try {
@@ -638,22 +748,48 @@ export async function execCommandOverTty({
         rawBuffer = rawBuffer.slice(afterStart).replace(/^\r?\n/, "");
       }
 
+      const isB64Mode =
+        rawBuffer.includes(modeB64Marker) ||
+        rawBuffer.includes(`__ORCA_B64_${runId}_`);
+
+      if (isB64Mode) {
+        b64FrameRegex.lastIndex = 0;
+        let match;
+        while ((match = b64FrameRegex.exec(rawBuffer)) !== null) {
+          const seq = Number.parseInt(match[1], 10);
+          if (!seenSeqs.has(seq)) {
+            seenSeqs.add(seq);
+            const decoded = Buffer.from(match[2], "base64").toString("utf8");
+            framedOutput += decoded;
+            if (typeof onOutput === "function" && decoded) {
+              onOutput(decoded);
+            }
+          }
+        }
+      }
+
       const endRegex = new RegExp(`${endPrefix}(-?\\d+)${endSuffix}`);
       const endMatch = rawBuffer.match(endRegex);
-      const cleanUpTo = endMatch ? endMatch.index : Math.max(0, rawBuffer.length - 48);
 
-      if (cleanUpTo > emittedLen) {
-        const delta = rawBuffer.slice(emittedLen, cleanUpTo);
-        emittedLen = cleanUpTo;
-        if (typeof onOutput === "function" && delta) {
-          onOutput(delta);
+      if (!isB64Mode) {
+        const cleanUpTo = endMatch
+          ? endMatch.index
+          : Math.max(0, rawBuffer.length - 48);
+        if (cleanUpTo > emittedLen) {
+          const delta = rawBuffer.slice(emittedLen, cleanUpTo);
+          emittedLen = cleanUpTo;
+          if (typeof onOutput === "function" && delta) {
+            onOutput(delta);
+          }
         }
       }
 
       if (endMatch && !settled) {
         settled = true;
         const exitCode = Number.parseInt(endMatch[1], 10);
-        const fullOutput = rawBuffer.slice(0, endMatch.index).replace(/\r?\n$/, "");
+        const fullOutput = isB64Mode
+          ? framedOutput.replace(/\r?\n$/, "")
+          : rawBuffer.slice(0, endMatch.index).replace(/\r?\n$/, "");
         cleanup();
         resolve({
           ok: exitCode === 0,
@@ -665,7 +801,6 @@ export async function execCommandOverTty({
     };
 
     const onOpen = () => {
-      ws.send(JSON.stringify({ cols: 160, rows: 45 }));
       ws.send(JSON.stringify({ data: shellLine }));
     };
 

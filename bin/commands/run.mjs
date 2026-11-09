@@ -8,6 +8,11 @@ import {
 import { withSessionActivity } from "../lib/session-activity.mjs";
 import { resolveSession } from "../lib/session-store.mjs";
 import { buildSshExecArgs } from "../lib/ssh-exec.mjs";
+import {
+  appendTaskLog,
+  generateTaskId,
+  writeTask,
+} from "../lib/task-store.mjs";
 
 export function shellQuote(value) {
   const str = String(value);
@@ -130,13 +135,77 @@ export async function run(
         });
       }
 
-      const res = await execCommandOverTty({
-        baseUrl: session.colabRuntime.baseUrl,
-        proxyToken: session.colabRuntime.token,
-        command: remoteScript,
-        cwd: effectiveCwd,
-        onOutput: !json ? (chunk) => stdout.write(chunk) : null,
-      });
+      const taskId = generateTaskId();
+      const startedAt = new Date().toISOString();
+      const taskRecord = writeTask(
+        {
+          id: taskId,
+          name: joinedCmd.slice(0, 64) || "orca-colab run",
+          command: cmdArgs,
+          sessionName: session.name,
+          account: session.account || "default",
+          cwd: effectiveCwd,
+          status: "running",
+          createdAt: startedAt,
+          startedAt,
+          localPid: process.pid,
+        },
+        homeDir,
+      );
+      appendTaskLog(
+        taskId,
+        `[task ${taskId}] started at ${startedAt} on ${session.name} (${session.gpu?.name || "GPU"})\n$ ${joinedCmd}\n`,
+        homeDir,
+      );
+
+      let res;
+      try {
+        res = await execCommandOverTty({
+          baseUrl: session.colabRuntime.baseUrl,
+          proxyToken: session.colabRuntime.token,
+          command: remoteScript,
+          cwd: effectiveCwd,
+          onOutput: (chunk) => {
+            appendTaskLog(taskId, chunk, homeDir);
+            if (!json) {
+              stdout.write(chunk);
+            }
+          },
+        });
+      } catch (err) {
+        const finishedAt = new Date().toISOString();
+        appendTaskLog(
+          taskId,
+          `\n[task ${taskId}] failed at ${finishedAt}: ${err?.message || err}\n`,
+          homeDir,
+        );
+        writeTask(
+          {
+            ...taskRecord,
+            status: "failed",
+            exitCode: 1,
+            finishedAt,
+          },
+          homeDir,
+        );
+        throw err;
+      }
+
+      const finishedAt = new Date().toISOString();
+      appendTaskLog(
+        taskId,
+        `\n[task ${taskId}] ${res.exitCode === 0 ? "succeeded" : "failed"} at ${finishedAt} (exit code ${res.exitCode})\n`,
+        homeDir,
+      );
+      writeTask(
+        {
+          ...taskRecord,
+          status: res.exitCode === 0 ? "succeeded" : "failed",
+          exitCode: res.exitCode,
+          finishedAt,
+        },
+        homeDir,
+      );
 
       if (json) {
         writeJson(

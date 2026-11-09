@@ -24,6 +24,7 @@ import {
   isValidAuthKey,
   readConfig,
   resolveAccount,
+  resolveAgentPolicy,
 } from "../lib/colab-home.mjs";
 import { getValidAccessToken } from "../lib/colab-oauth.mjs";
 import { recordSessionStartEvent } from "../lib/credit-ledger.mjs";
@@ -73,8 +74,9 @@ export async function run(
       options: {
         name: { type: "string" },
         account: { type: "string" },
-        gpu: { type: "string", default: "T4" },
+        gpu: { type: "string" },
         "high-ram": { type: "boolean", default: false },
+        new: { type: "boolean", default: false },
         browser: { type: "boolean", default: false },
         keep: { type: "boolean", default: false },
         "no-tailscale": { type: "boolean", default: false },
@@ -96,8 +98,49 @@ export async function run(
   }
 
   const config = readConfig(homeDir);
+  const policy = resolveAgentPolicy(config);
   const paths = getColabPaths(homeDir);
   const account = resolveAccount(config, opts.account);
+
+  const requestedGpuRaw = opts.gpu ? String(opts.gpu).trim().toUpperCase() : null;
+  const selectedGpu =
+    !requestedGpuRaw || requestedGpuRaw === "AUTO"
+      ? policy.allowedGpus.includes("T4")
+        ? "T4"
+        : policy.allowedGpus[0] || "T4"
+      : requestedGpuRaw;
+
+  if (!policy.allowedGpus.includes(selectedGpu)) {
+    const errMsg = `GPU '${selectedGpu}' is disabled by user policy in Orca Colab settings. Allowed GPUs: ${policy.allowedGpus.join(", ")}`;
+    throw new CliError(errMsg, {
+      exitCode: EXIT_ERROR,
+      payload: {
+        ok: false,
+        error: errMsg,
+        allowedGpus: policy.allowedGpus,
+        step: "policy",
+      },
+    });
+  }
+
+  const activeAccountSessions = listSessions(homeDir).filter(
+    (s) => s?.state !== "zombie" && (s?.account || "default") === account.label,
+  );
+  if (
+    opts.new &&
+    activeAccountSessions.length >= policy.maxConcurrentSessions
+  ) {
+    const errMsg = `Max concurrent sessions (${policy.maxConcurrentSessions}) reached by user policy.`;
+    throw new CliError(errMsg, {
+      exitCode: EXIT_ERROR,
+      payload: {
+        ok: false,
+        error: errMsg,
+        maxConcurrentSessions: policy.maxConcurrentSessions,
+        step: "policy",
+      },
+    });
+  }
   const tailscaleConfigured =
     isValidAuthKey(config?.authKey, config?.loginServer) &&
     existsSync(paths.privateKeyPath) &&
@@ -144,7 +187,12 @@ export async function run(
 
   // Fast path: Direct Colab API without Tailscale (when Google OAuth is active and Tailscale is not configured)
   if (accessToken && !tailscaleConfigured) {
-    const gpuLabel = String(opts.gpu || "T4").toUpperCase();
+    const gpuLabel = selectedGpu;
+    const excludeRuntimeIds = opts.new
+      ? listSessions(homeDir)
+          .filter((s) => s?.state !== "zombie" && s?.colabRuntime?.id)
+          .map((s) => s.colabRuntime.id)
+      : [];
     log(
       `Assigning Colab ${gpuLabel} runtime via Direct API for account '${account.label}' (Tailscale-free mode)...`,
       stderr,
@@ -153,6 +201,9 @@ export async function run(
       accessToken,
       gpu: gpuLabel,
       highRam: Boolean(opts["high-ram"]),
+      reuseExisting: !opts.new,
+      excludeRuntimeIds,
+      onProgress: (msg) => log(msg, stderr),
       fetchImpl,
       signal,
     });

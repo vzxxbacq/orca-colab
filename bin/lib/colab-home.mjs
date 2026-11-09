@@ -71,6 +71,33 @@ export function readJsonFile(filePath) {
   }
 }
 
+export const ALL_GPU_TIERS = Object.freeze([
+  "T4",
+  "L4",
+  "A100",
+  "G4",
+  "H100",
+  "CPU",
+]);
+
+export function resolveAgentPolicy(config = null) {
+  const allowedGpus =
+    Array.isArray(config?.allowedGpus) && config.allowedGpus.length > 0
+      ? config.allowedGpus.map((g) => String(g).trim().toUpperCase())
+      : [...ALL_GPU_TIERS];
+  const maxConcurrentSessions =
+    typeof config?.maxConcurrentSessions === "number" &&
+    Number.isFinite(config.maxConcurrentSessions) &&
+    config.maxConcurrentSessions >= 1
+      ? Math.floor(config.maxConcurrentSessions)
+      : 2;
+  return {
+    allowedGpus,
+    maxConcurrentSessions,
+    allGpus: [...ALL_GPU_TIERS],
+  };
+}
+
 export function normalizeConfig(input = {}) {
   const rawAccounts = Array.isArray(input.accounts) && input.accounts.length > 0
     ? input.accounts
@@ -107,6 +134,20 @@ export function normalizeConfig(input = {}) {
 
   if (typeof input.loginServer === "string" && input.loginServer.trim() !== "") {
     config.loginServer = input.loginServer.trim();
+  }
+
+  if (Array.isArray(input.allowedGpus) && input.allowedGpus.length > 0) {
+    config.allowedGpus = input.allowedGpus.map((g) =>
+      String(g).trim().toUpperCase(),
+    );
+  }
+
+  if (
+    typeof input.maxConcurrentSessions === "number" &&
+    Number.isFinite(input.maxConcurrentSessions) &&
+    input.maxConcurrentSessions >= 1
+  ) {
+    config.maxConcurrentSessions = Math.floor(input.maxConcurrentSessions);
   }
 
   return config;

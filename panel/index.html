@@ -1135,80 +1135,51 @@
         <!-- Segmented Navigation Bar -->
         <div class="seg-tabs">
           <button class="seg-tab active" data-tab="tasks">
-            Tasks &amp; Output
+            Agent Runs
           </button>
           <button class="seg-tab" data-tab="hardware">
-            Hardware &amp; SSH
+            Runtimes
           </button>
           <button class="seg-tab" data-tab="credits">
-            Credits &amp; Config
+            Guardrails &amp; CU
           </button>
         </div>
 
-        <!-- TAB 1: TASKS & LIVE OUTPUT -->
+        <!-- TAB 1: AGENT RUNS & LIVE OUTPUT -->
         <div id="tabTasks" style="display: flex; flex-direction: column; gap: 10px">
-          <!-- Task Composer Card -->
-          <div class="card">
-            <div class="card-header">
-              <div class="card-title">Submit Algorithm Task</div>
-              <span id="runningTaskBadge" class="badge neutral">0 running</span>
-            </div>
-
-            <div class="chip-row">
-              <span class="chip" data-preset="nvidia-smi">GPU Info (nvidia-smi)</span>
-              <span
-                class="chip"
-                data-preset="python3 -c &quot;import torch; print('CUDA:', torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')&quot;"
-              >
-                PyTorch CUDA Check
-              </span>
-              <span class="chip" data-preset="python3 train.py">
-                python3 train.py
-              </span>
-              <span class="chip" data-preset="pip install -r requirements.txt">
-                pip install -r requirements.txt
-              </span>
-            </div>
-
-            <div class="row" style="margin-bottom: 7px">
-              <input
-                id="taskNameInput"
-                type="text"
-                placeholder="Label (optional)"
-                style="width: 34%"
-              />
-              <input
-                id="taskCmdInput"
-                type="text"
-                class="mono"
-                placeholder="e.g. python3 train.py --epochs 10"
-                style="width: 66%"
-              />
-            </div>
-
+          <!-- Agent Policy Summary Strip -->
+          <div class="card" style="padding: 9px 12px">
             <div class="row-between">
-              <label
-                style="
-                  display: inline-flex;
-                  align-items: center;
-                  gap: 6px;
-                  font-size: 11px;
-                  color: var(--muted);
-                  cursor: pointer;
-                "
-              >
-                <input id="taskSyncCheck" type="checkbox" checked />
-                Sync current workspace to <span class="mono">/content/workspace</span>
-              </label>
-              <button id="submitTaskBtn" class="primary">▶ Run Task</button>
+              <div>
+                <div class="card-title" style="font-size: 11.5px">
+                  Agent Compute Guardrails
+                </div>
+                <div
+                  id="agentPolicySummaryText"
+                  class="muted"
+                  style="font-size: 10.5px; margin-top: 2px"
+                >
+                  Allowed GPUs: T4, L4, A100, G4, H100, CPU · Max 2 Runtimes
+                </div>
+              </div>
+              <div class="row" style="gap: 6px">
+                <span id="runningTaskBadge" class="badge neutral">0 running</span>
+                <button
+                  class="ghost"
+                  style="padding: 3px 8px; font-size: 10.5px"
+                  onclick="window.__openGuardrailsTab()"
+                >
+                  Configure Policy →
+                </button>
+              </div>
             </div>
           </div>
 
-          <!-- Recent Tasks Selector -->
+          <!-- Recent Agent Runs Selector -->
           <div class="card" style="padding: 10px 12px">
             <div class="card-header" style="margin-bottom: 6px">
-              <div class="card-title">Task Queue &amp; History</div>
-              <span class="muted" style="font-size: 10.5px">Click a task to inspect logs</span>
+              <div class="card-title">Agent Runs &amp; History</div>
+              <span class="muted" style="font-size: 10.5px">Click a run to inspect output</span>
             </div>
             <div id="taskListContainer" class="task-list"></div>
           </div>
@@ -1217,7 +1188,7 @@
           <div class="card" style="padding: 10px 12px">
             <div class="card-header" style="margin-bottom: 6px">
               <div class="card-title">
-                <span>Task Output</span>
+                <span>Live Output</span>
                 <span id="outputTaskTag" class="badge neutral">None</span>
               </div>
               <div class="row">
@@ -1239,20 +1210,58 @@
                 </button>
               </div>
             </div>
-            <div id="taskOutputPre" class="terminal-box">No task selected. Submit a command above to stream live stdout/stderr from Colab.</div>
+            <div id="taskOutputPre" class="terminal-box">No agent run selected yet. When an Agent executes a command on Colab, live stdout/stderr streams here automatically.</div>
           </div>
         </div>
 
         <!-- TAB 2: HARDWARE TELEMETRY & SESSIONS -->
         <div id="tabHardware" class="hidden" style="display: flex; flex-direction: column; gap: 10px">
           <div id="hardwareDetailsList" style="display: flex; flex-direction: column; gap: 10px"></div>
-          <button id="addAnotherGpuBtn" class=" primary" style="width: 100%">
-            + Launch Another Colab Runtime
+          <button id="addAnotherGpuBtn" class="ghost" style="width: 100%">
+            + Pre-Warm a Runtime Manually (Optional)
           </button>
         </div>
 
-        <!-- TAB 3: CREDITS & SETTINGS -->
+        <!-- TAB 3: GUARDRAILS, CREDITS & SETTINGS -->
         <div id="tabCredits" class="hidden" style="display: flex; flex-direction: column; gap: 10px">
+          <!-- Agent GPU Policy Card -->
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <div class="card-title">Agent Hardware Guardrails</div>
+                <div class="card-subtitle" style="margin-bottom: 0; margin-top: 2px">
+                  Click to enable or disable which GPU tiers the Agent is allowed to provision. The Agent selects the optimal GPU within your boundary.
+                </div>
+              </div>
+            </div>
+            <div
+              id="policyGpuGrid"
+              style="
+                display: grid;
+                grid-template-columns: repeat(2, 1fr);
+                gap: 7px;
+                margin-top: 8px;
+                margin-bottom: 10px;
+              "
+            ></div>
+            <div
+              class="row-between"
+              style="
+                padding-top: 8px;
+                border-top: 1px solid var(--border);
+                font-size: 11px;
+              "
+            >
+              <span class="muted">Max Concurrent Runtimes (Per Account)</span>
+              <div class="row" id="maxConcurrentRow" style="gap: 4px">
+                <button class="ghost" data-max-sess="1" style="padding: 3px 8px">1</button>
+                <button class="ghost" data-max-sess="2" style="padding: 3px 8px">2</button>
+                <button class="ghost" data-max-sess="3" style="padding: 3px 8px">3</button>
+                <button class="ghost" data-max-sess="4" style="padding: 3px 8px">4</button>
+              </div>
+            </div>
+          </div>
+
           <div class="card">
             <div class="card-header">
               <div class="card-title">Compute Units (Approximate)</div>
@@ -1440,7 +1449,7 @@
         btn.addEventListener("click", () => switchWorkspaceTab(btn.dataset.tab));
       });
 
-      // GPU Card selection
+      // GPU Card selection (for optional manual pre-warm)
       document.querySelectorAll(".gpu-card").forEach((card) => {
         card.addEventListener("click", () => {
           selectedGpu = card.dataset.gpu;
@@ -1455,12 +1464,61 @@
         });
       });
 
-      // Preset command chips
-      document.querySelectorAll(".chip[data-preset]").forEach((chip) => {
-        chip.addEventListener("click", () => {
-          const cmd = chip.getAttribute("data-preset");
-          document.getElementById("taskCmdInput").value = cmd;
-          document.getElementById("taskCmdInput").focus();
+      window.__openGuardrailsTab = () => {
+        switchView("workspace");
+        switchWorkspaceTab("credits");
+      };
+
+      const GPU_CATALOG = [
+        { id: "T4", name: "NVIDIA T4", spec: "16 GB VRAM", rate: "≈ 1.96 CU/h" },
+        { id: "L4", name: "NVIDIA L4", spec: "24 GB VRAM", rate: "≈ 4.82 CU/h" },
+        { id: "A100", name: "NVIDIA A100", spec: "40 GB VRAM", rate: "≈ 11.77 CU/h" },
+        { id: "G4", name: "NVIDIA G4", spec: "24 GB VRAM", rate: "≈ 5.50 CU/h" },
+        { id: "H100", name: "NVIDIA H100", spec: "80 GB VRAM", rate: "≈ 21.20 CU/h" },
+        { id: "CPU", name: "Colab CPU", spec: "12+ GB RAM", rate: "≈ 0.08 CU/h" },
+      ];
+
+      window.__togglePolicyGpu = async (gpuId) => {
+        const currentAllowed = dashboardState?.policy?.allowedGpus || [
+          "T4",
+          "L4",
+          "A100",
+          "G4",
+          "H100",
+          "CPU",
+        ];
+        let nextAllowed;
+        if (currentAllowed.includes(gpuId)) {
+          if (currentAllowed.length <= 1) {
+            showNotice("At least one accelerator must remain enabled for the Agent.", "warn");
+            return;
+          }
+          nextAllowed = currentAllowed.filter((g) => g !== gpuId);
+        } else {
+          nextAllowed = [...currentAllowed, gpuId];
+        }
+        try {
+          const res = await callWorker("colab.updatePolicy", {
+            allowedGpus: nextAllowed,
+          });
+          renderAll(res.dashboard);
+        } catch (err) {
+          showNotice(err?.message || String(err), "error");
+        }
+      };
+
+      document.querySelectorAll("#maxConcurrentRow button").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const val = Number.parseInt(btn.dataset.maxSess, 10);
+          if (!Number.isFinite(val) || val < 1) return;
+          try {
+            const res = await callWorker("colab.updatePolicy", {
+              maxConcurrentSessions: val,
+            });
+            renderAll(res.dashboard);
+          } catch (err) {
+            showNotice(err?.message || String(err), "error");
+          }
         });
       });
 
@@ -1544,8 +1602,6 @@
         if (!userForcedView) {
           if (!readyToLaunch) {
             switchView("wizard");
-          } else if (activeSessions.length === 0) {
-            switchView("launcher");
           } else {
             switchView("workspace");
           }
@@ -1554,18 +1610,15 @@
           activeSessions.length > 0 &&
           !snap.provisioning?.active
         ) {
-          // Automatically transition from launcher to workspace once a session starts!
           userForcedView = null;
           switchView("workspace");
         } else if (
           userForcedView === "wizard" &&
           readyToLaunch &&
-          activeSessions.length === 0 &&
           oauthOk
         ) {
-          // After signing in from wizard, jump straight to GPU launcher
           userForcedView = null;
-          switchView("launcher");
+          switchView("workspace");
         }
 
         // -------------------------------------------------------------------
@@ -1697,17 +1750,70 @@
         // -------------------------------------------------------------------
         // Populate View 3: Active GPU Workspace
         // -------------------------------------------------------------------
+        const policy = snap.policy || {
+          allowedGpus: ["T4", "L4", "A100", "G4", "H100", "CPU"],
+          maxConcurrentSessions: 2,
+        };
+        const policySummaryEl = document.getElementById("agentPolicySummaryText");
+        if (policySummaryEl) {
+          policySummaryEl.textContent = `Allowed GPUs: ${policy.allowedGpus.join(", ")} · Max ${policy.maxConcurrentSessions} Concurrent Runtime${policy.maxConcurrentSessions > 1 ? "s" : ""}`;
+        }
+
+        const policyGridEl = document.getElementById("policyGpuGrid");
+        if (policyGridEl) {
+          policyGridEl.innerHTML = GPU_CATALOG.map((g) => {
+            const enabled = policy.allowedGpus.includes(g.id);
+            return `
+              <div
+                class="gpu-card ${enabled ? "selected" : ""}"
+                style="opacity: ${enabled ? "1" : "0.55"}; padding: 8px 10px"
+                onclick="window.__togglePolicyGpu('${g.id}')"
+              >
+                <div class="gpu-card-top">
+                  <span class="gpu-name">${esc(g.name)}</span>
+                  <span class="badge ${enabled ? "ok" : "neutral"}">${enabled ? "ALLOWED" : "DISABLED"}</span>
+                </div>
+                <div class="gpu-spec">${esc(g.spec)} · ${esc(g.rate)}</div>
+              </div>
+            `;
+          }).join("");
+        }
+
+        document.querySelectorAll("#maxConcurrentRow button").forEach((btn) => {
+          const val = Number.parseInt(btn.dataset.maxSess, 10);
+          btn.className =
+            val === policy.maxConcurrentSessions ? "primary" : "ghost";
+        });
+
         const bannerEl = document.getElementById("activeRuntimeBanner");
-        if (activeSessions.length === 0) {
+        if (snap.provisioning?.active) {
           bannerEl.innerHTML = `
             <div class="runtime-top">
               <div class="runtime-title">
-                <span class="badge warn">OFFLINE</span>
-                <span>No Active GPU Runtime</span>
+                <div class="spinner"></div>
+                <span style="color: var(--accent)">Provisioning Colab GPU Runtime...</span>
               </div>
-              <button class="primary" onclick="window.__goLaunchHelper()">
-                ⚡ Launch GPU Runtime
+              <span class="badge info">Direct API</span>
+            </div>
+            <div class="runtime-meta">
+              <span class="mono">${esc(snap.provisioning.message || "Requesting GPU container from Google Colab...")}</span>
+            </div>
+          `;
+        } else if (activeSessions.length === 0) {
+          bannerEl.innerHTML = `
+            <div class="runtime-top">
+              <div class="runtime-title">
+                <span class="badge info">STANDBY</span>
+                <span>Agent Ready · No Active GPU Runtime</span>
+              </div>
+              <button class="ghost" onclick="window.__openGuardrailsTab()">
+                ⚙ Guardrails
               </button>
+            </div>
+            <div class="runtime-meta">
+              <span>${oauthOk ? "Google Connected" : "Not Connected"} · ${balStr}</span>
+              <span>Allowed: <strong>${esc(policy.allowedGpus.join(", "))}</strong></span>
+              <span>The Agent will automatically provision &amp; release GPUs within your policy.</span>
             </div>
           `;
         } else {
@@ -1731,6 +1837,7 @@
                 <span class="status-dot ok"></span>
                 <span>${esc(s.gpu?.name || s.rateKey || "Colab GPU")}</span>
                 ${vramTotal ? `<span class="badge neutral">${vramTotal} GB</span>` : ""}
+                ${activeSessions.length > 1 ? `<span class="badge info">+${activeSessions.length - 1} more</span>` : ""}
                 ${s.keep ? `<span class="badge info">KEEP</span>` : ""}
               </div>
               <div class="row">
@@ -1760,7 +1867,7 @@
           `;
         }
 
-        // Populate Tab 1: Tasks & Output
+        // Populate Tab 1: Agent Runs & Output
         const tasks = snap.tasks || [];
         const runningCount = tasks.filter((t) => t.status === "running").length;
         const rBadge = document.getElementById("runningTaskBadge");
@@ -1773,7 +1880,7 @@
 
         const taskListEl = document.getElementById("taskListContainer");
         if (tasks.length === 0) {
-          taskListEl.innerHTML = `<div class="muted" style="font-size:11px;padding:4px 2px">No tasks submitted yet. Enter a command above and click Run Task.</div>`;
+          taskListEl.innerHTML = `<div class="muted" style="font-size:11px;padding:4px 2px">No agent runs recorded yet. Ask the Agent in Orca to run a GPU task on Colab.</div>`;
         } else {
           taskListEl.innerHTML = tasks
             .slice(0, 12)
@@ -2033,14 +2140,11 @@
           const keep = document.getElementById("launcherKeepCheck").checked;
           hideNotice();
           try {
-            const res = await callWorker(
-              "colab.startSession",
-              {
-                gpu: selectedGpu,
-                keep,
-              },
-              { timeoutMs: 240000 },
-            );
+            const res = await callWorker("colab.startSession", {
+              gpu: selectedGpu,
+              keep,
+              async: true,
+            });
             if (res?.dashboard) {
               userForcedView = null;
               renderAll(res.dashboard);
@@ -2060,54 +2164,6 @@
             keep,
             useTerminal: true,
           });
-        });
-
-      // Submit Task (with automatic redirect to Launch Helper if no active session!)
-      document
-        .getElementById("submitTaskBtn")
-        .addEventListener("click", async () => {
-          const name = document.getElementById("taskNameInput").value.trim();
-          const command = document.getElementById("taskCmdInput").value.trim();
-          const syncWorkspace =
-            document.getElementById("taskSyncCheck").checked;
-          if (!command) {
-            showNotice("Please enter a command to run on Colab GPU.", "warn");
-            return;
-          }
-          const btn = document.getElementById("submitTaskBtn");
-          btn.disabled = true;
-          try {
-            const res = await callWorker("colab.submitTask", {
-              name: name || undefined,
-              command,
-              syncWorkspace,
-            });
-            if (res?.code === "NO_ACTIVE_SESSION") {
-              switchView("launcher", {
-                force: true,
-                contextMessage:
-                  "No active GPU session found. Launch a Colab GPU runtime below first, then run your task.",
-              });
-              return;
-            }
-            selectedTaskId = res.task.id;
-            document.getElementById("taskCmdInput").value = "";
-            document.getElementById("taskNameInput").value = "";
-            renderAll(res.dashboard);
-          } catch (err) {
-            const msg = err?.message || String(err);
-            if (msg.includes("no active sessions")) {
-              switchView("launcher", {
-                force: true,
-                contextMessage:
-                  "No active GPU session found. Launch a Colab GPU runtime below first.",
-              });
-            } else {
-              showNotice(msg, "error");
-            }
-          } finally {
-            btn.disabled = false;
-          }
         });
 
       // Sync CCU
@@ -2209,8 +2265,20 @@
           box.classList.remove("hidden");
           document.getElementById("provisioningMsg").textContent =
             state.message || "Bootstrapping...";
+        } else {
+          box.classList.add("hidden");
+          if (state?.error) {
+            showNotice(`Launch failed: ${state.error}`, "error");
+          }
+          refreshAll(true);
         }
       });
+
+      setInterval(() => {
+        if (dashboardState?.provisioning?.active) {
+          refreshAll(false);
+        }
+      }, 2500);
 
       onWorkerEvent("colab.oauthUrl", (payload) => {
         if (payload?.authUrl && typeof orcaApi?.shell?.openExternal === "function") {

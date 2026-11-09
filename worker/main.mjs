@@ -19,6 +19,8 @@ import {
   getColabPaths,
   readConfig,
   resolveAccount,
+  resolveAgentPolicy,
+  writeConfig,
 } from "../bin/lib/colab-home.mjs";
 import {
   getValidAccessToken,
@@ -140,8 +142,7 @@ function queryLiveGpuMetricsViaSsh(ip, homeDir) {
   return null;
 }
 
-export default async function activate(orca) {
-  const homeDir = os.homedir();
+export default async function activate(orca, { homeDir = os.homedir() } = {}) {
   const paths = ensureColabHome(homeDir);
   const gpuUtilSamplesBySession = new Map();
   const graceTimersBySession = new Map();
@@ -316,6 +317,7 @@ export default async function activate(orca) {
       defaultAccount,
       accounts,
       doctor,
+      policy: resolveAgentPolicy(config),
       provisioning: provisioningState,
       auth: authByAccount[defaultAccount] || {
         account: defaultAccount,
@@ -612,6 +614,33 @@ export default async function activate(orca) {
     return { ok: true, dashboard: snap, doctor: doc };
   });
 
+  orca.panels.handle("colab.updatePolicy", async (input = {}) => {
+    const existing = readConfig(homeDir) || {};
+    const currentPolicy = resolveAgentPolicy(existing);
+    const nextAllowed =
+      Array.isArray(input?.allowedGpus) && input.allowedGpus.length > 0
+        ? input.allowedGpus.map((g) => String(g).trim().toUpperCase())
+        : currentPolicy.allowedGpus;
+    const nextMaxConcurrent =
+      typeof input?.maxConcurrentSessions === "number" &&
+      Number.isFinite(input.maxConcurrentSessions) &&
+      input.maxConcurrentSessions >= 1
+        ? Math.floor(input.maxConcurrentSessions)
+        : currentPolicy.maxConcurrentSessions;
+
+    writeConfig(
+      {
+        ...existing,
+        allowedGpus: nextAllowed,
+        maxConcurrentSessions: nextMaxConcurrent,
+      },
+      homeDir,
+    );
+    const snap = await buildDashboardSnapshot();
+    orca.panels.post("colab.stateChanged", snap);
+    return { ok: true, policy: snap.policy, dashboard: snap };
+  });
+
   orca.panels.handle("colab.authLogin", async (input = {}) => {
     const config = readConfig(homeDir);
     const account = resolveAccount(config, input?.account).label;
@@ -660,6 +689,7 @@ export default async function activate(orca) {
     const account = input?.account || undefined;
     const keep = Boolean(input?.keep);
     const useTerminal = Boolean(input?.useTerminal);
+    const runAsync = Boolean(input?.async);
 
     const authStatus = readOAuthAccountStatus(account || "default", homeDir);
     if (useTerminal || !authStatus.authenticated) {
@@ -674,12 +704,21 @@ export default async function activate(orca) {
       return { ok: true, mode: "terminal" };
     }
 
+    if (provisioningState.active) {
+      return {
+        ok: true,
+        mode: "already-provisioning",
+        dashboard: await buildDashboardSnapshot(),
+      };
+    }
+
     provisioningState = {
       active: true,
       message: `Assigning Colab ${gpu} runtime via Google Colab Direct API...`,
       error: null,
     };
-    orca.panels.post("colab.stateChanged", await buildDashboardSnapshot());
+    const initialSnap = await buildDashboardSnapshot();
+    orca.panels.post("colab.stateChanged", initialSnap);
 
     const args = ["--gpu", gpu];
     if (account) args.push("--account", String(account));
@@ -696,25 +735,58 @@ export default async function activate(orca) {
     };
     const outStream = { write() {} };
 
-    try {
-      await runUpCommand(args, {
-        json: true,
-        stdout: outStream,
-        stderr: logStream,
-        env: process.env,
-        homeDir,
+    const startMs = Date.now();
+    const tickTimer = setInterval(() => {
+      if (provisioningState.active) {
+        const sec = Math.floor((Date.now() - startMs) / 1000);
+        const baseMsg =
+          provisioningState.message?.replace(/\s*\(\d+s.*\)$/, "") ||
+          `Assigning Colab ${gpu} runtime...`;
+        const progressNext = {
+          active: true,
+          message: `${baseMsg} (${sec}s elapsed)`,
+          error: null,
+        };
+        provisioningState = progressNext;
+        orca.panels.post("colab.provisioningProgress", progressNext);
+      }
+    }, 2000);
+
+    const executeProvisioning = async () => {
+      try {
+        await runUpCommand(args, {
+          json: true,
+          stdout: outStream,
+          stderr: logStream,
+          env: process.env,
+          homeDir,
+        });
+        clearInterval(tickTimer);
+        provisioningState = { active: false, message: null, error: null };
+        orca.panels.post("colab.provisioningProgress", provisioningState);
+        await refreshStatusBar();
+        const snap = await buildDashboardSnapshot({ includeLiveMetrics: true });
+        orca.panels.post("colab.stateChanged", snap);
+        return { ok: true, mode: "direct-api", dashboard: snap };
+      } catch (err) {
+        clearInterval(tickTimer);
+        const msg = err instanceof Error ? err.message : String(err);
+        provisioningState = { active: false, message: null, error: msg };
+        orca.panels.post("colab.provisioningProgress", provisioningState);
+        const snap = await buildDashboardSnapshot();
+        orca.panels.post("colab.stateChanged", snap);
+        throw err;
+      }
+    };
+
+    if (runAsync) {
+      executeProvisioning().catch((err) => {
+        orca.log(`startSession async error: ${err?.message || err}`);
       });
-      provisioningState = { active: false, message: null, error: null };
-      await refreshStatusBar();
-      const snap = await buildDashboardSnapshot({ includeLiveMetrics: true });
-      orca.panels.post("colab.stateChanged", snap);
-      return { ok: true, mode: "direct-api", dashboard: snap };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      provisioningState = { active: false, message: null, error: msg };
-      orca.panels.post("colab.stateChanged", await buildDashboardSnapshot());
-      throw err;
+      return { ok: true, mode: "direct-api-async", dashboard: initialSnap };
     }
+
+    return await executeProvisioning();
   });
 
   orca.panels.handle("colab.stopSession", async (input = {}) => {
