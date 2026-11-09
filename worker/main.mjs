@@ -618,6 +618,9 @@ export default async function activate(orca) {
     const status = await runLoopbackOAuthFlow({
       account,
       homeDir,
+      onAuthUrl: (authUrl) => {
+        orca.panels.post("colab.oauthUrl", { authUrl });
+      },
     });
     try {
       const accessToken = await getValidAccessToken({ account, homeDir });

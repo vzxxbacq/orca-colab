@@ -1325,7 +1325,8 @@
     </div>
 
     <script>
-      const orca = window.orca;
+      (() => {
+      const orcaApi = window.orca;
       let dashboardState = null;
       let selectedGpu = "T4";
       let selectedTaskId = null;
@@ -1334,22 +1335,22 @@
       let userForcedView = null;
 
       async function callWorker(name, input = {}, options = {}) {
-        if (orca?.plugin && typeof orca.plugin.request === "function") {
-          return await orca.plugin.request(name, input, options);
+        if (orcaApi?.plugin && typeof orcaApi.plugin.request === "function") {
+          return await orcaApi.plugin.request(name, input, options);
         }
-        if (typeof orca?.invoke === "function") {
-          return await orca.invoke(name, input);
+        if (typeof orcaApi?.invoke === "function") {
+          return await orcaApi.invoke(name, input);
         }
         throw new Error("Orca plugin bridge (orca.plugin.request) is unavailable.");
       }
 
       function onWorkerEvent(name, handler) {
         try {
-          if (orca?.plugin && typeof orca.plugin.on === "function") {
-            return orca.plugin.on(name, handler);
+          if (orcaApi?.plugin && typeof orcaApi.plugin.on === "function") {
+            return orcaApi.plugin.on(name, handler);
           }
-          if (typeof orca?.on === "function") {
-            return orca.on(name, handler);
+          if (typeof orcaApi?.on === "function") {
+            return orcaApi.on(name, handler);
           }
         } catch (err) {
           console.warn("Failed to subscribe to worker event:", name, err);
@@ -2211,6 +2212,13 @@
         }
       });
 
+      onWorkerEvent("colab.oauthUrl", (payload) => {
+        if (payload?.authUrl && typeof orcaApi?.shell?.openExternal === "function") {
+          // System browser is already opened by the worker via `open`; keep URL available.
+          window.__lastOAuthUrl = payload.authUrl;
+        }
+      });
+
       onWorkerEvent("colab.taskOutput", (payload) => {
         if (
           !selectedTaskId ||
@@ -2223,6 +2231,7 @@
       });
 
       refreshAll(true);
+      })();
     </script>
   </body>
 </html>
