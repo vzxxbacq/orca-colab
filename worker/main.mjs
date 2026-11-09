@@ -603,6 +603,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
   const remoteBridges = new Map();
   let activeBridge = null;
   let lastResolveAt = 0;
+  let lastResolvedKey = "";
   let resolvedWorkspace = null;
 
   const notifyUser = async (message, tone = "info") => {
@@ -660,6 +661,11 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
     }
     lastResolveAt = Date.now();
     const info = await resolveWorkspaceInfo(orca);
+    const key = `${info.workspaceId}|${info.hostId}|${info.workspaceName}`;
+    if (key !== lastResolvedKey) {
+      lastResolvedKey = key;
+      orca.log(`focused workspace: ${info.workspaceName || "?"} id=${info.workspaceId || "?"} hostId=${info.hostId || "local"} path=${info.workspacePath || "?"}`);
+    }
     resolvedWorkspace = info;
     if (!info.hostId || !info.workspaceId) {
       if (activeBridge !== localBridge) {
@@ -785,6 +791,25 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
     }
     return orca.host.call("terminal.create", { workspaceId: info.workspaceId, title: title || "Colab GPU", command });
   };
+
+  // Raw host answers, for `orca plugin dev request . colab.debugWorkspace` when the badge looks wrong.
+  orca.panels.handle("colab.debugWorkspace", async () => {
+    const [ctx, listRes] = await Promise.all([
+      orca.host.call("workspace.readContext", {}).catch((err) => ({ error: String(err?.message || err) })),
+      orca.host.call("workspace.list", {}).catch((err) => ({ error: String(err?.message || err) })),
+    ]);
+    return {
+      readContext: ctx,
+      workspaceList: listRes,
+      resolved: await resolveWorkspaceInfo(orca),
+      activeBridge: activeBridge?.kind || null,
+      hostHas: {
+        terminalSend: await orca.host.has("terminal.send").catch(() => null),
+        terminalSendText: await orca.host.has("terminal.sendText").catch(() => null),
+        terminalRead: await orca.host.has("terminal.read").catch(() => null),
+      },
+    };
+  });
 
   orca.panels.handle("colab.dashboard", async (input = {}) => {
     const bridge = await resolveBridge();
