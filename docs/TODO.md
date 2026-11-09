@@ -28,8 +28,8 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
       query via `bin/lib/ssh-exec.mjs` (common ssh argv builder), writes the session, prints JSON, exit
       codes 1/2/3, overall deadline. Test: JSON shape for fixed inputs (hardcoded expected). — Done: `up` session orchestration, SSH argv builder and GPU query (`test/up.test.mjs`).
 - [x] **M1.7 `run`, `status`, `ls`.** pty passthrough when TTY, exit code propagation, `--cwd`. — Done: `run` with PTY passthrough, `--cwd`/`--env`/tmux flags, exit code propagation, and `status`/`ls` reachability probe (`test/run-and-status.test.mjs`).
-- [ ] **M1.8 `sync`, `pull`.** rsync detection, filters for `.gitignore` and `.colabignore`, `tar | ssh`
-      fallback, `remoteRoot` recorded. Test the filter/argv builder only.
+- [x] **M1.8 `sync`, `pull`.** rsync detection, filters for `.gitignore` and `.colabignore`, `tar | ssh`
+      fallback, `remoteRoot` recorded. Test the filter/argv builder only. — Done: `sync` and `pull` with rsync `.gitignore`/`.colabignore` filters and `tar | ssh` fallback (`test/sync-and-pull.test.mjs`).
 - [ ] **M1.9 `forward`, `down`.** Background `ssh -N -L` with pid in the session file, `--stop`; `down`
       kills forwards, touches `/root/.orca-colab/unassign` over SSH, waits ≤30 s for port 22 to close,
       deletes the session or marks it `zombie` (exit 4) with instructions (D10). Activity stamping
