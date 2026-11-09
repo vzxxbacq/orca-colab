@@ -7,6 +7,8 @@ import {
   writeJson,
 } from "../lib/cli-output.mjs";
 import { recordSessionEndEvent } from "../lib/credit-ledger.mjs";
+import { deleteRuntime as defaultDeleteRuntime } from "../lib/colab-api-client.mjs";
+import { getValidAccessToken } from "../lib/colab-oauth.mjs";
 import {
   deleteSession,
   listSessions,
@@ -38,6 +40,8 @@ export async function run(
     waitPortClosed = waitForSshPortClosed,
     killPid = defaultKillPid,
     onSessionEnd = recordSessionEndEvent,
+    deleteRuntimeFn = defaultDeleteRuntime,
+    fetchImpl = fetch,
     waitTimeoutMs = 30_000,
     nowIso = () => new Date().toISOString(),
   },
@@ -101,6 +105,28 @@ export async function run(
       }
     }
 
+    let deletedByApi = false;
+    if (session.colabRuntime?.id) {
+      try {
+        const accessToken = await getValidAccessToken({
+          account: session.account || "default",
+          homeDir,
+          fetchImpl,
+        });
+        if (accessToken) {
+          await deleteRuntimeFn({
+            runtimeId: session.colabRuntime.id,
+            accessToken,
+            fetchImpl,
+            signal,
+          });
+          deletedByApi = true;
+        }
+      } catch {
+        // Fall through to SSH sentinel + port check if API call fails.
+      }
+    }
+
     if (session.ip) {
       try {
         execSshCapture({
@@ -116,14 +142,16 @@ export async function run(
       }
     }
 
-    const closed = session.ip
-      ? await waitPortClosed({
-          host: session.ip,
-          port: 22,
-          timeoutMs: waitTimeoutMs,
-          signal,
-        })
-      : true;
+    const closed = deletedByApi
+      ? true
+      : session.ip
+        ? await waitPortClosed({
+            host: session.ip,
+            port: 22,
+            timeoutMs: waitTimeoutMs,
+            signal,
+          })
+        : true;
 
     if (closed) {
       deleteSession(session.name, homeDir);

@@ -19,10 +19,12 @@ export function getColabPaths(homeDir = os.homedir()) {
   return {
     baseDir,
     configPath: path.join(baseDir, "config.json"),
+    oauthPath: path.join(baseDir, "google-oauth.json"),
     privateKeyPath: path.join(baseDir, "id_ed25519"),
     publicKeyPath: path.join(baseDir, "id_ed25519.pub"),
     knownHostsPath: path.join(baseDir, "known_hosts"),
     sessionsDir: path.join(baseDir, "sessions"),
+    tasksDir: path.join(baseDir, "tasks"),
     ledgerPath: path.join(baseDir, "ledger.jsonl"),
     ratesPath: path.join(baseDir, "rates.json"),
   };

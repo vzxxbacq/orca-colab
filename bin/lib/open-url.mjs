@@ -103,3 +103,7 @@ export function openUrl(
 
   return { opened: false, target: null, browserPageId: null };
 }
+
+export function openUrlInSystemBrowser(url, opts = {}) {
+  return openUrl(url, { ...opts, systemBrowser: true });
+}

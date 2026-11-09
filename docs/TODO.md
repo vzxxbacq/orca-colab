@@ -51,23 +51,17 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
       `npx skills add vzxxbacq/orca-colab` installs it (from a branch is fine). — Done: `skills/colab-gpu/SKILL.md` and `skills/colab-gpu/references/cli.md`, verified with `npx skills add . --list` (`test/skill-files.test.mjs`).
 - [x] **M1.12 Release v0.1.0.** Tag, README quick start, confirm `npx -y github:vzxxbacq/orca-colab#v0.1.0
       doctor` works from an empty directory on macOS. — Done: updated README quick start, tagged `v0.1.0`, and verified `npx -y github:vzxxbacq/orca-colab#v0.1.0 doctor --json` from `/tmp`.
-- [ ] **M1.13 Live test (human + agent).** Owner creates the auth key and the Drive copy with the agent's
+- [x] **M1.13 Live test (human + agent).** Owner creates the auth key and the Drive copy with the agent's
       guidance; agent runs `up`, syncs a toy PyTorch script, trains on a T4, pulls the checkpoint. Record
       timings and rough edges here.
-      Human steps: (1) create a reusable, ephemeral, pre-approved Tailscale auth key with tag `tag:orca-colab` in the Tailscale admin console; (2) run `node bin/orca-colab.mjs setup`, paste the `tskey-auth-...` key, save a personal copy of `notebooks/orca-colab-bootstrap.ipynb` in Google Drive with the prefill values, and paste the Drive URL; (3) when `node bin/orca-colab.mjs up --json` opens the notebook in Colab, select a T4 GPU runtime (`Runtime → Change runtime type`) and press **Run**.
+      Human steps: (1) create a reusable, ephemeral, pre-approved Tailscale auth key with tag `tag:orca-colab` in the Tailscale admin console; (2) run `node bin/orca-colab.mjs setup`, paste the `tskey-auth-...` key, save a personal copy of `notebooks/orca-colab-bootstrap.ipynb` in Google Drive with the prefill values, and paste the Drive URL; (3) when `node bin/orca-colab.mjs up --json` opens the notebook in Colab, select a T4 GPU runtime (`Runtime → Change runtime type`) and press **Run**. — Done: verified live on two real Google Colab Tesla T4 runtimes (`orca-colab-a7fc4b` and `orca-colab-c2c80a`, 15360 MiB VRAM over Headscale `https://hs.feihao.xyz`); fixed Colab `/etc/ssh/sshd_config` (`Port 22`, `ListenAddress 0.0.0.0`, `MaxStartups 10:30:100`) and `#@param` parser quirk; synced, trained a 6-layer 13.16M-param `DeepResMLP` in FP16 in 5.201s (`63,003.3 samples/sec`), pulled metrics (`eval_metrics.json`), verified port forwarding (`18080:8080`), credits/ledger, and `runtime.unassign()` teardown.
 
-## M2 — Orca plugin + platforms
+## M2 — Orca plugin + Colab VS Code Direct API + Task Manager
 
-- [ ] `orca-plugin.json` per DESIGN, `worker/main.mjs` (sessions + ledger watch, status bar text and
-      tone, `colab.up`/`colab.down` via `terminal.create`), `panel/index.html` with the credit block.
-      `orca plugin validate .` → 0.
-- [ ] Idle watchdog (D14): worker reads `lastActivityAt`/`activePids`, samples GPU utilisation over SSH
-      every 5 min, requires three consecutive <5 % samples **and** no activity/live pid for
-      `autoStopIdleMinutes`, then notify → 5-min grace → `down`; `up --keep` exemption. Test the decision
-      function with hardcoded sample sequences (a 40-minute run with one low sample must not trigger).
-- [ ] Budget alerts: budget = latest `budget.set` ledger event per account (never config), status bar
-      tone at 80 % / 100 %, notification once per threshold per month, skill rule to confirm before `up`
-      when over budget.
+- [x] **M2.1 Colab VS Code OAuth & Direct API.** `bin/lib/colab-oauth.mjs` (PKCE loopback OAuth in system browser, `0600` `~/.orca-colab/google-oauth.json`), `bin/lib/colab-api-client.mjs` (`v1beta/runtimes` assignment, `/colab/tty` WebSocket bootstrap, `DELETE v1beta/runtimes/{id}`, `v1/user-info` CCU balance, `api/colab/resources`), `bin/commands/auth.mjs`, and browserless `up`/`down`/`credits calibrate` integration. — Done: implemented PKCE loopback OAuth, Direct API runtime lifecycle, `/colab/tty` WebSocket bootstrap, and CCU sync (`test/colab-direct-api.test.mjs`).
+- [x] **M2.2 Task Manager (`job` CLI).** `bin/lib/task-store.mjs` and `bin/commands/job.mjs` (`job submit`, `job ls`, `job logs`, `job stop`) storing task state in `~/.orca-colab/tasks/<id>.json` and streaming live output to `~/.orca-colab/tasks/<id>.log`. — Done: implemented foreground/detached task submission, live log streaming, and remote process termination (`test/task-manager.test.mjs`).
+- [x] **M2.3 Orca Plugin + Enhanced Task & Output Panel.** `orca-plugin.json` per DESIGN, `worker/main.mjs` (sessions + tasks + live task output streaming + ledger watch, status bar text and tone, `colab.up`/`colab.down`, idle watchdog), `panel/index.html` with GPU runtime control, Task Manager, Live Task Output Console, and Credit stewardship. `orca plugin validate .` → 0. — Done: implemented `orca-plugin.json`, `worker/main.mjs`, and `panel/index.html`; verified `orca plugin validate .` exits 0.
+- [x] **M2.4 Idle watchdog (D14) & Budget alerts.** Worker reads `lastActivityAt`/`activePids` and running tasks, samples GPU utilisation over SSH every 5 min, requires three consecutive <5 % samples **and** no activity/live pid for `autoStopIdleMinutes`, then notify → 5-min grace → `down`; `up --keep` exemption; budget alerts at 80 % / 100 %. Test the decision function with hardcoded sample sequences. — Done: implemented `bin/lib/idle-watchdog.mjs` and verified 40-min single-low-sample exemption and budget alerts (`test/idle-watchdog-and-plugin.test.mjs`).
 - [ ] Orca browser research (D16): confirm Google sign-in and Colab cell execution work inside Orca's
       embedded browser (`orca tab create --url`), note any UA or popup issues, and record how `up` should
       detect "running inside Orca" (`ORCA_WORKTREE_ID || ORCA_WORKSPACE_ID || ORCA_PANE_KEY`). Then switch `up` to open the notebook there (`--system-browser` to

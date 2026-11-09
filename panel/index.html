@@ -1,0 +1,1099 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Google Colab GPU</title>
+  <style>
+    :root {
+      --bg: var(--orca-background, #0b0f17);
+      --fg: var(--orca-foreground, #e2e8f0);
+      --muted: var(--orca-muted-foreground, #94a3b8);
+      --border: var(--orca-border, #1e293b);
+      --card: var(--orca-secondary, #111827);
+      --primary: var(--orca-primary, #38bdf8);
+      --success: #22c55e;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --terminal-bg: #070a10;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 12px;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 12.5px;
+      line-height: 1.45;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .title-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .title-group h1 {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      font-size: 10.5px;
+      font-weight: 600;
+      border: 1px solid var(--border);
+      background: rgba(148, 163, 184, 0.1);
+      color: var(--muted);
+    }
+
+    .badge.ok {
+      background: rgba(34, 197, 94, 0.14);
+      color: #4ade80;
+      border-color: rgba(34, 197, 94, 0.3);
+    }
+
+    .badge.warn {
+      background: rgba(245, 158, 11, 0.14);
+      color: #fbbf24;
+      border-color: rgba(245, 158, 11, 0.3);
+    }
+
+    .badge.err {
+      background: rgba(239, 68, 68, 0.15);
+      color: #f87171;
+      border-color: rgba(239, 68, 68, 0.3);
+    }
+
+    .badge.running {
+      background: rgba(56, 189, 248, 0.15);
+      color: #38bdf8;
+      border-color: rgba(56, 189, 248, 0.35);
+    }
+
+    .pulse-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: currentColor;
+      animation: pulse 1.4s infinite ease-in-out;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.35; transform: scale(0.85); }
+    }
+
+    .section {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 10px;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .section-title {
+      font-size: 11.5px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      margin: 0;
+    }
+
+    .row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .between {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    button, select, input[type="text"], input[type="number"] {
+      font-family: inherit;
+      font-size: 12px;
+      color: var(--fg);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 5px 9px;
+      outline: none;
+    }
+
+    input[type="text"]:focus, input[type="number"]:focus, select:focus {
+      border-color: var(--primary);
+    }
+
+    button {
+      cursor: pointer;
+      font-weight: 500;
+      transition: opacity 0.15s, border-color 0.15s, background 0.15s;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    button:hover:not(:disabled) {
+      border-color: var(--primary);
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    button.primary {
+      background: var(--primary);
+      color: #06131f;
+      border-color: transparent;
+      font-weight: 600;
+    }
+
+    button.danger {
+      background: rgba(239, 68, 68, 0.14);
+      color: #f87171;
+      border-color: rgba(239, 68, 68, 0.35);
+    }
+
+    button.sm {
+      padding: 3px 7px;
+      font-size: 11px;
+    }
+
+    .prereq-bar {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-top: 6px;
+    }
+
+    .session-card {
+      border: 1px solid var(--border);
+      background: rgba(15, 23, 42, 0.45);
+      border-radius: 7px;
+      padding: 9px 10px;
+      margin-top: 8px;
+    }
+
+    .session-meta {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+      gap: 6px;
+      margin: 7px 0;
+      font-size: 11.5px;
+    }
+
+    .meta-item {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid rgba(148, 163, 184, 0.1);
+      border-radius: 5px;
+      padding: 4px 7px;
+    }
+
+    .meta-label {
+      font-size: 10px;
+      color: var(--muted);
+      display: block;
+    }
+
+    .meta-value {
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .progress-track {
+      width: 100%;
+      height: 6px;
+      background: rgba(148, 163, 184, 0.15);
+      border-radius: 999px;
+      overflow: hidden;
+      margin-top: 4px;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: var(--primary);
+      border-radius: 999px;
+      transition: width 0.25s ease;
+    }
+
+    .progress-fill.warn { background: var(--warning); }
+    .progress-fill.danger { background: var(--danger); }
+
+    .task-form {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      margin-bottom: 9px;
+      padding-bottom: 9px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .preset-chips {
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+    }
+
+    .chip {
+      font-size: 10.5px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: rgba(56, 189, 248, 0.08);
+      border: 1px solid rgba(56, 189, 248, 0.22);
+      color: var(--fg);
+      cursor: pointer;
+    }
+
+    .chip:hover {
+      background: rgba(56, 189, 248, 0.18);
+    }
+
+    .task-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 195px;
+      overflow-y: auto;
+    }
+
+    .task-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 7px 9px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: rgba(15, 23, 42, 0.4);
+      cursor: pointer;
+    }
+
+    .task-item.selected {
+      border-color: var(--primary);
+      background: rgba(56, 189, 248, 0.08);
+    }
+
+    .task-info {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .task-title {
+      font-weight: 600;
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .task-sub {
+      font-size: 11px;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .console-box {
+      background: var(--terminal-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 11.5px;
+      line-height: 1.45;
+      color: #cbd5e1;
+      height: 220px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .console-empty {
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .banner {
+      padding: 7px 10px;
+      border-radius: 6px;
+      margin-bottom: 8px;
+      font-size: 11.5px;
+      border: 1px solid rgba(56, 189, 248, 0.35);
+      background: rgba(56, 189, 248, 0.1);
+      color: #e0f2fe;
+    }
+
+    .banner.error {
+      border-color: rgba(239, 68, 68, 0.4);
+      background: rgba(239, 68, 68, 0.12);
+      color: #fecaca;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="title-group">
+      <h1>⚡ Google Colab GPU</h1>
+      <span id="auth-badge" class="badge">Checking...</span>
+    </div>
+    <div class="row">
+      <button id="btn-auth" class="sm">Sign in with Google</button>
+      <button id="btn-refresh" class="sm" title="Refresh status">↻</button>
+    </div>
+  </div>
+
+  <div id="status-banner" class="banner" style="display:none"></div>
+
+  <!-- 1. GPU Runtime & Resource Monitor -->
+  <div class="section">
+    <div class="section-header">
+      <h2 class="section-title">GPU Runtime (Colab VS Code Direct API)</h2>
+      <span id="session-count-badge" class="badge">0 active</span>
+    </div>
+
+    <div class="row">
+      <select id="gpu-select" title="Select Colab Accelerator">
+        <option value="T4">NVIDIA T4 (≈1.96 CU/h)</option>
+        <option value="L4">NVIDIA L4 (≈4.82 CU/h)</option>
+        <option value="A100">NVIDIA A100 (≈11.77 CU/h)</option>
+        <option value="CPU">Colab CPU (≈0.08 CU/h)</option>
+      </select>
+      <label class="row muted" style="font-size:11.5px;cursor:pointer">
+        <input type="checkbox" id="chk-keep" /> Keep alive
+      </label>
+      <button id="btn-start-gpu" class="primary">Start GPU</button>
+      <button id="btn-open-term" class="sm">SSH Terminal</button>
+    </div>
+
+    <div id="prereq-bar" class="prereq-bar"></div>
+    <div id="sessions-container"></div>
+  </div>
+
+  <!-- 2. Algorithm Task Manager -->
+  <div class="section">
+    <div class="section-header">
+      <h2 class="section-title">Algorithm Task Manager</h2>
+      <span id="tasks-summary-badge" class="badge">0 running</span>
+    </div>
+
+    <div class="task-form">
+      <div class="row">
+        <input
+          type="text"
+          id="task-name-input"
+          placeholder="Task title (optional, e.g. Train ResMLP)"
+          style="flex: 1; min-width: 140px"
+        />
+        <label class="row muted" style="font-size:11.5px;cursor:pointer">
+          <input type="checkbox" id="chk-sync-workspace" checked /> Sync workspace
+        </label>
+      </div>
+      <div class="row">
+        <input
+          type="text"
+          id="task-cmd-input"
+          class="mono"
+          placeholder="python3 train.py --epochs 20 --fp16"
+          style="flex: 1"
+        />
+        <button id="btn-submit-task" class="primary">Run Task</button>
+      </div>
+      <div class="preset-chips">
+        <span class="chip" data-cmd="nvidia-smi">nvidia-smi</span>
+        <span class="chip" data-cmd="python3 -c &quot;import torch; print('CUDA:', torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')&quot;">PyTorch GPU Check</span>
+        <span class="chip" data-cmd="pip install -q -r requirements.txt">pip install requirements</span>
+      </div>
+    </div>
+
+    <div id="task-list" class="task-list">
+      <div class="muted" style="font-size:11.5px">No tasks submitted yet.</div>
+    </div>
+  </div>
+
+  <!-- 3. Current Task Live Output Console -->
+  <div class="section">
+    <div class="section-header">
+      <div class="row">
+        <h2 class="section-title">Current Task Output</h2>
+        <span id="console-task-badge" class="badge">None selected</span>
+      </div>
+      <div class="row">
+        <label class="row muted" style="font-size:11px;cursor:pointer">
+          <input type="checkbox" id="chk-autoscroll" checked /> Follow
+        </label>
+        <button id="btn-copy-logs" class="sm">Copy</button>
+        <button id="btn-refresh-logs" class="sm">↻</button>
+      </div>
+    </div>
+    <div id="console-output" class="console-box console-empty">Select or submit a task above to stream live stdout/stderr from the Colab GPU...</div>
+  </div>
+
+  <!-- 4. Compute Units (CCU) & Budget Stewardship -->
+  <div class="section">
+    <div class="section-header">
+      <h2 class="section-title">Compute Units (Approximate)</h2>
+      <div class="row">
+        <button id="btn-sync-ccu" class="sm">Sync CCU</button>
+      </div>
+    </div>
+
+    <div id="credits-summary" class="session-meta"></div>
+    <div id="budget-bar-wrap" style="display:none;margin-bottom:8px">
+      <div class="between" style="font-size:11px">
+        <span id="budget-label" class="muted">Monthly budget</span>
+        <span id="budget-pct" class="mono">0%</span>
+      </div>
+      <div class="progress-track">
+        <div id="budget-fill" class="progress-fill" style="width:0%"></div>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:6px">
+      <input type="number" id="input-balance" placeholder="Balance CU" step="0.1" min="0" style="width:95px" />
+      <button id="btn-set-balance" class="sm">Set Balance</button>
+      <input type="number" id="input-budget" placeholder="Budget CU/mo" step="1" min="0" style="width:105px" />
+      <button id="btn-set-budget" class="sm">Set Budget</button>
+    </div>
+
+    <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:11px" class="between">
+      <span class="muted">Agent Skill: <code class="mono">npx skills add vzxxbacq/orca-colab</code></span>
+      <button id="btn-copy-skill" class="sm">Copy</button>
+    </div>
+  </div>
+
+  <script>
+    const orcaApi = window.orca || {
+      plugin: {
+        async request() { return {}; },
+        on() {},
+      },
+    };
+
+    let state = {
+      selectedTaskId: null,
+      dashboard: null,
+      doctor: null,
+      lastLogText: "",
+    };
+
+    function showBanner(msg, isError = false) {
+      const el = document.getElementById("status-banner");
+      if (!msg) {
+        el.style.display = "none";
+        el.textContent = "";
+        return;
+      }
+      el.style.display = "block";
+      el.className = isError ? "banner error" : "banner";
+      el.textContent = msg;
+    }
+
+    function formatDuration(sec) {
+      if (!Number.isFinite(sec) || sec < 0) return "0s";
+      if (sec < 60) return `${Math.round(sec)}s`;
+      const m = Math.floor(sec / 60);
+      const s = Math.round(sec % 60);
+      if (m < 60) return `${m}m ${s}s`;
+      const h = Math.floor(m / 60);
+      return `${h}h ${m % 60}m`;
+    }
+
+    function formatTaskElapsed(task) {
+      const start = Date.parse(task.startedAt || task.createdAt);
+      const end = task.finishedAt ? Date.parse(task.finishedAt) : Date.now();
+      if (!Number.isFinite(start) || !Number.isFinite(end)) return "";
+      const sec = Math.max(0, (end - start) / 1000);
+      return sec < 60 ? `${sec.toFixed(1)}s` : formatDuration(sec);
+    }
+
+    function renderPrerequisites(doctor, auth) {
+      const bar = document.getElementById("prereq-bar");
+      if (!doctor) {
+        bar.innerHTML = "";
+        return;
+      }
+      const items = [
+        { label: "Tailscale", ok: doctor.tailscale?.loggedIn },
+        { label: "SSH Key", ok: doctor.sshKey?.present },
+        { label: "Auth Key", ok: doctor.config?.authKeyValid },
+        { label: "Direct API OAuth", ok: Boolean(auth?.authenticated) },
+      ];
+      bar.innerHTML = items
+        .map(
+          (i) =>
+            `<span class="badge ${i.ok ? "ok" : "warn"}">${i.ok ? "✓" : "•"} ${i.label}</span>`,
+        )
+        .join("");
+    }
+
+    function renderSessions(sessions = []) {
+      const container = document.getElementById("sessions-container");
+      const badge = document.getElementById("session-count-badge");
+      const active = sessions.filter((s) => s.state !== "zombie");
+      badge.textContent = `${active.length} active`;
+      badge.className = `badge ${active.length > 0 ? "ok" : ""}`;
+
+      if (sessions.length === 0) {
+        container.innerHTML = `<div class="muted" style="margin-top:8px;font-size:11.5px">No active GPU sessions. Choose an accelerator above and click <b>Start GPU</b>.</div>`;
+        return;
+      }
+
+      container.innerHTML = sessions
+        .map((s) => {
+          const gpuName = s.gpu?.name || s.rateKey || "GPU";
+          const vramTotal = s.liveMetrics?.vramTotalMiB || s.gpu?.memoryTotalMiB || null;
+          const vramUsed = s.liveMetrics?.vramUsedMiB ?? null;
+          const gpuUtil = s.liveMetrics?.gpuUtilizationPercent ?? null;
+          const modeLabel = s.colabRuntime?.id ? "Direct API" : "Notebook";
+          return `
+            <div class="session-card">
+              <div class="between">
+                <div class="row">
+                  <strong>${s.name}</strong>
+                  <span class="badge ${s.reachable ? "ok" : "err"}">${s.reachable ? "ONLINE" : s.state.toUpperCase()}</span>
+                  <span class="badge">${modeLabel}</span>
+                  ${s.keep ? '<span class="badge warn">KEEP</span>' : ""}
+                </div>
+                <div class="row">
+                  <button class="sm" data-action="toggle-keep" data-session="${s.name}">${s.keep ? "Unkeep" : "Keep"}</button>
+                  <button class="sm" data-action="ssh-session" data-session="${s.name}">Shell</button>
+                  <button class="sm danger" data-action="stop-session" data-session="${s.name}">Stop</button>
+                </div>
+              </div>
+              <div class="session-meta">
+                <div class="meta-item">
+                  <span class="meta-label">Accelerator</span>
+                  <span class="meta-value">${gpuName}${vramTotal ? ` (${Math.round(vramTotal / 1024)} GB)` : ""}</span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">Tailnet IP</span>
+                  <span class="meta-value mono">${s.ip || "—"}</span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">Uptime / Cost</span>
+                  <span class="meta-value">${formatDuration(s.ageSeconds)} · ≈${s.costSoFarCu} CU</span>
+                </div>
+                <div class="meta-item">
+                  <span class="meta-label">GPU Load / VRAM</span>
+                  <span class="meta-value">${gpuUtil !== null ? `${gpuUtil}%` : "—"}${vramUsed !== null && vramTotal ? ` · ${vramUsed}/${vramTotal} MiB` : ""}</span>
+                </div>
+              </div>
+            </div>
+          `;
+        })
+        .join("");
+    }
+
+    function renderTasks(tasks = []) {
+      const listEl = document.getElementById("task-list");
+      const summaryBadge = document.getElementById("tasks-summary-badge");
+      const runningCount = tasks.filter((t) => t.status === "running").length;
+      summaryBadge.textContent =
+        runningCount > 0 ? `${runningCount} running` : `${tasks.length} total`;
+      summaryBadge.className = `badge ${runningCount > 0 ? "running" : ""}`;
+
+      if (tasks.length === 0) {
+        listEl.innerHTML = `<div class="muted" style="font-size:11.5px">No tasks submitted yet. Enter a command above and click <b>Run Task</b>.</div>`;
+        return;
+      }
+
+      if (!state.selectedTaskId && tasks.length > 0) {
+        const running = tasks.find((t) => t.status === "running");
+        state.selectedTaskId = (running || tasks[0]).id;
+      }
+
+      listEl.innerHTML = tasks
+        .slice(0, 20)
+        .map((t) => {
+          const isSelected = t.id === state.selectedTaskId;
+          let badgeClass = "";
+          let dotHtml = "";
+          if (t.status === "running") {
+            badgeClass = "running";
+            dotHtml = `<span class="pulse-dot"></span>`;
+          } else if (t.status === "succeeded") {
+            badgeClass = "ok";
+          } else if (t.status === "failed") {
+            badgeClass = "err";
+          } else {
+            badgeClass = "warn";
+          }
+
+          const cmdStr = Array.isArray(t.command) ? t.command.join(" ") : String(t.command || "");
+          const elapsed = formatTaskElapsed(t);
+          const exitStr =
+            typeof t.exitCode === "number" && t.status !== "running"
+              ? ` · exit ${t.exitCode}`
+              : "";
+
+          return `
+            <div class="task-item ${isSelected ? "selected" : ""}" data-task-id="${t.id}">
+              <div class="task-info">
+                <div class="row" style="margin-bottom:2px">
+                  <span class="badge ${badgeClass}">${dotHtml}${t.status.toUpperCase()}</span>
+                  <span class="task-title">${t.name}</span>
+                  <span class="muted mono" style="font-size:10.5px">${elapsed}${exitStr}</span>
+                </div>
+                <div class="task-sub">$ ${cmdStr}</div>
+              </div>
+              <div class="row">
+                ${
+                  t.status === "running"
+                    ? `<button class="sm danger" data-action="stop-task" data-task="${t.id}">Stop</button>`
+                    : ""
+                }
+                <button class="sm" data-action="view-task" data-task="${t.id}">Output</button>
+              </div>
+            </div>
+          `;
+        })
+        .join("");
+    }
+
+    function renderTaskConsole(activeOutput) {
+      const consoleEl = document.getElementById("console-output");
+      const badgeEl = document.getElementById("console-task-badge");
+      if (!activeOutput || !activeOutput.taskId) {
+        badgeEl.textContent = "None selected";
+        badgeEl.className = "badge";
+        consoleEl.className = "console-box console-empty";
+        consoleEl.textContent =
+          "Select or submit a task above to stream live stdout/stderr from the Colab GPU...";
+        state.lastLogText = "";
+        return;
+      }
+
+      const status = activeOutput.status || "running";
+      const badgeClass =
+        status === "running"
+          ? "running"
+          : status === "succeeded"
+            ? "ok"
+            : status === "failed"
+              ? "err"
+              : "warn";
+      badgeEl.textContent = `${activeOutput.taskId} · ${status.toUpperCase()}`;
+      badgeEl.className = `badge ${badgeClass}`;
+
+      const text = activeOutput.output || "(Waiting for output...)";
+      state.lastLogText = activeOutput.output || "";
+      consoleEl.className = "console-box";
+      consoleEl.textContent = text;
+
+      const autoScroll = document.getElementById("chk-autoscroll")?.checked;
+      if (autoScroll) {
+        consoleEl.scrollTop = consoleEl.scrollHeight;
+      }
+    }
+
+    function renderCredits(credits) {
+      const container = document.getElementById("credits-summary");
+      const barWrap = document.getElementById("budget-bar-wrap");
+      if (!credits) {
+        container.innerHTML = "";
+        barWrap.style.display = "none";
+        return;
+      }
+
+      const bal =
+        credits.estimatedBalanceCu !== null
+          ? `≈ ${credits.estimatedBalanceCu} CU`
+          : "Uncalibrated";
+      const age =
+        credits.calibrationAgeSeconds !== null
+          ? `${formatDuration(credits.calibrationAgeSeconds)} ago`
+          : "never";
+      const hoursLeft =
+        credits.estimatedRemainingHours !== null
+          ? `≈ ${credits.estimatedRemainingHours}h left`
+          : "—";
+
+      container.innerHTML = `
+        <div class="meta-item">
+          <span class="meta-label">Balance (calibrated ${age})</span>
+          <span class="meta-value">${bal}</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">Burn Rate</span>
+          <span class="meta-value">${credits.estimatedBurnCuPerHour ?? 0} CU/h (${hoursLeft})</span>
+        </div>
+        <div class="meta-item">
+          <span class="meta-label">Used This Month</span>
+          <span class="meta-value">≈ ${credits.estimatedMonthlyUsedCu ?? 0} CU</span>
+        </div>
+      `;
+
+      if (typeof credits.budgetCu === "number" && credits.budgetCu > 0) {
+        barWrap.style.display = "block";
+        const used = Number(credits.estimatedMonthlyUsedCu || 0);
+        const pct = Math.min(100, Math.round((used / credits.budgetCu) * 100));
+        document.getElementById("budget-label").textContent =
+          `Monthly budget: ${used} / ${credits.budgetCu} CU`;
+        document.getElementById("budget-pct").textContent = `${pct}%`;
+        const fill = document.getElementById("budget-fill");
+        fill.style.width = `${pct}%`;
+        fill.className = `progress-fill ${pct >= 100 ? "danger" : pct >= 80 ? "warn" : ""}`;
+      } else {
+        barWrap.style.display = "none";
+      }
+    }
+
+    function applyDashboard(dash) {
+      if (!dash) return;
+      state.dashboard = dash;
+
+      const authBadge = document.getElementById("auth-badge");
+      const authBtn = document.getElementById("btn-auth");
+      if (dash.auth?.authenticated) {
+        authBadge.textContent = dash.auth.email
+          ? `✓ ${dash.auth.email}`
+          : `✓ OAuth (${dash.auth.account})`;
+        authBadge.className = "badge ok";
+        authBtn.textContent = "Sign out";
+      } else {
+        authBadge.textContent = "Notebook mode (OAuth optional)";
+        authBadge.className = "badge warn";
+        authBtn.textContent = "Sign in with Google";
+      }
+
+      if (dash.provisioning?.active) {
+        showBanner(dash.provisioning.message || "Provisioning Colab GPU...");
+      } else if (dash.provisioning?.error) {
+        showBanner(dash.provisioning.error, true);
+      } else {
+        showBanner(null);
+      }
+
+      renderPrerequisites(state.doctor, dash.auth);
+      renderSessions(dash.sessions || []);
+      renderTasks(dash.tasks || []);
+      if (dash.activeTaskOutput) {
+        renderTaskConsole(dash.activeTaskOutput);
+      }
+      renderCredits(dash.credits);
+    }
+
+    async function refreshAll(includeLiveMetrics = true) {
+      try {
+        const [dash, doc] = await Promise.all([
+          orcaApi.plugin.request(
+            "colab.dashboard",
+            {
+              selectedTaskId: state.selectedTaskId,
+              includeLiveMetrics,
+            },
+            { timeoutMs: 20000 },
+          ),
+          orcaApi.plugin.request("colab.doctor", {}, { timeoutMs: 10000 }).catch(() => null),
+        ]);
+        if (doc) state.doctor = doc;
+        applyDashboard(dash);
+      } catch (err) {
+        showBanner(err?.message || String(err), true);
+      }
+    }
+
+    document.getElementById("btn-refresh").addEventListener("click", () => {
+      void refreshAll(true);
+    });
+
+    document.getElementById("btn-auth").addEventListener("click", async () => {
+      const isSigned = Boolean(state.dashboard?.auth?.authenticated);
+      try {
+        if (isSigned) {
+          const res = await orcaApi.plugin.request("colab.authLogout", {});
+          applyDashboard(res.dashboard);
+        } else {
+          showBanner("Opening Google sign-in in your default browser (Passkey supported)...");
+          const res = await orcaApi.plugin.request(
+            "colab.authLogin",
+            {},
+            { timeoutMs: 185000 },
+          );
+          showBanner(null);
+          applyDashboard(res.dashboard);
+        }
+      } catch (err) {
+        showBanner(err?.message || String(err), true);
+      }
+    });
+
+    document.getElementById("btn-start-gpu").addEventListener("click", async () => {
+      const gpu = document.getElementById("gpu-select").value;
+      const keep = document.getElementById("chk-keep").checked;
+      const btn = document.getElementById("btn-start-gpu");
+      btn.disabled = true;
+      try {
+        showBanner(`Starting Colab ${gpu} session...`);
+        const res = await orcaApi.plugin.request(
+          "colab.startSession",
+          { gpu, keep },
+          { timeoutMs: 300000 },
+        );
+        if (res?.dashboard) {
+          applyDashboard(res.dashboard);
+        } else {
+          showBanner(`Launched 'orca-colab up' in an Orca terminal.`);
+        }
+      } catch (err) {
+        showBanner(err?.message || String(err), true);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    document.getElementById("btn-open-term").addEventListener("click", async () => {
+      const firstSession = state.dashboard?.sessions?.[0]?.name || null;
+      await orcaApi.plugin.request("colab.openTerminal", { session: firstSession });
+    });
+
+    document.getElementById("sessions-container").addEventListener("click", async (e) => {
+      const btn = e.target.closest("button[data-action]");
+      if (!btn) return;
+      const action = btn.dataset.action;
+      const session = btn.dataset.session;
+      try {
+        if (action === "stop-session") {
+          btn.disabled = true;
+          const res = await orcaApi.plugin.request(
+            "colab.stopSession",
+            { session },
+            { timeoutMs: 45000 },
+          );
+          applyDashboard(res.dashboard);
+        } else if (action === "toggle-keep") {
+          const res = await orcaApi.plugin.request("colab.toggleKeep", { session });
+          applyDashboard(res.dashboard);
+        } else if (action === "ssh-session") {
+          await orcaApi.plugin.request("colab.openTerminal", { session });
+        }
+      } catch (err) {
+        showBanner(err?.message || String(err), true);
+      }
+    });
+
+    document.querySelector(".preset-chips").addEventListener("click", (e) => {
+      const chip = e.target.closest(".chip[data-cmd]");
+      if (!chip) return;
+      document.getElementById("task-cmd-input").value = chip.dataset.cmd;
+    });
+
+    document.getElementById("btn-submit-task").addEventListener("click", async () => {
+      const cmdInput = document.getElementById("task-cmd-input");
+      const nameInput = document.getElementById("task-name-input");
+      const syncWorkspace = document.getElementById("chk-sync-workspace").checked;
+      const command = cmdInput.value.trim();
+      if (!command) {
+        showBanner("Enter a command to submit to the Colab GPU.", true);
+        return;
+      }
+      const btn = document.getElementById("btn-submit-task");
+      btn.disabled = true;
+      try {
+        const res = await orcaApi.plugin.request(
+          "colab.submitTask",
+          {
+            name: nameInput.value.trim() || undefined,
+            command,
+            syncWorkspace,
+          },
+          { timeoutMs: 30000 },
+        );
+        if (res?.task?.id) {
+          state.selectedTaskId = res.task.id;
+        }
+        cmdInput.value = "";
+        nameInput.value = "";
+        showBanner(null);
+        applyDashboard(res.dashboard);
+      } catch (err) {
+        showBanner(err?.message || String(err), true);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    document.getElementById("task-list").addEventListener("click", async (e) => {
+      const btn = e.target.closest("button[data-action]");
+      if (btn) {
+        e.stopPropagation();
+        const action = btn.dataset.action;
+        const taskId = btn.dataset.task;
+        if (action === "stop-task") {
+          const res = await orcaApi.plugin.request("colab.stopTask", { taskId });
+          applyDashboard(res.dashboard);
+          return;
+        }
+        if (action === "view-task") {
+          state.selectedTaskId = taskId;
+          const logRes = await orcaApi.plugin.request("colab.getTaskLogs", { taskId });
+          renderTasks(state.dashboard?.tasks || []);
+          renderTaskConsole({
+            taskId: logRes.task.id,
+            status: logRes.task.status,
+            exitCode: logRes.task.exitCode,
+            output: logRes.output,
+          });
+          return;
+        }
+      }
+
+      const row = e.target.closest(".task-item[data-task-id]");
+      if (row) {
+        state.selectedTaskId = row.dataset.taskId;
+        const logRes = await orcaApi.plugin.request("colab.getTaskLogs", {
+          taskId: state.selectedTaskId,
+        });
+        renderTasks(state.dashboard?.tasks || []);
+        renderTaskConsole({
+          taskId: logRes.task.id,
+          status: logRes.task.status,
+          exitCode: logRes.task.exitCode,
+          output: logRes.output,
+        });
+      }
+    });
+
+    document.getElementById("btn-refresh-logs").addEventListener("click", async () => {
+      if (!state.selectedTaskId) {
+        await refreshAll(false);
+        return;
+      }
+      const logRes = await orcaApi.plugin.request("colab.getTaskLogs", {
+        taskId: state.selectedTaskId,
+      });
+      renderTaskConsole({
+        taskId: logRes.task.id,
+        status: logRes.task.status,
+        exitCode: logRes.task.exitCode,
+        output: logRes.output,
+      });
+    });
+
+    document.getElementById("btn-copy-logs").addEventListener("click", async () => {
+      if (state.lastLogText && navigator.clipboard) {
+        await navigator.clipboard.writeText(state.lastLogText).catch(() => {});
+      }
+    });
+
+    document.getElementById("btn-sync-ccu").addEventListener("click", async () => {
+      try {
+        showBanner("Syncing Compute Units from Colab...");
+        const res = await orcaApi.plugin.request(
+          "colab.calibrateCredits",
+          {},
+          { timeoutMs: 30000 },
+        );
+        showBanner(null);
+        applyDashboard(res.dashboard);
+      } catch (err) {
+        showBanner(err?.message || String(err), true);
+      }
+    });
+
+    document.getElementById("btn-set-balance").addEventListener("click", async () => {
+      const val = Number(document.getElementById("input-balance").value);
+      if (!Number.isFinite(val) || val < 0) return;
+      const res = await orcaApi.plugin.request("colab.setCredits", { balanceCu: val });
+      document.getElementById("input-balance").value = "";
+      applyDashboard(res.dashboard);
+    });
+
+    document.getElementById("btn-set-budget").addEventListener("click", async () => {
+      const val = Number(document.getElementById("input-budget").value);
+      if (!Number.isFinite(val) || val < 0) return;
+      const res = await orcaApi.plugin.request("colab.setBudget", { budgetCu: val });
+      document.getElementById("input-budget").value = "";
+      applyDashboard(res.dashboard);
+    });
+
+    document.getElementById("btn-copy-skill").addEventListener("click", async () => {
+      if (navigator.clipboard) {
+        await navigator.clipboard
+          .writeText("npx skills add vzxxbacq/orca-colab")
+          .catch(() => {});
+      }
+    });
+
+    orcaApi.plugin.on("colab.stateChanged", (dash) => {
+      applyDashboard(dash);
+    });
+
+    orcaApi.plugin.on("colab.provisioningProgress", (prog) => {
+      if (prog?.active) {
+        showBanner(prog.message);
+      }
+    });
+
+    orcaApi.plugin.on("colab.taskOutput", (payload) => {
+      if (!payload?.task) return;
+      if (!state.selectedTaskId || state.selectedTaskId === payload.task.id) {
+        state.selectedTaskId = payload.task.id;
+        renderTaskConsole({
+          taskId: payload.task.id,
+          status: payload.task.status,
+          exitCode: payload.task.exitCode,
+          output: payload.output,
+        });
+      }
+      if (state.dashboard?.tasks) {
+        const idx = state.dashboard.tasks.findIndex((t) => t.id === payload.task.id);
+        if (idx >= 0) {
+          state.dashboard.tasks[idx] = payload.task;
+        } else {
+          state.dashboard.tasks.unshift(payload.task);
+        }
+        renderTasks(state.dashboard.tasks);
+      }
+    });
+
+    void refreshAll(true);
+  </script>
+</body>
+</html>

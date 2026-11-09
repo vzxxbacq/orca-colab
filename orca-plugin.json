@@ -1,0 +1,69 @@
+{
+  "$schema": "https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-plugin.v2.schema.json",
+  "manifestVersion": 2,
+  "execution": "trusted-worker",
+  "id": "colab",
+  "name": "Google Colab GPU",
+  "version": "0.1.0",
+  "description": "Use a Google Colab GPU runtime as a compute backend from your local Orca workspace and agents.",
+  "repository": "https://github.com/vzxxbacq/orca-colab",
+  "license": "MIT",
+  "engines": { "orca": ">=1.4.248" },
+  "pluginApi": 1,
+  "main": "worker/main.mjs",
+  "contributes": {
+    "panels": [
+      {
+        "id": "colab",
+        "title": "Colab GPU",
+        "icon": "zap",
+        "entry": "panel/index.html"
+      }
+    ],
+    "commands": [
+      {
+        "id": "colab.up",
+        "title": "Colab: Start GPU session",
+        "when": "workspace"
+      },
+      {
+        "id": "colab.down",
+        "title": "Colab: Stop GPU session"
+      },
+      {
+        "id": "colab.showPanel",
+        "title": "Colab: Show sessions"
+      }
+    ],
+    "statusBarItems": [
+      {
+        "id": "colab-sessions",
+        "icon": "zap",
+        "text": "Colab",
+        "command": "colab.showPanel"
+      }
+    ],
+    "settings": [
+      {
+        "key": "autoStopIdleMinutes",
+        "title": "Auto-stop idle sessions after (minutes)",
+        "type": "integer",
+        "default": 20,
+        "minimum": 0
+      },
+      {
+        "key": "cliCommand",
+        "title": "orca-colab command",
+        "type": "string",
+        "default": "npx -y github:vzxxbacq/orca-colab#v0.1.0"
+      }
+    ]
+  },
+  "capabilities": [
+    { "kind": "workspace:read" },
+    { "kind": "terminal:send" },
+    { "kind": "notifications:show" },
+    { "kind": "storage:own" },
+    { "kind": "settings:own" }
+  ]
+}

@@ -10,6 +10,10 @@ import {
 } from "../lib/cli-output.mjs";
 import { copyToClipboard } from "../lib/clipboard.mjs";
 import {
+  assignRuntime as defaultAssignRuntime,
+  runBootstrapOverTty as defaultRunBootstrapOverTty,
+} from "../lib/colab-api-client.mjs";
+import {
   detectRunningSystemBrowser,
   locateOrcaBinary,
   stepSystemBrowserColab,
@@ -20,6 +24,7 @@ import {
   readConfig,
   resolveAccount,
 } from "../lib/colab-home.mjs";
+import { getValidAccessToken } from "../lib/colab-oauth.mjs";
 import { recordSessionStartEvent } from "../lib/credit-ledger.mjs";
 import { BOOTSTRAP_NOTEBOOK_COLAB_URL, openUrl } from "../lib/open-url.mjs";
 import { resolveGpuRate as resolveRateFromTable } from "../lib/rate-table.mjs";
@@ -49,6 +54,10 @@ export async function run(
     copyClipboard = copyToClipboard,
     resolveGpuRate = resolveRateFromTable,
     onSessionStart = recordSessionStartEvent,
+    assignRuntimeFn = defaultAssignRuntime,
+    bootstrapTtyFn = defaultRunBootstrapOverTty,
+    fetchImpl = fetch,
+    WebSocketImpl = globalThis.WebSocket,
     nowMs = () => Date.now(),
     nowIso = () => new Date().toISOString(),
     sleep = undefined,
@@ -62,6 +71,9 @@ export async function run(
       options: {
         name: { type: "string" },
         account: { type: "string" },
+        gpu: { type: "string", default: "T4" },
+        "high-ram": { type: "boolean", default: false },
+        browser: { type: "boolean", default: false },
         keep: { type: "boolean", default: false },
         timeout: { type: "string", default: "600" },
         "no-open": { type: "boolean", default: false },
@@ -143,24 +155,85 @@ export async function run(
     ? findNewColabPeer(initialStatus.peers ?? [], baselinePeers, opts.name ?? null)
     : null;
 
-  const pasteLine = config.loginServer
-    ? `${config.authKey} ${config.loginServer} ${publicKey}`
-    : `${config.authKey} ${publicKey}`;
-  const clip = copyClipboard(pasteLine, { env });
-  const hasPersonalDriveCopy = Boolean(
-    account.notebookUrl &&
-      account.notebookUrl !== BOOTSTRAP_NOTEBOOK_COLAB_URL &&
-      !account.notebookUrl.includes("colab.research.google.com/github/"),
-  );
+  let colabRuntime = null;
+  let bootstrappedPeer = null;
+  let usedDirectApi = false;
 
-  const orcaBin = !fetchTailscaleStatus ? locateOrcaBinary(env) : null;
+  if (!alreadyOnlinePeer && !opts.browser) {
+    let accessToken = null;
+    try {
+      accessToken = await getValidAccessToken({
+        account: account.label,
+        homeDir,
+        fetchImpl,
+      });
+    } catch {
+      accessToken = null;
+    }
+
+    if (accessToken) {
+      try {
+        const gpuLabel = String(opts.gpu || "T4").toUpperCase();
+        log(
+          `Assigning Colab ${gpuLabel} runtime via Direct API for account '${account.label}' (no browser required)...`,
+          stderr,
+        );
+        colabRuntime = await assignRuntimeFn({
+          accessToken,
+          gpu: gpuLabel,
+          highRam: Boolean(opts["high-ram"]),
+          fetchImpl,
+          signal,
+        });
+        log(
+          `Assigned runtime ${colabRuntime.id}; bootstrapping Tailscale + sshd over /colab/tty...`,
+          stderr,
+        );
+        const ttyResult = await bootstrapTtyFn({
+          baseUrl: colabRuntime.baseUrl,
+          proxyToken: colabRuntime.token,
+          authKey: config.authKey,
+          sshPublicKey: publicKey,
+          loginServer: config.loginServer ?? "",
+          hostnameSuffix: opts.name ?? "",
+          WebSocketImpl,
+          signal,
+        });
+        usedDirectApi = true;
+        if (ttyResult?.hostname && ttyResult?.ip) {
+          bootstrappedPeer = {
+            hostName: ttyResult.hostname,
+            ipv4: ttyResult.ip,
+          };
+        }
+      } catch (apiErr) {
+        const msg = apiErr instanceof Error ? apiErr.message : String(apiErr);
+        log(
+          `Direct API provisioning failed (${msg}); falling back to browser notebook flow...`,
+          stderr,
+        );
+      }
+    }
+  }
+
+  const orcaBin = !fetchTailscaleStatus && !usedDirectApi ? locateOrcaBinary(env) : null;
   const systemBrowserApp =
-    !fetchTailscaleStatus && orcaBin
+    !fetchTailscaleStatus && !usedDirectApi && orcaBin
       ? detectRunningSystemBrowser({ orcaBin, env })
       : null;
   const useSystemBrowser = Boolean(opts["system-browser"] || systemBrowserApp);
 
-  if (!alreadyOnlinePeer) {
+  if (!alreadyOnlinePeer && !usedDirectApi) {
+    const pasteLine = config.loginServer
+      ? `${config.authKey} ${config.loginServer} ${publicKey}`
+      : `${config.authKey} ${publicKey}`;
+    const clip = copyClipboard(pasteLine, { env });
+    const hasPersonalDriveCopy = Boolean(
+      account.notebookUrl &&
+        account.notebookUrl !== BOOTSTRAP_NOTEBOOK_COLAB_URL &&
+        !account.notebookUrl.includes("colab.research.google.com/github/"),
+    );
+
     if (hasPersonalDriveCopy) {
       if (!opts["no-open"]) {
         openBrowser(account.notebookUrl, {
@@ -197,7 +270,7 @@ export async function run(
 
   let autoState = { filled: false, clickedRun: false, clickedConfirm: false, done: false };
   const pollStatusWithAutomation = async () => {
-    if (!alreadyOnlinePeer && systemBrowserApp && !autoState.done) {
+    if (!alreadyOnlinePeer && !usedDirectApi && systemBrowserApp && !autoState.done) {
       try {
         const next = stepSystemBrowserColab({
           orcaBin,
@@ -225,6 +298,7 @@ export async function run(
   log("Waiting for a new online orca-colab-* peer on your tailnet...", stderr);
   const peer =
     alreadyOnlinePeer ??
+    bootstrappedPeer ??
     (await waitForColabPeer({
       fetchStatus: pollStatusWithAutomation,
       baselinePeers,
@@ -258,25 +332,33 @@ export async function run(
   const { rateKey, cuPerHour } = resolveGpuRate(gpu.name, homeDir);
   const createdAt = nowIso();
 
-  const session = writeSession(
-    {
-      name: peer.hostName,
-      account: account.label,
-      hostname: peer.hostName,
-      ip: peer.ipv4,
-      gpu,
-      rateKey,
-      cuPerHour,
-      createdAt,
-      lastActivityAt: createdAt,
-      activePids: [],
-      keep: Boolean(opts.keep),
-      state: "active",
-      remoteRoot: null,
-      forwards: [],
-    },
-    homeDir,
-  );
+  const sessionRecord = {
+    name: peer.hostName,
+    account: account.label,
+    hostname: peer.hostName,
+    ip: peer.ipv4,
+    gpu,
+    rateKey,
+    cuPerHour,
+    createdAt,
+    lastActivityAt: createdAt,
+    activePids: [],
+    keep: Boolean(opts.keep),
+    state: "active",
+    remoteRoot: null,
+    forwards: [],
+  };
+  if (colabRuntime) {
+    sessionRecord.colabRuntime = {
+      id: colabRuntime.id,
+      endpoint: colabRuntime.endpoint,
+      baseUrl: colabRuntime.baseUrl,
+      token: colabRuntime.token,
+      tokenExpiry: colabRuntime.tokenExpiry,
+    };
+  }
+
+  const session = writeSession(sessionRecord, homeDir);
 
   if (onSessionStart) {
     await onSessionStart(session, homeDir);
@@ -288,13 +370,12 @@ export async function run(
   );
 
   if (json) {
-    writeJson(
-      {
-        ...session,
-        estimatedCuPerHour: session.cuPerHour,
-      },
-      stdout,
-    );
+    const publicSession = { ...session, estimatedCuPerHour: session.cuPerHour };
+    if (publicSession.colabRuntime) {
+      const { token: _omitToken, ...safeRuntime } = publicSession.colabRuntime;
+      publicSession.colabRuntime = safeRuntime;
+    }
+    writeJson(publicSession, stdout);
   }
 
   return EXIT_OK;

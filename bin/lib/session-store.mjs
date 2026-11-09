@@ -37,7 +37,7 @@ export function normalizeSession(input) {
       ? input.lastActivityAt
       : createdAt;
 
-  return {
+  const normalized = {
     name: input.name,
     account: typeof input.account === "string" && input.account ? input.account : "default",
     hostname: typeof input.hostname === "string" ? input.hostname : input.name,
@@ -55,6 +55,23 @@ export function normalizeSession(input) {
     remoteRoot: typeof input.remoteRoot === "string" ? input.remoteRoot : null,
     forwards: Array.isArray(input.forwards) ? input.forwards : [],
   };
+
+  if (input.colabRuntime && typeof input.colabRuntime === "object") {
+    normalized.colabRuntime = {
+      id: typeof input.colabRuntime.id === "string" ? input.colabRuntime.id : "",
+      endpoint:
+        typeof input.colabRuntime.endpoint === "string" ? input.colabRuntime.endpoint : "",
+      baseUrl:
+        typeof input.colabRuntime.baseUrl === "string" ? input.colabRuntime.baseUrl : "",
+      token: typeof input.colabRuntime.token === "string" ? input.colabRuntime.token : "",
+      tokenExpiry:
+        typeof input.colabRuntime.tokenExpiry === "string"
+          ? input.colabRuntime.tokenExpiry
+          : null,
+    };
+  }
+
+  return normalized;
 }
 
 export function sessionFilePath(name, homeDir = os.homedir()) {

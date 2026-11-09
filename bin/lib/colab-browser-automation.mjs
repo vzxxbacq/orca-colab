@@ -93,8 +93,15 @@ export function stepSystemBrowserColab({
     return { ...state, status: "no-tree" };
   }
 
-  // If the Colab tab is in the background, switch to it first.
-  if (!tree.includes("TAILSCALE_AUTH_KEY") && !tree.includes("仍然运行") && !tree.includes("Run anyway")) {
+  // Only switch to a background Colab tab if the currently selected tab is not already Colab.
+  const selectedTabLine =
+    tree.match(/\d+\s+tab \(selected, settable\)[^\n]*/i)?.[0] ?? "";
+  if (
+    !selectedTabLine.toLowerCase().includes("colab") &&
+    !tree.includes("TAILSCALE_AUTH_KEY") &&
+    !tree.includes("仍然运行") &&
+    !tree.includes("Run anyway")
+  ) {
     const tabMatches = [
       ...tree.matchAll(/(\d+)\s+tab \(settable\)[^\n]*orca-colab-bootstrap[^\n]*Value:\s*0/gi),
     ];
@@ -131,15 +138,21 @@ export function stepSystemBrowserColab({
     }
   }
 
-  // If the cell already printed Connected or is currently executing after we filled + clicked, we're done.
+  const authHasValue = /text field \(settable\) TAILSCALE_AUTH_KEY,\s*Value:\s*\S+/i.test(tree);
+
+  // If the cell already printed Connected or is currently executing with credentials filled, we're done.
   if (
-    state.filled &&
+    authHasValue &&
     state.clickedRun &&
     (tree.includes("Connected. Keep this tab open.") ||
       tree.includes("正在执行") ||
-      tree.includes("Executing"))
+      tree.includes("Executing") ||
+      tree.includes("正在分配运行时") ||
+      tree.includes("Allocating runtime") ||
+      tree.includes("正在连接") ||
+      tree.includes("Connecting"))
   ) {
-    return { ...state, done: true, status: "running" };
+    return { ...state, filled: true, done: tree.includes("Connected. Keep this tab open."), status: "running" };
   }
 
   const setField = (regex, value) => {
@@ -167,7 +180,7 @@ export function stepSystemBrowserColab({
     return false;
   };
 
-  if (!state.filled && tree.includes("TAILSCALE_AUTH_KEY")) {
+  if (!authHasValue && tree.includes("TAILSCALE_AUTH_KEY")) {
     // Reset PASTE if it held raw "" so Colab doesn't fail on raw expression evaluation.
     if (/text field \(settable\) PASTE, Value: ""/.test(tree)) {
       setField(/(\d+)\s+text field \(settable\) PASTE/, '""');
@@ -202,7 +215,7 @@ export function stepSystemBrowserColab({
     }
   }
 
-  if (state.filled && !state.clickedRun) {
+  if (authHasValue && (!state.clickedRun || tree.includes("ValueError"))) {
     const runIdx = tree.match(/(\d+)\s+button (?:运行单元|Run cell)/i)?.[1];
     if (runIdx) {
       const clickRun = runOrcaJson(
@@ -211,7 +224,7 @@ export function stepSystemBrowserColab({
         { env, spawnProcess },
       );
       if (clickRun.ok) {
-        return { ...state, clickedRun: true, status: "clicked-run" };
+        return { ...state, filled: true, clickedRun: true, status: "clicked-run" };
       }
     }
   }

@@ -13,7 +13,7 @@ function makeBuffers() {
   };
 }
 
-test("cli help --json lists all 13 dispatched commands", async () => {
+test("cli help --json lists all dispatched commands", async () => {
   const io = makeBuffers();
   const code = await main(["--help", "--json"], io);
   assert.equal(code, 0);
@@ -21,10 +21,12 @@ test("cli help --json lists all 13 dispatched commands", async () => {
     commands: [
       "doctor",
       "setup",
+      "auth",
       "up",
       "status",
       "ls",
       "run",
+      "job",
       "sync",
       "pull",
       "forward",

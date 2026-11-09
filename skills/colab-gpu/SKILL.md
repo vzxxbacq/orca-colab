@@ -23,25 +23,27 @@ Always pass `--json` and parse **stdout** only (progress and diagnostics go to `
 2. For each failed check (`checks.<name>.ok === false`), give the user the single actionable step from `actions[]`.
 3. When `checks.config.ok === false`, ask the user to create a **reusable, ephemeral, pre-approved** Tailscale auth key tagged `tag:orca-colab` in the Tailscale admin console. Explain its scope in one sentence: *this key only lets an ephemeral tagged Colab container join your tailnet, and the node disappears automatically when the Colab runtime ends.*
 4. Run `orca-colab setup` in an interactive terminal the user can see (or ask them to run it) so they can paste the auth key, optionally save a prefilled copy of `notebooks/orca-colab-bootstrap.ipynb` in Google Drive, and paste the Drive copy's URL back.
-5. Run `doctor --json` again and confirm `ok: true`.
+5. Recommended: run `orca-colab auth login` once so the user can sign in with Google in their system default browser (Passkey supported). Once authenticated, `up`, `down`, and `credits calibrate` use the Colab VS Code Direct API with **zero browser tabs**.
+6. Run `doctor --json` again and confirm `ok: true`.
 
 ## 3. Start a session
 
 1. Check `credits --json` first. If `budgetCu` is set and `estimatedBudgetUsedPercent >= 100`, confirm with the user before starting a new session.
 2. Prefer **T4** unless the task specifically requires L4 or A100 VRAM/throughput.
-3. Run `up --json` (which opens the user's Drive notebook copy, or opens the GitHub bootstrap notebook and copies `<authkey> <pubkey>` to the clipboard).
-4. While `up --json` is running, tell the user:
-   > "A Colab tab opened. Choose a GPU runtime (`Runtime → Change runtime type`) if needed and press **Run** on the cell."
-5. Do not poll faster than the CLI does; `up --json` blocks until the new `orca-colab-*` peer joins, `sshd` responds on port 22, and `nvidia-smi` reports the GPU.
-6. Before launching long jobs, state the approximate burn rate (`estimatedCuPerHour` from `up --json`) and estimated hours of balance remaining (`estimatedHoursRemaining` from `credits --json`), explicitly noting that credit figures are **estimates**.
+3. Run `up --gpu T4 --json`.
+   - If the user has signed in with `orca-colab auth login`, `up` assigns the Colab runtime directly via `colaboratory.googleapis.com/v1beta/runtimes` and runs the Tailscale + `sshd` bootstrap over `/colab/tty` with **no browser needed**.
+   - Otherwise (notebook fallback), tell the user:
+     > "A Colab tab opened. Choose a GPU runtime (`Runtime → Change runtime type`) if needed and press **Run** on the cell."
+4. Do not poll faster than the CLI does; `up --json` blocks until the new `orca-colab-*` peer joins, `sshd` responds on port 22, and `nvidia-smi` reports the GPU.
+5. Before launching long jobs, state the approximate burn rate (`estimatedCuPerHour` from `up --json`) and estimated hours of balance remaining (`estimatedHoursRemaining` from `credits --json`), explicitly noting that credit figures are **estimates**.
 
 ## 4. Do the work
 
 1. **Sync workspace**: `sync --json` pushes the current directory (honoring `.gitignore` and `.colabignore`, excluding `.git/`) to `/content/orca/<basename>` and records `remoteRoot`.
 2. **Install dependencies**: `run -- pip install -r requirements.txt`.
-3. **Run training or inference**:
-   - Short commands: `run -- python train.py ...`
-   - Long jobs: use `run --detach train -- python train.py ...` (starts a `tmux` session) or `nohup`, and follow logs with `run -- tail -f train.log`.
+3. **Run training or inference (`job` or `run`)**:
+   - **Managed tasks (recommended for training/benchmarks)**: `job submit --name "Train Model" [--sync] [--wait] --json -- python3 train.py ...` records the task in `~/.orca-colab/tasks/<id>.json` and streams live output to `~/.orca-colab/tasks/<id>.log` (visible in the Orca Colab GPU panel's **Current Task Output** console). Check status with `job ls --json`, read logs with `job logs <id> --json`, or stop with `job stop <id> --json`.
+   - **Direct SSH commands**: `run -- python3 train.py ...` or `run --detach train -- python3 train.py ...`.
 4. **Pull artifacts**: `pull <remotePath> <localPath> --json` to fetch checkpoints, metrics, or outputs back to the local workspace.
 5. **Port forwarding**: `forward <localPort>[:<remotePort>] --json` for TensorBoard (`6006`), Jupyter (`8888`), Gradio (`7860`), or vLLM (`8000`), then give the user the `http://localhost:<localPort>` URL.
 
