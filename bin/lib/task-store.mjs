@@ -97,6 +97,8 @@ export function normalizeTask(input, homeDir = os.homedir()) {
     command,
     sessionName:
       typeof input.sessionName === "string" ? input.sessionName : "",
+    gpuName:
+      typeof input.gpuName === "string" && input.gpuName ? input.gpuName : null,
     account:
       typeof input.account === "string" && input.account
         ? input.account

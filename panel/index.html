@@ -1181,6 +1181,11 @@
               <div class="card-title">Agent Runs &amp; History</div>
               <span class="muted" style="font-size: 10.5px">Click a run to inspect output</span>
             </div>
+            <div
+              id="taskRuntimeFilterBar"
+              class="row hidden"
+              style="gap: 5px; margin-bottom: 8px; flex-wrap: wrap"
+            ></div>
             <div id="taskListContainer" class="task-list"></div>
           </div>
 
@@ -1817,7 +1822,15 @@
             </div>
           `;
         } else {
-          const s = activeSessions[0];
+          if (
+            !window.__selectedBannerSession ||
+            !activeSessions.some((x) => x.name === window.__selectedBannerSession)
+          ) {
+            window.__selectedBannerSession = activeSessions[0].name;
+          }
+          const s =
+            activeSessions.find((x) => x.name === window.__selectedBannerSession) ||
+            activeSessions[0];
           const m = s.liveMetrics || {};
           const gpuUtil =
             typeof m.gpuUtilizationPercent === "number"
@@ -1831,13 +1844,29 @@
               ? ((m.vramTotalMiB || s.gpu.memoryTotalMiB) / 1024).toFixed(1)
               : null;
 
+          const multiTabsHtml =
+            activeSessions.length > 1
+              ? `<div class="row" style="gap:5px;margin-bottom:8px;padding-bottom:7px;border-bottom:1px solid var(--border)">
+                  <span class="muted" style="font-size:10.5px">Runtimes (${activeSessions.length}):</span>
+                  ${activeSessions
+                    .map((sess) => {
+                      const shortId = sess.name.replace(/^orca-colab-/, "");
+                      const isCur = sess.name === s.name;
+                      const gLabel = sess.rateKey && sess.rateKey !== "unknown" ? sess.rateKey : sess.gpu?.name || "GPU";
+                      return `<button class="${isCur ? "primary" : "ghost"}" style="padding:2px 8px;font-size:10.5px" onclick="window.__selectBannerSession('${esc(sess.name)}')">● ${esc(gLabel)} · ${esc(shortId)}</button>`;
+                    })
+                    .join("")}
+                </div>`
+              : "";
+
           bannerEl.innerHTML = `
+            ${multiTabsHtml}
             <div class="runtime-top">
               <div class="runtime-title">
                 <span class="status-dot ok"></span>
                 <span>${esc(s.gpu?.name || s.rateKey || "Colab GPU")}</span>
+                <span class="badge neutral mono" style="font-size:10px">${esc(s.name.replace(/^orca-colab-/, ""))}</span>
                 ${vramTotal ? `<span class="badge neutral">${vramTotal} GB</span>` : ""}
-                ${activeSessions.length > 1 ? `<span class="badge info">+${activeSessions.length - 1} more</span>` : ""}
                 ${s.keep ? `<span class="badge info">KEEP</span>` : ""}
               </div>
               <div class="row">
@@ -1868,17 +1897,60 @@
         }
 
         // Populate Tab 1: Agent Runs & Output
-        const tasks = snap.tasks || [];
-        const runningCount = tasks.filter((t) => t.status === "running").length;
+        const allTasks = snap.tasks || [];
+        const sessionGpuMap = new Map();
+        for (const sess of snap.sessions || []) {
+          sessionGpuMap.set(
+            sess.name,
+            sess.rateKey && sess.rateKey !== "unknown"
+              ? sess.rateKey
+              : sess.gpu?.name || "GPU",
+          );
+        }
+        for (const t of allTasks) {
+          if (t.sessionName && !sessionGpuMap.has(t.sessionName)) {
+            sessionGpuMap.set(t.sessionName, t.gpuName || "GPU");
+          }
+        }
+
+        const filterBarEl = document.getElementById("taskRuntimeFilterBar");
+        const distinctSessions = Array.from(sessionGpuMap.keys());
+        if (
+          window.__taskFilterSession &&
+          !sessionGpuMap.has(window.__taskFilterSession)
+        ) {
+          window.__taskFilterSession = null;
+        }
+        if (distinctSessions.length > 1) {
+          filterBarEl.classList.remove("hidden");
+          const curFilter = window.__taskFilterSession || null;
+          filterBarEl.innerHTML = [
+            `<button class="${!curFilter ? "primary" : "ghost"}" style="padding:2px 8px;font-size:10.5px" onclick="window.__setTaskFilterSession(null)">All Runtimes (${allTasks.length})</button>`,
+            ...distinctSessions.map((sName) => {
+              const count = allTasks.filter((t) => t.sessionName === sName).length;
+              const shortId = sName.replace(/^orca-colab-/, "");
+              const gName = sessionGpuMap.get(sName) || "GPU";
+              const isAct = activeSessions.some((a) => a.name === sName);
+              return `<button class="${curFilter === sName ? "primary" : "ghost"}" style="padding:2px 8px;font-size:10.5px" onclick="window.__setTaskFilterSession('${esc(sName)}')">${isAct ? "● " : ""}${esc(gName)} · ${esc(shortId)} (${count})</button>`;
+            }),
+          ].join("");
+        } else {
+          filterBarEl.classList.add("hidden");
+        }
+
+        const tasks = window.__taskFilterSession
+          ? allTasks.filter((t) => t.sessionName === window.__taskFilterSession)
+          : allTasks;
+        const runningCount = allTasks.filter((t) => t.status === "running").length;
         const rBadge = document.getElementById("runningTaskBadge");
         rBadge.className = `badge ${runningCount > 0 ? "info" : "neutral"}`;
         rBadge.textContent = `${runningCount} running`;
 
-        if (tasks.length > 0 && tasks[0].id !== window.__lastSeenNewestTaskId) {
+        if (allTasks.length > 0 && allTasks[0].id !== window.__lastSeenNewestTaskId) {
           if (window.__lastSeenNewestTaskId) {
-            selectedTaskId = tasks[0].id;
+            selectedTaskId = allTasks[0].id;
           }
-          window.__lastSeenNewestTaskId = tasks[0].id;
+          window.__lastSeenNewestTaskId = allTasks[0].id;
         }
         if (!selectedTaskId && snap.activeTaskOutput?.taskId) {
           selectedTaskId = snap.activeTaskOutput.taskId;
@@ -1901,11 +1973,18 @@
               const startMs = Date.parse(t.startedAt);
               const endMs = t.finishedAt ? Date.parse(t.finishedAt) : Date.now();
               const dur = formatDuration(Math.floor((endMs - startMs) / 1000));
+              const shortSess = (t.sessionName || "").replace(/^orca-colab-/, "");
+              const gpuLabel =
+                t.gpuName || sessionGpuMap.get(t.sessionName) || "GPU";
+              const runtimeBadge = shortSess
+                ? `<span class="badge neutral mono" style="font-size:9.5px;padding:1px 5px" title="Session ${esc(t.sessionName)}">${esc(gpuLabel.replace(/^Tesla |^NVIDIA /, ""))} · ${esc(shortSess)}</span>`
+                : "";
               return `
                 <div class="task-row ${isSel ? "selected" : ""}" onclick="window.__selectTask('${esc(t.id)}')">
                   <div class="task-row-main">
                     <div class="row" style="gap:6px">
                       <span class="badge ${tone}">${esc(t.status.toUpperCase())}</span>
+                      ${runtimeBadge}
                       <span class="task-row-title">${esc(t.name)}</span>
                     </div>
                     <div class="task-row-sub">${esc(t.command)} · ${dur}</div>
@@ -2246,6 +2325,24 @@
         });
         userForcedView = null;
         renderAll(res.dashboard);
+      };
+
+      window.__selectBannerSession = (sessionName) => {
+        window.__selectedBannerSession = sessionName;
+        window.__taskFilterSession = sessionName;
+        if (dashboardState) {
+          renderAll(dashboardState);
+        }
+      };
+
+      window.__setTaskFilterSession = (sessionName) => {
+        window.__taskFilterSession = sessionName || null;
+        if (sessionName) {
+          window.__selectedBannerSession = sessionName;
+        }
+        if (dashboardState) {
+          renderAll(dashboardState);
+        }
       };
 
       window.__selectTask = async (taskId) => {

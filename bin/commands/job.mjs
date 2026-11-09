@@ -300,6 +300,7 @@ export async function submitTask(
       name: name || cmdArray.join(" ").slice(0, 64),
       command: cmdArray,
       sessionName: session.name,
+      gpuName: session.gpu?.name || session.rateKey || null,
       account: session.account || "default",
       cwd: remoteCwd || session.remoteRoot || null,
       env: envVars,
