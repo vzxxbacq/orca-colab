@@ -110,3 +110,17 @@ test("isRemoteHostId treats Orca's own machine ('local', null, '') as local", as
   assert.equal(isRemoteHostId("Local"), false);
   assert.equal(isRemoteHostId("host_7f3a"), true);
 });
+
+test("pickWorktreeRow prefers the live row whose name and branch both match", async () => {
+  const { pickWorktreeRow } = await import("../worker/main.mjs");
+  const rows = [
+    { id: "a", displayName: "main", branch: "main", isArchived: false },
+    { id: "b", displayName: "main", branch: "main", isArchived: true },
+    { id: "c", displayName: "remote-host-bridge", branch: "remote-host-bridge", isArchived: false },
+    { id: "d", displayName: "main", branch: "feat/x", isArchived: false },
+  ];
+  assert.equal(pickWorktreeRow(rows, { workspaceName: "main", branch: "main" }).id, "a");
+  assert.equal(pickWorktreeRow(rows, { workspaceName: "remote-host-bridge", branch: "remote-host-bridge" }).id, "c");
+  assert.equal(pickWorktreeRow(rows, { workspaceName: "main", branch: null }), null);
+  assert.equal(pickWorktreeRow(rows, { workspaceName: "nope", branch: "main" }), null);
+});

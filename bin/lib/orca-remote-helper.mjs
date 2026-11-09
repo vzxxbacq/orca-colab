@@ -53,11 +53,20 @@ export function createOrcaRemoteHelper({
   env = process.env,
   orcaBin = locateOrcaBinary(env),
   spawnProcess = spawn,
-  timeoutMs = 15_000,
+  timeoutMs = 40_000,
 } = {}) {
   const available = Boolean(orcaBin);
 
-  const run = (command, options = {}) =>
+  // One orca process at a time: calls to a paired server take seconds each and a burst of them
+  // starves the first ones into timeouts.
+  let chain = Promise.resolve();
+  const run = (command, options = {}) => {
+    const next = chain.then(() => runNow(command, options));
+    chain = next.catch(() => {});
+    return next;
+  };
+
+  const runNow = (command, options = {}) =>
     new Promise((resolve) => {
       if (!orcaBin) {
         resolve({ ok: false, error: "orca CLI not found on this machine", data: null });
@@ -120,6 +129,25 @@ export function createOrcaRemoteHelper({
         data: rows
           .map((e) => ({ id: e.id || e.environmentId || null, name: e.name || e.label || null }))
           .filter((e) => e.id || e.name),
+      };
+    },
+
+    async listWorktrees({ environment = null } = {}) {
+      const res = await run(["worktree", "list"], { limit: 500, ...envOpt(environment) });
+      if (!res.ok) return res;
+      const rows = Array.isArray(res.data?.worktrees) ? res.data.worktrees : [];
+      return {
+        ok: true,
+        error: null,
+        data: rows.map((w) => ({
+          id: w.id || null,
+          identity: w.identity?.key || null,
+          hostId: w.hostId || w.identity?.executionHostId || null,
+          displayName: w.displayName || null,
+          path: w.path || null,
+          branch: typeof w.branch === "string" ? w.branch.replace(/^refs\/heads\//, "") : null,
+          isArchived: Boolean(w.isArchived),
+        })),
       };
     },
 

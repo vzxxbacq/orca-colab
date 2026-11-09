@@ -71,6 +71,21 @@ export function syncBundledSkillToAgentDirs(homeDir = os.homedir()) {
 
 let cleanupFns = [];
 
+// readContext only gives a display name and a branch; a row matches when both agree (branch may be
+// missing on folder workspaces). Archived rows lose to live ones.
+export function pickWorktreeRow(rows, { workspaceName, branch }) {
+  const live = rows.filter((r) => !r.isArchived);
+  const byName = live.filter((r) => r.displayName === workspaceName);
+  if (byName.length === 0) return null;
+  if (branch) {
+    const exact = byName.find((r) => r.branch === branch);
+    if (exact) return exact;
+    const byBranch = live.find((r) => r.branch === branch);
+    if (byBranch) return byBranch;
+  }
+  return byName.length === 1 ? byName[0] : null;
+}
+
 // Orca reports the machine it runs on as host "local" (observed on 1.4.254), not as null.
 export function isRemoteHostId(hostId) {
   return typeof hostId === "string" && hostId.trim() !== "" && hostId.trim().toLowerCase() !== "local";
@@ -90,7 +105,7 @@ function workspaceRows(listRes) {
 }
 
 // readContext has no id, so the focused workspace is matched against the list by name and branch.
-async function resolveWorkspaceInfo(orca) {
+async function resolveWorkspaceInfo(orca, { isLocalTerminalSet = null, stickyRemote = null } = {}) {
   try {
     const [ctx, listRes] = await Promise.all([
       orca.host.call("workspace.readContext", {}).catch(() => null),
@@ -98,11 +113,21 @@ async function resolveWorkspaceInfo(orca) {
     ]);
     const rows = workspaceRows(listRes);
     const terminals = Array.isArray(ctx?.terminals) ? ctx.terminals : [];
-    const matched = rows.find(
+    let matched = rows.find(
       (w) =>
         (ctx?.displayName && w.name === ctx.displayName) ||
         (ctx?.branch && w.branch === ctx.branch),
     );
+    // A local row with the same name and branch may still be a different checkout of the project that
+    // is focused on a server. The focused workspace's terminal ids settle it when there are any.
+    if (matched && ctx?.displayName && typeof isLocalTerminalSet === "function") {
+      const verdict = await isLocalTerminalSet(terminals, matched);
+      if (verdict === false) {
+        matched = null;
+      } else if (verdict === null && stickyRemote?.has(`${ctx.displayName}|${ctx.branch || ""}`)) {
+        matched = null;
+      }
+    }
     // Workspaces on a remote Orca server are missing from workspace.list on the client (observed on
     // 1.4.254) while readContext still names the focused one, so "focused but unlisted" means remote.
     if (!matched && ctx?.displayName) {
@@ -120,6 +145,7 @@ async function resolveWorkspaceInfo(orca) {
       workspaceId: row?.id || null,
       workspacePath: row?.path || null,
       workspaceName: row?.name || null,
+      branch: row?.branch || ctx?.branch || null,
       hostId: isRemoteHostId(row?.hostId) ? row.hostId : null,
       terminals,
     };
@@ -423,6 +449,7 @@ class TerminalBridge {
             available: this.helper.available,
             error: this.lastHelperError,
             environment: this.environmentName,
+            worktree: this.worktreeSelector || null,
             attempts: this.environmentAttempts || [],
           }
         : { available: false, error: "no helper" },
@@ -442,50 +469,79 @@ class TerminalBridge {
   // Where the host API cannot see the workspace, the local `orca` CLI still can. It finds a terminal
   // that already prints frames or creates one running `watch`; errors are kept for the panel hint.
   // The client's orca CLI only sees its own Orca unless told which paired server to talk to, so the
-  // focused worktree is looked up by name on each saved environment until one answers.
+  // focused workspace (name + branch from readContext) is looked up in each saved environment's
+  // worktree list; the match gives an exact `id:` selector, which `name:` cannot when names repeat.
   async resolveEnvironment() {
     if (this.environmentResolved) {
       return this.environment;
     }
-    const selectors = this.workspaceSelectors();
-    this.environmentAttempts = [];
-    for (const selector of selectors) {
-      const local = await this.helper.showWorktree(selector);
-      this.environmentAttempts.push({ environment: null, selector, ok: local.ok, error: local.error, hostId: local.data?.hostId || null });
-      if (local.ok) {
-        this.environment = null;
-        this.environmentResolved = true;
-        return null;
-      }
+    if (this.environmentResolving) {
+      return this.environmentResolving;
     }
-    const envs = await this.helper.listEnvironments();
-    if (!envs.ok) {
-      this.lastHelperError = envs.error;
+    if (Date.now() - (this.lastEnvironmentAttemptAt || 0) < 30_000) {
       return null;
     }
-    for (const env of envs.data) {
-      const envSelector = env.id || env.name;
-      for (const selector of selectors) {
-        const shown = await this.helper.showWorktree(selector, { environment: envSelector });
-        this.environmentAttempts.push({ environment: envSelector, selector, ok: shown.ok, error: shown.error, hostId: shown.data?.hostId || null });
-        if (shown.ok) {
+    this.lastEnvironmentAttemptAt = Date.now();
+    this.environmentResolving = (async () => {
+      this.environmentAttempts = [];
+      // The CLI's own Orca first: on the server itself, or on a laptop whose host API simply omitted
+      // the row, the workspace may be local after all.
+      const localList = await this.helper.listWorktrees();
+      const localMatch = localList.ok ? pickWorktreeRow(localList.data, this.workspace) : null;
+      this.environmentAttempts.push({
+        environment: null,
+        ok: localList.ok,
+        error: localList.error,
+        rows: localList.ok ? localList.data.length : 0,
+        matched: localMatch?.id || null,
+      });
+      if (localMatch) {
+        this.environment = null;
+        this.environmentName = null;
+        this.worktreeSelector = `id:${localMatch.id}`;
+        this.environmentResolved = true;
+        this.lastHelperError = null;
+        return null;
+      }
+      const envs = await this.helper.listEnvironments();
+      if (!envs.ok) {
+        this.lastHelperError = envs.error;
+        return null;
+      }
+      for (const env of envs.data) {
+        const envSelector = env.id || env.name;
+        const listed = await this.helper.listWorktrees({ environment: envSelector });
+        const match = listed.ok ? pickWorktreeRow(listed.data, this.workspace) : null;
+        this.environmentAttempts.push({
+          environment: env.name || envSelector,
+          ok: listed.ok,
+          error: listed.error,
+          rows: listed.ok ? listed.data.length : 0,
+          matched: match?.id || null,
+        });
+        if (match) {
           this.environment = envSelector;
+          this.environmentName = env.name || envSelector;
+          this.worktreeSelector = `id:${match.id}`;
           this.environmentResolved = true;
-          this.environmentName = env.name || env.id;
+          this.lastHelperError = null;
           return envSelector;
         }
       }
-    }
-    const lastErr = this.environmentAttempts.filter((a) => a.environment && a.error).at(-1)?.error || "";
-    this.lastHelperError = `no local worktree or saved environment (${envs.data.length} checked) has a workspace named "${this.workspace.workspaceName}"${lastErr ? `; last: ${lastErr}` : ""}`;
-    return null;
+      const lastErr = this.environmentAttempts.filter((a) => a.error).at(-1)?.error || "";
+      this.lastHelperError = `none of ${envs.data.length} saved environments has a workspace named "${this.workspace.workspaceName}"${this.workspace.branch ? ` on branch ${this.workspace.branch}` : ""}${lastErr ? `; last error: ${lastErr}` : ""}`;
+      return null;
+    })().finally(() => {
+      this.environmentResolving = null;
+    });
+    return this.environmentResolving;
   }
 
   workspaceSelectors() {
+    if (this.worktreeSelector) return [this.worktreeSelector];
     const out = [];
     if (this.workspace.workspaceName) out.push(`name:${this.workspace.workspaceName}`);
     if (this.workspace.branch) out.push(`branch:${this.workspace.branch}`);
-    out.push("active");
     return out;
   }
 
@@ -589,7 +645,12 @@ class TerminalBridge {
   }
 
   start() {
-    this.timers.push(setInterval(() => void this.poll(), 1500));
+    this.timers.push(setInterval(() => {
+      if (this.polling) return;
+      this.polling = this.poll().finally(() => {
+        this.polling = null;
+      });
+    }, this.transport === "cli" ? 2500 : 1500));
     void this.poll();
   }
 
@@ -618,6 +679,16 @@ class TerminalBridge {
     if (this.terminalId) {
       return this.terminalId;
     }
+    if (this.ensuring) {
+      return this.ensuring;
+    }
+    this.ensuring = this.ensureTerminalUncached().finally(() => {
+      this.ensuring = null;
+    });
+    return this.ensuring;
+  }
+
+  async ensureTerminalUncached() {
     try {
       const stored = await this.orca.storage?.get?.(this.storageKey);
       if (typeof stored === "string" && stored) {
@@ -906,12 +977,38 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
 
   // Which bridge serves the panel follows the focused workspace: a `hostId` means the workspace, its
   // terminals and its ~/.orca-colab live on a remote Orca server.
+  // Terminal handles of the focused workspace that the local Orca also lists mean the workspace is
+  // local; handles it does not know mean remote; no handles at all leave the question open.
+  let localTerminalCache = { at: 0, handles: new Set() };
+  const isLocalTerminalSet = async (terminals, localRow) => {
+    const ids = (terminals || []).map((t) => t?.id).filter(Boolean);
+    if (ids.length === 0 || !remoteHelper.available) {
+      return null;
+    }
+    if (Date.now() - localTerminalCache.at > 5000) {
+      // workspace.list ids already are `identity:<key>` selectors; anything else is a repo::path id.
+      const selector = String(localRow.id).startsWith("identity:") ? localRow.id : `id:${localRow.id}`;
+      const listed = await remoteHelper.listTerminals(selector);
+      const all = listed.ok ? listed.data : [];
+      localTerminalCache = { at: Date.now(), handles: new Set(all.map((t) => t.handle)) };
+      if (!listed.ok) {
+        const allLocal = await remoteHelper.listTerminals(undefined);
+        if (allLocal.ok) localTerminalCache.handles = new Set(allLocal.data.map((t) => t.handle));
+      }
+    }
+    return ids.some((id) => localTerminalCache.handles.has(id));
+  };
+  const stickyRemote = new Set();
+
   const resolveBridge = async ({ force = false } = {}) => {
     if (!force && Date.now() - lastResolveAt < 1000) {
       return activeBridge;
     }
     lastResolveAt = Date.now();
-    const info = await resolveWorkspaceInfo(orca);
+    const info = await resolveWorkspaceInfo(orca, { isLocalTerminalSet, stickyRemote });
+    if (info.hostId) {
+      stickyRemote.add(`${info.workspaceName}|${info.branch || ""}`);
+    }
     const key = `${info.workspaceId}|${info.hostId}|${info.workspaceName}`;
     if (key !== lastResolvedKey) {
       lastResolvedKey = key;
