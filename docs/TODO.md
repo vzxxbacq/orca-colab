@@ -12,7 +12,8 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
       logger with `[colab]` prefix, `--json` flag plumbing, exit codes per DESIGN. Exit: `node
       bin/orca-colab.mjs --help` lists commands.
 - [ ] **M1.2 State + config.** `bin/lib/colab-home.mjs` (home dir via `os.homedir()`, 0700 dir, atomic
-      JSON write tmp+rename, 0600 for config), `bin/lib/session-store.mjs` (list/read/write/delete
+      JSON write tmp+rename, 0600 for config; config shape per DESIGN with `accounts: [{ label: "default",
+      notebookUrl? }]` and `defaultAccount: "default"` from day one), `bin/lib/session-store.mjs` (list/read/write/delete
       sessions, "default session" rule). `node --test` for atomic write and default-session selection.
 - [ ] **M1.3 Doctor.** `bin/lib/tailscale-cli.mjs` (locate binary, `status --json` parse: BackendState,
       Self, Peer map), `bin/lib/doctor.mjs` (checks per DESIGN, structured result), `doctor` command
@@ -23,7 +24,7 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
 - [ ] **M1.5 Peer discovery + SSH probe.** `bin/lib/tailscale-peer-wait.mjs` (snapshot, poll 3 s, new
       online `orca-colab-*` peer, IPv4), `bin/lib/ssh-banner-probe.mjs` (TCP 22, `SSH-` banner, deadline,
       AbortSignal). Tests with a fake status runner and a local fake banner server.
-- [ ] **M1.6 `up`.** Orchestrates M1.3–M1.5, fallback clipboard line when `notebookUrl` is absent, GPU
+- [ ] **M1.6 `up`.** Orchestrates M1.3–M1.5, fallback clipboard line when `accounts[default].notebookUrl` is absent, GPU
       query via `bin/lib/ssh-exec.mjs` (common ssh argv builder), writes the session, prints JSON, exit
       codes 1/2/3, overall deadline. Test: JSON shape for fixed inputs (hardcoded expected).
 - [ ] **M1.7 `run`, `status`, `ls`.** pty passthrough when TTY, exit code propagation, `--cwd`.
@@ -63,19 +64,22 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
       every 5 min, requires three consecutive <5 % samples **and** no activity/live pid for
       `autoStopIdleMinutes`, then notify → 5-min grace → `down`; `up --keep` exemption. Test the decision
       function with hardcoded sample sequences (a 40-minute run with one low sample must not trigger).
-- [ ] Budget alerts: `monthlyBudgetCu` in config, status bar tone at 80 % / 100 %, notification once per
-      threshold per month, skill rule to confirm before `up` when over budget.
+- [ ] Budget alerts: budget = latest `budget.set` ledger event per account (never config), status bar
+      tone at 80 % / 100 %, notification once per threshold per month, skill rule to confirm before `up`
+      when over budget.
 - [ ] Orca browser research (D16): confirm Google sign-in and Colab cell execution work inside Orca's
       embedded browser (`orca tab create --url`), note any UA or popup issues, and record how `up` should
-      detect "running inside Orca" (`ORCA_WORKSPACE_ID`). Then switch `up` to open the notebook there (`--system-browser` to
+      detect "running inside Orca" (`ORCA_WORKTREE_ID || ORCA_WORKSPACE_ID || ORCA_PANE_KEY`). Then switch `up` to open the notebook there (`--system-browser` to
       override).
 - [ ] Browser calibration, step 1 (research): open Colab in Orca's browser with DevTools network
       capture, open the Resources pane, record the request that returns compute units (URL, method,
       headers, response shape). Write it to `docs/colab-internal-endpoints.md` with the capture date.
-- [ ] Browser calibration, step 2: `credits calibrate --browser` using `orca tab create --url` + `orca eval --expression` to run a
+- [ ] Browser calibration, step 2: `credits calibrate --browser` using `orca tab create --url --json` (keep `browserPageId`) + `orca eval --expression --page <id>
+      --expect-url` to run a
       same-origin page-context `fetch` of that endpoint and parse the JSON; fallback to pane text;
       fallback to a clear "enter manually" message. Panel Calibrate button. Never fail `up`/`down` on it.
-- [ ] Multiple accounts (D15): `accounts[]` in config, `up --account`, per-account balance in panel.
+- [ ] Multiple accounts (D15): `setup --account <label>` appends to the existing `accounts[]`,
+      `up --account`, per-account balance in panel. The shape already exists since M1.2.
 - [ ] Linux (`xdg-open`, `wl-copy`/`xclip`, `orca-ide` wording) and Windows (`clip.exe`, `start`, no
       rsync → tar fallback, ssh from OpenSSH-for-Windows).
 - [ ] Abort: SIGTERM/SIGINT during `up` leaves no partial session file; test by aborting the signal.
