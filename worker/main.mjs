@@ -24,6 +24,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOCAL_CLI_PATH = path.resolve(__dirname, "..", "bin", "orca-colab.mjs");
 const BUNDLED_SKILL_DIR = path.resolve(__dirname, "..", "skills", "colab-gpu");
 const BRIDGE_TERMINAL_TITLE = "Colab Bridge";
+const isBridgeTitle = (title) => typeof title === "string" && title.startsWith(BRIDGE_TERMINAL_TITLE);
 const DEFAULT_CLI_COMMAND = "npx -y github:vzxxbacq/orca-colab#v0.1.0";
 // The bridge needs `watch`, which v0.1.0 lacks; point at the branch until the next tag ships.
 const DEFAULT_REMOTE_CLI_COMMAND = "npx -y github:vzxxbacq/orca-colab#remote-host-bridge";
@@ -396,8 +397,20 @@ class LocalBridge {
 // the only channel Orca gives a desktop plugin to a remote host, so state arrives as frames read back
 // from the screen and actions are typed in as control lines.
 class TerminalBridge {
-  constructor({ orca, workspace, remoteCli, autoStopIdleMinutes, onSnapshot, onEvent, helper = null }) {
+  constructor({
+    orca,
+    workspace,
+    remoteCli,
+    autoStopIdleMinutes,
+    onSnapshot,
+    onEvent,
+    helper = null,
+    onEnvironmentResolved = null,
+    worktreeRowsCache = new Map(),
+  }) {
     this.kind = "remote";
+    this.onEnvironmentResolved = onEnvironmentResolved;
+    this.worktreeRowsCache = worktreeRowsCache;
     this.orca = orca;
     this.workspace = workspace;
     this.remoteCli = remoteCli;
@@ -431,6 +444,10 @@ class TerminalBridge {
 
   get manualCommand() {
     return `${this.remoteCli} watch --auto-stop-idle-minutes ${this.autoStopIdleMinutes}`;
+  }
+
+  get terminalTitle() {
+    return this.environmentName ? `${BRIDGE_TERMINAL_TITLE} · ${this.environmentName}` : BRIDGE_TERMINAL_TITLE;
   }
 
   describe() {
@@ -486,7 +503,7 @@ class TerminalBridge {
       this.environmentAttempts = [];
       // The CLI's own Orca first: on the server itself, or on a laptop whose host API simply omitted
       // the row, the workspace may be local after all.
-      const localList = await this.helper.listWorktrees();
+      const localList = await this.cachedWorktrees(null);
       const localMatch = localList.ok ? pickWorktreeRow(localList.data, this.workspace) : null;
       this.environmentAttempts.push({
         environment: null,
@@ -510,7 +527,7 @@ class TerminalBridge {
       }
       for (const env of envs.data) {
         const envSelector = env.id || env.name;
-        const listed = await this.helper.listWorktrees({ environment: envSelector });
+        const listed = await this.cachedWorktrees(envSelector);
         const match = listed.ok ? pickWorktreeRow(listed.data, this.workspace) : null;
         this.environmentAttempts.push({
           environment: env.name || envSelector,
@@ -525,6 +542,7 @@ class TerminalBridge {
           this.worktreeSelector = `id:${match.id}`;
           this.environmentResolved = true;
           this.lastHelperError = null;
+          this.onEnvironmentResolved?.(envSelector, this);
           return envSelector;
         }
       }
@@ -535,6 +553,21 @@ class TerminalBridge {
       this.environmentResolving = null;
     });
     return this.environmentResolving;
+  }
+
+  // Worktree lists per environment are shared by every bridge and refreshed every minute, so a second
+  // project on the same server resolves without another round trip to it.
+  async cachedWorktrees(environment) {
+    const key = environment || "local";
+    const hit = this.worktreeRowsCache.get(key);
+    if (hit && Date.now() - hit.at < 60_000) {
+      return hit.result;
+    }
+    const result = await this.helper.listWorktrees(environment ? { environment } : {});
+    if (result.ok) {
+      this.worktreeRowsCache.set(key, { at: Date.now(), result });
+    }
+    return result;
   }
 
   workspaceSelectors() {
@@ -554,34 +587,35 @@ class TerminalBridge {
     if (!this.environmentResolved) {
       return null;
     }
-    for (const selector of this.workspaceSelectors()) {
-      const listed = await this.helper.listTerminals(selector, { environment });
-      if (!listed.ok) {
-        this.lastHelperError = listed.error;
-        continue;
-      }
-      for (const t of listed.data) {
+    // One bridge per server: adopt a bridge terminal anywhere on it before creating another.
+    const serverWide = await this.helper.listTerminals(undefined, { environment });
+    if (serverWide.ok) {
+      for (const t of serverWide.data) {
         if (this.deadTerminals.has(t.handle)) continue;
         if (WATCH_UNSUPPORTED_RE.test(t.preview)) {
           this.deadTerminals.add(t.handle);
           this.markWatchUnsupported();
           return null;
         }
-        if (t.title === BRIDGE_TERMINAL_TITLE || /@@OC /.test(t.preview)) {
+        if (isBridgeTitle(t.title) || /@@OC /.test(t.preview)) {
           this.lastHelperError = null;
           return t.handle;
         }
       }
-      if (this.watchUnsupported) {
-        return null;
-      }
+    } else {
+      this.lastHelperError = serverWide.error;
+    }
+    if (this.watchUnsupported) {
+      return null;
+    }
+    for (const selector of this.workspaceSelectors()) {
       if (Date.now() - this.lastCreateAt < 30_000) {
         return null;
       }
       this.lastCreateAt = Date.now();
       const created = await this.helper.createTerminal({
         selector,
-        title: BRIDGE_TERMINAL_TITLE,
+        title: this.terminalTitle,
         command: this.manualCommand,
         environment,
       });
@@ -703,7 +737,7 @@ class TerminalBridge {
       // Stored terminal is gone; fall through to create a new one.
     }
     const existing = (this.workspace.terminals || []).find(
-      (t) => t.title === BRIDGE_TERMINAL_TITLE && !this.deadTerminals.has(t.id),
+      (t) => isBridgeTitle(t.title) && !this.deadTerminals.has(t.id),
     );
     const found = existing?.id || (await this.findRunningBridgeTerminal());
     if (found) {
@@ -729,7 +763,7 @@ class TerminalBridge {
     this.lastCreateAt = Date.now();
     const res = await this.orca.host.call("terminal.create", {
       workspaceId: this.workspace.workspaceId,
-      title: BRIDGE_TERMINAL_TITLE,
+      title: this.terminalTitle,
       command: this.manualCommand,
     });
     if (!res?.terminalId) {
@@ -919,6 +953,8 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
   const skillSync = syncBundledSkillToAgentDirs(homeDir);
   const budgetNotifiedKeys = {};
   const remoteBridges = new Map();
+  const bridgesByEnvironment = new Map();
+  const worktreeRowsCache = new Map();
   // ORCA_COLAB_DISABLE_ORCA_CLI=1 keeps tests from touching the real Orca on this machine.
   const remoteHelper = createOrcaRemoteHelper(
     process.env.ORCA_COLAB_DISABLE_ORCA_CLI ? { orcaBin: null } : { env: process.env },
@@ -1022,8 +1058,20 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
       }
       return localBridge;
     }
-    const bridgeKey = info.workspaceId || `name:${info.workspaceName}`;
+    const bridgeKey = info.workspaceId || `name:${info.workspaceName}|${info.branch || ""}`;
     let bridge = remoteBridges.get(bridgeKey);
+    if (!bridge && !info.workspaceId) {
+      // Another project on an already-connected server: reuse its bridge when its worktree list has
+      // this workspace, so no second terminal is opened.
+      for (const [env, shared] of bridgesByEnvironment) {
+        const cached = worktreeRowsCache.get(env || "local");
+        if (cached?.result?.ok && pickWorktreeRow(cached.result.data, info)) {
+          bridge = shared;
+          remoteBridges.set(bridgeKey, shared);
+          break;
+        }
+      }
+    }
     if (!bridge) {
       const remoteCli = await resolveCliCommand(orca, { remote: true });
       const autoStopIdleMinutes = Number(
@@ -1037,11 +1085,33 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
         onSnapshot: (snap, meta) => postFromBridge(bridge)(snap, meta),
         onEvent: onRemoteEvent,
         helper: remoteHelper,
+        worktreeRowsCache,
+        onEnvironmentResolved: (env, resolved) => {
+          const shared = bridgesByEnvironment.get(env);
+          if (!shared) {
+            bridgesByEnvironment.set(env, resolved);
+            return;
+          }
+          if (shared === resolved) return;
+          // A second workspace on the same server resolved on its own: fold it into the shared bridge.
+          resolved.stop();
+          for (const [key, b] of remoteBridges) {
+            if (b === resolved) remoteBridges.set(key, shared);
+          }
+          if (activeBridge === resolved) {
+            activeBridge = shared;
+            void shared.snapshot().then((snap) => orca.panels.post("colab.stateChanged", snap));
+          }
+        },
       });
       remoteBridges.set(bridgeKey, bridge);
       bridge.start();
     } else {
-      bridge.workspace = info;
+      if (!bridge.terminalId) {
+        bridge.workspace = info;
+      } else {
+        bridge.workspace = { ...bridge.workspace, terminals: info.terminals, workspaceName: info.workspaceName, branch: info.branch };
+      }
       const remoteCli = await resolveCliCommand(orca, { remote: true });
       if (remoteCli !== bridge.remoteCli) {
         bridge.remoteCli = remoteCli;
@@ -1360,8 +1430,9 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
   cleanupFns.push(() => clearInterval(provisioningTicker));
   cleanupFns.push(() => localBridge.stop());
   cleanupFns.push(() => {
-    for (const b of remoteBridges.values()) b.stop();
+    for (const b of new Set(remoteBridges.values())) b.stop();
     remoteBridges.clear();
+    bridgesByEnvironment.clear();
   });
 
   // Workspace lookups before activate() returns stall the worker's readiness handshake, so the first
