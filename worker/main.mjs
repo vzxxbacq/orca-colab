@@ -93,21 +93,30 @@ async function resolveWorkspaceInfo(orca) {
       orca.host.call("workspace.list", {}).catch(() => null),
     ]);
     const rows = workspaceRows(listRes);
-    if (rows.length === 0) {
-      return { workspaceId: null, workspacePath: null, workspaceName: null, hostId: null, terminals: [] };
+    const terminals = Array.isArray(ctx?.terminals) ? ctx.terminals : [];
+    const matched = rows.find(
+      (w) =>
+        (ctx?.displayName && w.name === ctx.displayName) ||
+        (ctx?.branch && w.branch === ctx.branch),
+    );
+    // Workspaces on a remote Orca server are missing from workspace.list on the client (observed on
+    // 1.4.254) while readContext still names the focused one, so "focused but unlisted" means remote.
+    if (!matched && ctx?.displayName) {
+      return {
+        workspaceId: null,
+        workspacePath: null,
+        workspaceName: ctx.displayName,
+        hostId: "unlisted",
+        terminals,
+      };
     }
-    const matched =
-      rows.find(
-        (w) =>
-          (ctx?.displayName && w.name === ctx.displayName) ||
-          (ctx?.branch && w.branch === ctx.branch),
-      ) || rows[0];
+    const row = matched || rows[0];
     return {
-      workspaceId: matched?.id || null,
-      workspacePath: matched?.path || null,
-      workspaceName: matched?.name || null,
-      hostId: isRemoteHostId(matched?.hostId) ? matched.hostId : null,
-      terminals: Array.isArray(ctx?.terminals) ? ctx.terminals : [],
+      workspaceId: row?.id || null,
+      workspacePath: row?.path || null,
+      workspaceName: row?.name || null,
+      hostId: isRemoteHostId(row?.hostId) ? row.hostId : null,
+      terminals,
     };
   } catch {
     return { workspaceId: null, workspacePath: null, workspaceName: null, hostId: null, terminals: [] };
@@ -370,17 +379,45 @@ class TerminalBridge {
     this.reqCounter = 0;
     this.timers = [];
     this.lastStreamFp = "";
-    this.storageKey = `bridgeTerminal:${workspace.workspaceId}`;
+    this.storageKey = `bridgeTerminal:${workspace.workspaceId || `name:${workspace.workspaceName}`}`;
+  }
+
+  get canCreateTerminal() {
+    return Boolean(this.workspace.workspaceId);
+  }
+
+  get manualCommand() {
+    return `${this.remoteCli} watch --auto-stop-idle-minutes ${this.autoStopIdleMinutes}`;
   }
 
   describe() {
+    const connected = Boolean(this.terminalId) && Date.now() - this.lastFrameAt < 45_000;
     return {
-      connected: Boolean(this.terminalId) && Date.now() - this.lastFrameAt < 45_000,
+      connected,
       terminalId: this.terminalId,
       lastFrameAt: this.lastFrameAt || null,
       error: this.lastError,
       remoteCli: this.remoteCli,
+      needsManualTerminal: !connected && !this.canCreateTerminal,
+      manualCommand: this.manualCommand,
     };
+  }
+
+  // Reads the first lines of every terminal in the focused workspace and adopts the one that prints
+  // bridge frames, so the user may run `watch` in any terminal they like.
+  async findRunningBridgeTerminal() {
+    for (const t of this.workspace.terminals || []) {
+      if (!t?.id) continue;
+      try {
+        const res = await this.orca.host.call("terminal.read", { terminalId: t.id, maxLines: 400 });
+        if (Array.isArray(res?.lines) && res.lines.some((l) => String(l).includes("@@OC "))) {
+          return t.id;
+        }
+      } catch {
+        // Not readable; skip.
+      }
+    }
+    return null;
   }
 
   start() {
@@ -425,10 +462,15 @@ class TerminalBridge {
       // Stored terminal is gone; fall through to create a new one.
     }
     const existing = (this.workspace.terminals || []).find((t) => t.title === BRIDGE_TERMINAL_TITLE);
-    if (existing?.id) {
-      await this.rememberTerminal(existing.id);
+    const found = existing?.id || (await this.findRunningBridgeTerminal());
+    if (found) {
+      await this.rememberTerminal(found);
       this.sendRaw("snap");
-      return existing.id;
+      return found;
+    }
+    if (!this.canCreateTerminal) {
+      this.lastError = `Open a terminal in this workspace and run: ${this.manualCommand}`;
+      return null;
     }
     if (Date.now() - this.lastCreateAt < 30_000) {
       return null;
@@ -437,7 +479,7 @@ class TerminalBridge {
     const res = await this.orca.host.call("terminal.create", {
       workspaceId: this.workspace.workspaceId,
       title: BRIDGE_TERMINAL_TITLE,
-      command: `${this.remoteCli} watch --auto-stop-idle-minutes ${this.autoStopIdleMinutes}`,
+      command: this.manualCommand,
     });
     if (!res?.terminalId) {
       throw new Error("terminal.create returned no terminalId");
@@ -676,14 +718,15 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
       orca.log(`focused workspace: ${info.workspaceName || "?"} id=${info.workspaceId || "?"} hostId=${info.hostId || "local"} path=${info.workspacePath || "?"}`);
     }
     resolvedWorkspace = info;
-    if (!info.hostId || !info.workspaceId) {
+    if (!info.hostId) {
       if (activeBridge !== localBridge) {
         activeBridge = localBridge;
         orca.panels.post("colab.stateChanged", await localBridge.snapshot());
       }
       return localBridge;
     }
-    let bridge = remoteBridges.get(info.workspaceId);
+    const bridgeKey = info.workspaceId || `name:${info.workspaceName}`;
+    let bridge = remoteBridges.get(bridgeKey);
     if (!bridge) {
       const remoteCli = await resolveCliCommand(orca, { remote: true });
       const autoStopIdleMinutes = Number(
@@ -697,7 +740,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
         onSnapshot: (snap, meta) => postFromBridge(bridge)(snap, meta),
         onEvent: onRemoteEvent,
       });
-      remoteBridges.set(info.workspaceId, bridge);
+      remoteBridges.set(bridgeKey, bridge);
       bridge.start();
     } else {
       bridge.workspace = info;
@@ -796,7 +839,11 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
   const openTerminalWithCommand = async ({ title, command }) => {
     const info = resolvedWorkspace?.workspaceId ? resolvedWorkspace : await resolveWorkspaceInfo(orca);
     if (!info.workspaceId) {
-      throw new Error("No active Orca workspace found to open a terminal.");
+      throw new Error(
+        info.hostId
+          ? `Orca does not let plugins open terminals in a workspace on a remote server. Open one yourself and run: ${command}`
+          : "No active Orca workspace found to open a terminal.",
+      );
     }
     return orca.host.call("terminal.create", { workspaceId: info.workspaceId, title: title || "Colab GPU", command });
   };

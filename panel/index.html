@@ -844,6 +844,21 @@
           ✕
         </button>
       </div>
+      <div id="bridgeHintBox" class="card hidden" style="border-color: var(--accent-border)">
+        <div class="card-header">
+          <div class="card-title" style="font-size: 13px">Connect this panel to the server</div>
+          <span class="badge info">Remote</span>
+        </div>
+        <div class="card-subtitle">
+          This project lives on an Orca server. Orca does not let plugins open terminals there, so open a
+          terminal in this project yourself and run the command below once. The panel adopts it automatically
+          within a few seconds; leave it running.
+        </div>
+        <div class="row" style="gap: 6px; align-items: center">
+          <code id="bridgeHintCmd" class="mono" style="flex: 1; overflow: auto; white-space: nowrap">orca-colab watch</code>
+          <button id="bridgeHintCopyBtn" class="ghost">Copy</button>
+        </div>
+      </div>
       <div id="oauthManualBox" class="card hidden" style="border-color: var(--accent-border)">
         <div class="card-header">
           <div class="card-title" style="font-size: 13px">Finish Google sign-in on the server</div>
@@ -1650,20 +1665,32 @@
         originBadge.parentElement.title = isRemote
           ? `Colab state of the Orca server "${snap.origin.host || snap.origin.hostId}" that hosts workspace "${snap.origin.workspaceName || ""}" (bridge terminal "Colab Bridge"${snap.bridge?.remoteCli ? `, ${snap.bridge.remoteCli}` : ""}). Click for Setup.`
           : "Colab state of this computer. Click for Setup.";
+        const hintBox = document.getElementById("bridgeHintBox");
         if (isRemote && !snap.bridge?.connected) {
           dot.className = "status-dot warn";
-          statusTxt.textContent = snap.bridge?.error
-            ? `Server bridge unavailable: ${snap.bridge.error}`
-            : "Connecting to the Colab bridge on the server...";
+          statusTxt.textContent = snap.bridge?.needsManualTerminal
+            ? "Waiting for the bridge terminal on the server"
+            : snap.bridge?.error
+              ? `Server bridge unavailable: ${snap.bridge.error}`
+              : "Connecting to the Colab bridge on the server...";
+          if (snap.bridge?.needsManualTerminal) {
+            hintBox.classList.remove("hidden");
+            document.getElementById("bridgeHintCmd").textContent = snap.bridge.manualCommand || "orca-colab watch";
+          } else {
+            hintBox.classList.add("hidden");
+          }
         } else if (!readyToLaunch) {
+          hintBox.classList.add("hidden");
           dot.className = "status-dot warn";
           statusTxt.textContent = "Sign-In Required";
         } else if (activeSessions.length === 0) {
+          hintBox.classList.add("hidden");
           dot.className = "status-dot";
           statusTxt.textContent = oauthOk
             ? "Google Connected · No Active GPU"
             : "Tailscale Ready · No Active GPU";
         } else {
+          hintBox.classList.add("hidden");
           const s0 = activeSessions[0];
           const gpuName =
             s0.rateKey && s0.rateKey !== "unknown" ? s0.rateKey : "GPU";
@@ -2704,6 +2731,17 @@
         box.dataset.authUrl = authUrl;
         box.scrollIntoView({ behavior: "smooth", block: "start" });
       }
+
+      document.getElementById("bridgeHintCopyBtn").addEventListener("click", async (e) => {
+        const cmd = document.getElementById("bridgeHintCmd").textContent;
+        try {
+          await navigator.clipboard.writeText(cmd);
+          e.currentTarget.textContent = "Copied";
+          setTimeout(() => (e.target.textContent = "Copy"), 1500);
+        } catch {
+          showNotice(cmd, "info");
+        }
+      });
 
       document.getElementById("oauthOpenBtn").addEventListener("click", () => {
         const url = document.getElementById("oauthManualBox").dataset.authUrl;
