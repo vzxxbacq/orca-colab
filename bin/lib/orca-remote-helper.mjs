@@ -101,12 +101,30 @@ export function createOrcaRemoteHelper({
       });
     });
 
+  const envOpt = (environment) => (environment ? { environment } : {});
+
   return {
     available,
     orcaBin,
 
-    async activeWorktree() {
-      const res = await run(["worktree", "show"], { worktree: "active" });
+    // Saved paired servers; the worktree the client shows may live on one of them.
+    async listEnvironments() {
+      const res = await run(["environment", "list"]);
+      if (!res.ok) return res;
+      const rows = Array.isArray(res.data?.environments)
+        ? res.data.environments
+        : Object.values(res.data || {}).find(Array.isArray) || [];
+      return {
+        ok: true,
+        error: null,
+        data: rows
+          .map((e) => ({ id: e.id || e.environmentId || null, name: e.name || e.label || null }))
+          .filter((e) => e.id || e.name),
+      };
+    },
+
+    async showWorktree(selector, { environment = null } = {}) {
+      const res = await run(["worktree", "show"], { worktree: selector, ...envOpt(environment) });
       if (!res.ok) return res;
       const wt = res.data?.worktree || res.data;
       return {
@@ -123,8 +141,12 @@ export function createOrcaRemoteHelper({
       };
     },
 
-    async listTerminals(selector) {
-      const res = await run(["terminal", "list"], { worktree: selector, limit: 50 });
+    async activeWorktree() {
+      return this.showWorktree("active");
+    },
+
+    async listTerminals(selector, { environment = null } = {}) {
+      const res = await run(["terminal", "list"], { worktree: selector, limit: 50, ...envOpt(environment) });
       if (!res.ok) return res;
       const rows = Array.isArray(res.data?.terminals) ? res.data.terminals : [];
       return {
@@ -139,8 +161,8 @@ export function createOrcaRemoteHelper({
       };
     },
 
-    async createTerminal({ selector, title, command }) {
-      const res = await run(["terminal", "create"], { worktree: selector, title, command });
+    async createTerminal({ selector, title, command, environment = null }) {
+      const res = await run(["terminal", "create"], { worktree: selector, title, command, ...envOpt(environment) });
       if (!res.ok) return res;
       const handle = res.data?.terminal?.handle || res.data?.handle || null;
       return handle
@@ -150,8 +172,8 @@ export function createOrcaRemoteHelper({
 
     // Accumulated output since `cursor` (not the rendered screen), so frames that scrolled off are
     // still delivered; the caller keeps `nextCursor` for the following read.
-    async readTerminal(handle, { cursor = undefined, limit = 2000 } = {}) {
-      const res = await run(["terminal", "read"], { terminal: handle, cursor, limit });
+    async readTerminal(handle, { cursor = undefined, limit = 2000, environment = null } = {}) {
+      const res = await run(["terminal", "read"], { terminal: handle, cursor, limit, ...envOpt(environment) });
       if (!res.ok) return res;
       const d = res.data?.terminal || res.data;
       const lines = Array.isArray(d?.tail) ? d.tail : Array.isArray(d?.lines) ? d.lines : [];
@@ -162,8 +184,8 @@ export function createOrcaRemoteHelper({
       };
     },
 
-    async sendTerminal(handle, text) {
-      return run(["terminal", "send"], { terminal: handle, text, enter: true });
+    async sendTerminal(handle, text, { environment = null } = {}) {
+      return run(["terminal", "send"], { terminal: handle, text, enter: true, ...envOpt(environment) });
     },
   };
 }

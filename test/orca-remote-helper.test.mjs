@@ -50,9 +50,11 @@ test("helper maps worktree show and terminal create through a fake orca binary",
   assert.deepEqual(wt.data, {
     id: "repo::/srv/p", identity: "wt2:host9:abc", hostId: "host9", displayName: "remote-host-bridge", path: "/srv/p", branch: "refs/heads/main",
   });
-  const created = await helper.createTerminal({ selector: "active", title: "Colab Bridge", command: "orca-colab watch" });
+  const created = await helper.createTerminal({ selector: "name:remote-host-bridge", title: "Colab Bridge", command: "orca-colab watch", environment: "macpro" });
   assert.equal(created.data.handle, "term_42");
-  assert.deepEqual(calls[1].slice(0, 2), ["terminal", "create"]);
+  assert.deepEqual(calls[1], [
+    "terminal", "create", "--worktree", "name:remote-host-bridge", "--title", "Colab Bridge", "--command", "orca-colab watch", "--environment", "macpro", "--json",
+  ]);
 
   const missing = createOrcaRemoteHelper({ orcaBin: null });
   assert.equal(missing.available, false);

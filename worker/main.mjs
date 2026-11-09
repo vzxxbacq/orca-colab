@@ -110,6 +110,7 @@ async function resolveWorkspaceInfo(orca) {
         workspaceId: null,
         workspacePath: null,
         workspaceName: ctx.displayName,
+        branch: ctx.branch || null,
         hostId: "unlisted",
         terminals,
       };
@@ -392,6 +393,9 @@ class TerminalBridge {
     this.lastHelperError = null;
     this.deadTerminals = new Set();
     this.watchUnsupported = false;
+    this.environment = null;
+    this.environmentName = null;
+    this.environmentResolved = false;
     this.storageKey = `bridgeTerminal:${workspace.workspaceId || `name:${workspace.workspaceName}`}`;
   }
 
@@ -415,7 +419,7 @@ class TerminalBridge {
       manualCommand: this.manualCommand,
       transport: this.transport,
       helper: this.helper
-        ? { available: this.helper.available, error: this.lastHelperError }
+        ? { available: this.helper.available, error: this.lastHelperError, environment: this.environmentName }
         : { available: false, error: "no helper" },
     };
   }
@@ -432,15 +436,61 @@ class TerminalBridge {
 
   // Where the host API cannot see the workspace, the local `orca` CLI still can. It finds a terminal
   // that already prints frames or creates one running `watch`; errors are kept for the panel hint.
+  // The client's orca CLI only sees its own Orca unless told which paired server to talk to, so the
+  // focused worktree is looked up by name on each saved environment until one answers.
+  async resolveEnvironment() {
+    if (this.environmentResolved) {
+      return this.environment;
+    }
+    const selectors = this.workspaceSelectors();
+    for (const selector of selectors) {
+      const local = await this.helper.showWorktree(selector);
+      if (local.ok) {
+        this.environment = null;
+        this.environmentResolved = true;
+        return null;
+      }
+    }
+    const envs = await this.helper.listEnvironments();
+    if (!envs.ok) {
+      this.lastHelperError = envs.error;
+      return null;
+    }
+    for (const env of envs.data) {
+      const envSelector = env.id || env.name;
+      for (const selector of selectors) {
+        const shown = await this.helper.showWorktree(selector, { environment: envSelector });
+        if (shown.ok) {
+          this.environment = envSelector;
+          this.environmentResolved = true;
+          this.environmentName = env.name || env.id;
+          return envSelector;
+        }
+      }
+    }
+    this.lastHelperError = `no local worktree or saved environment (${envs.data.length} checked) has a workspace named "${this.workspace.workspaceName}"`;
+    return null;
+  }
+
+  workspaceSelectors() {
+    const out = [];
+    if (this.workspace.workspaceName) out.push(`name:${this.workspace.workspaceName}`);
+    if (this.workspace.branch) out.push(`branch:${this.workspace.branch}`);
+    out.push("active");
+    return out;
+  }
+
   async ensureTerminalViaHelper() {
     if (!this.helper?.available) {
       this.lastHelperError = "orca CLI not found on this machine";
       return null;
     }
-    const selectors = ["active"];
-    if (this.workspace.workspaceName) selectors.push(`name:${this.workspace.workspaceName}`);
-    for (const selector of selectors) {
-      const listed = await this.helper.listTerminals(selector);
+    const environment = await this.resolveEnvironment();
+    if (!this.environmentResolved) {
+      return null;
+    }
+    for (const selector of this.workspaceSelectors()) {
+      const listed = await this.helper.listTerminals(selector, { environment });
       if (!listed.ok) {
         this.lastHelperError = listed.error;
         continue;
@@ -468,6 +518,7 @@ class TerminalBridge {
         selector,
         title: BRIDGE_TERMINAL_TITLE,
         command: this.manualCommand,
+        environment,
       });
       if (created.ok) {
         this.lastHelperError = null;
@@ -494,7 +545,11 @@ class TerminalBridge {
       }
       this.transport = "cli";
     }
-    const res = await this.helper.readTerminal(terminalId, { cursor: this.cliCursor, limit: 2000 });
+    const res = await this.helper.readTerminal(terminalId, {
+      cursor: this.cliCursor,
+      limit: 2000,
+      environment: this.environment,
+    });
     if (!res.ok) {
       throw new Error(`orca terminal read: ${res.error}`);
     }
@@ -630,7 +685,7 @@ class TerminalBridge {
         this.orca.log(`bridge send via ${this.transport} to ${terminalId}: ${JSON.stringify(text)}`);
       }
       if (this.transport === "cli") {
-        const res = await this.helper.sendTerminal(terminalId, text);
+        const res = await this.helper.sendTerminal(terminalId, text, { environment: this.environment });
         if (!res.ok) this.lastError = `orca terminal send: ${res.error}`;
         return;
       }
@@ -710,6 +765,7 @@ class TerminalBridge {
         ...(snap.origin || { kind: "remote" }),
         hostId: this.workspace.hostId,
         workspaceName: this.workspace.workspaceName,
+        environment: this.environmentName,
       },
       bridge: this.describe(),
     };
