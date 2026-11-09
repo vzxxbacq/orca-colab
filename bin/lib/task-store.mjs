@@ -7,6 +7,7 @@ import {
   openSync,
   readdirSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -260,6 +261,23 @@ export function readTaskLog(
   }
 
   return { text: raw, totalBytes, truncated };
+}
+
+export function clearFinishedTasks(homeDir = os.homedir(), { sessionName = null } = {}) {
+  const tasks = listTasks(homeDir);
+  let removed = 0;
+  for (const t of tasks) {
+    if (t.status === "running") continue;
+    if (sessionName && t.sessionName !== sessionName) continue;
+    try {
+      rmSync(taskJsonPath(t.id, homeDir), { force: true });
+      rmSync(taskLogPath(t.id, homeDir), { force: true });
+      removed += 1;
+    } catch {
+      // Ignore removal error.
+    }
+  }
+  return removed;
 }
 
 function closeAndReadSlice(fd, buf, position) {

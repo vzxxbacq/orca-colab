@@ -659,8 +659,41 @@
         display: flex;
         flex-direction: column;
         gap: 5px;
-        max-height: 155px;
+        max-height: 215px;
         overflow-y: auto;
+      }
+
+      .filter-strip {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        overflow-x: auto;
+        white-space: nowrap;
+        padding-bottom: 2px;
+        margin-bottom: 8px;
+        scrollbar-width: none;
+      }
+      .filter-strip::-webkit-scrollbar {
+        display: none;
+      }
+
+      .runtime-mini-card {
+        background: rgba(11, 14, 20, 0.55);
+        border: 1px solid var(--border);
+        border-radius: 7px;
+        padding: 7px 9px;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        cursor: pointer;
+        transition: border-color 0.14s ease, background 0.14s ease;
+      }
+      .runtime-mini-card:hover {
+        border-color: var(--border-strong);
+      }
+      .runtime-mini-card.active-filter {
+        border-color: var(--accent);
+        background: rgba(249, 171, 0, 0.08);
       }
 
       .task-row {
@@ -1147,45 +1180,50 @@
 
         <!-- TAB 1: AGENT RUNS & LIVE OUTPUT -->
         <div id="tabTasks" style="display: flex; flex-direction: column; gap: 10px">
-          <!-- Agent Policy Summary Strip -->
-          <div class="card" style="padding: 9px 12px">
-            <div class="row-between">
-              <div>
-                <div class="card-title" style="font-size: 11.5px">
-                  Agent Compute Guardrails
-                </div>
-                <div
-                  id="agentPolicySummaryText"
-                  class="muted"
-                  style="font-size: 10.5px; margin-top: 2px"
-                >
-                  Allowed GPUs: T4, L4, A100, G4, H100, CPU · Max 2 Runtimes
-                </div>
+          <!-- Compact Guardrails Strip + Recent Agent Runs -->
+          <div class="card" style="padding: 10px 12px">
+            <div
+              class="row-between"
+              style="
+                padding-bottom: 8px;
+                margin-bottom: 8px;
+                border-bottom: 1px solid var(--border);
+              "
+            >
+              <div
+                id="agentPolicySummaryText"
+                class="muted"
+                style="font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis"
+              >
+                Boundary: T4, L4, A100, G4, H100, CPU · Max 2 Runtimes
               </div>
-              <div class="row" style="gap: 6px">
+              <button
+                class="ghost"
+                style="padding: 2px 7px; font-size: 10.5px; flex-shrink: 0"
+                onclick="window.__openGuardrailsTab()"
+              >
+                ⚙ Guardrails →
+              </button>
+            </div>
+
+            <div class="card-header" style="margin-bottom: 6px">
+              <div class="card-title">
+                <span>Agent Runs &amp; History</span>
                 <span id="runningTaskBadge" class="badge neutral">0 running</span>
+              </div>
+              <div class="row" style="gap: 4px">
                 <button
+                  id="clearHistoryBtn"
                   class="ghost"
-                  style="padding: 3px 8px; font-size: 10.5px"
-                  onclick="window.__openGuardrailsTab()"
+                  style="padding: 2px 6px; font-size: 10px"
+                  onclick="window.__clearHistory()"
+                  title="Clear finished run history"
                 >
-                  Configure Policy →
+                  Clear History
                 </button>
               </div>
             </div>
-          </div>
-
-          <!-- Recent Agent Runs Selector -->
-          <div class="card" style="padding: 10px 12px">
-            <div class="card-header" style="margin-bottom: 6px">
-              <div class="card-title">Agent Runs &amp; History</div>
-              <span class="muted" style="font-size: 10.5px">Click a run to inspect output</span>
-            </div>
-            <div
-              id="taskRuntimeFilterBar"
-              class="row hidden"
-              style="gap: 5px; margin-bottom: 8px; flex-wrap: wrap"
-            ></div>
+            <div id="taskRuntimeFilterBar" class="filter-strip hidden"></div>
             <div id="taskListContainer" class="task-list"></div>
           </div>
 
@@ -1821,16 +1859,8 @@
               <span>The Agent will automatically provision &amp; release GPUs within your policy.</span>
             </div>
           `;
-        } else {
-          if (
-            !window.__selectedBannerSession ||
-            !activeSessions.some((x) => x.name === window.__selectedBannerSession)
-          ) {
-            window.__selectedBannerSession = activeSessions[0].name;
-          }
-          const s =
-            activeSessions.find((x) => x.name === window.__selectedBannerSession) ||
-            activeSessions[0];
+        } else if (activeSessions.length === 1) {
+          const s = activeSessions[0];
           const m = s.liveMetrics || {};
           const gpuUtil =
             typeof m.gpuUtilizationPercent === "number"
@@ -1844,23 +1874,7 @@
               ? ((m.vramTotalMiB || s.gpu.memoryTotalMiB) / 1024).toFixed(1)
               : null;
 
-          const multiTabsHtml =
-            activeSessions.length > 1
-              ? `<div class="row" style="gap:5px;margin-bottom:8px;padding-bottom:7px;border-bottom:1px solid var(--border)">
-                  <span class="muted" style="font-size:10.5px">Runtimes (${activeSessions.length}):</span>
-                  ${activeSessions
-                    .map((sess) => {
-                      const shortId = sess.name.replace(/^orca-colab-/, "");
-                      const isCur = sess.name === s.name;
-                      const gLabel = sess.rateKey && sess.rateKey !== "unknown" ? sess.rateKey : sess.gpu?.name || "GPU";
-                      return `<button class="${isCur ? "primary" : "ghost"}" style="padding:2px 8px;font-size:10.5px" onclick="window.__selectBannerSession('${esc(sess.name)}')">● ${esc(gLabel)} · ${esc(shortId)}</button>`;
-                    })
-                    .join("")}
-                </div>`
-              : "";
-
           bannerEl.innerHTML = `
-            ${multiTabsHtml}
             <div class="runtime-top">
               <div class="runtime-title">
                 <span class="status-dot ok"></span>
@@ -1894,6 +1908,59 @@
                 : ""
             }
           `;
+        } else {
+          // Multi-Runtime Dock: render each active runtime as a sleek interactive mini-card
+          bannerEl.innerHTML = `
+            <div class="row-between" style="margin-bottom:2px">
+              <div class="runtime-title" style="font-size:11.5px">
+                <span class="status-dot ok"></span>
+                <span>Active GPU Runtimes (${activeSessions.length})</span>
+              </div>
+              <span class="muted" style="font-size:10px">Click a runtime to filter runs</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              ${activeSessions
+                .map((s) => {
+                  const m = s.liveMetrics || {};
+                  const gpuUtil =
+                    typeof m.gpuUtilizationPercent === "number"
+                      ? m.gpuUtilizationPercent
+                      : null;
+                  const vramUsed = m.vramUsedMiB
+                    ? (m.vramUsedMiB / 1024).toFixed(1)
+                    : null;
+                  const vramTotal =
+                    m.vramTotalMiB || s.gpu?.memoryTotalMiB
+                      ? ((m.vramTotalMiB || s.gpu.memoryTotalMiB) / 1024).toFixed(1)
+                      : null;
+                  const shortId = s.name.replace(/^orca-colab-/, "");
+                  const isFiltered = window.__taskFilterSession === s.name;
+                  return `
+                    <div class="runtime-mini-card ${isFiltered ? "active-filter" : ""}" onclick="window.__toggleRuntimeFilter('${esc(s.name)}')">
+                      <div class="row-between">
+                        <div class="row" style="gap:6px">
+                          <span class="status-dot ok"></span>
+                          <strong style="font-size:11.5px">${esc(s.gpu?.name || s.rateKey || "GPU")}</strong>
+                          <span class="badge neutral mono" style="font-size:9.5px;padding:1px 5px">${esc(shortId)}</span>
+                          ${vramTotal ? `<span class="muted" style="font-size:10.5px">${vramUsed ? `${vramUsed}/` : ""}${vramTotal}G</span>` : ""}
+                          ${s.keep ? `<span class="badge info" style="font-size:9px;padding:1px 5px">KEEP</span>` : ""}
+                        </div>
+                        <div class="row" style="gap:4px" onclick="event.stopPropagation()">
+                          <button style="padding:2px 6px;font-size:10px" onclick="window.__openSsh('${esc(s.name)}')">&gt;_</button>
+                          <button style="padding:2px 6px;font-size:10px" onclick="window.__toggleKeep('${esc(s.name)}')">${s.keep ? "Unkeep" : "Keep"}</button>
+                          <button class="danger" style="padding:2px 6px;font-size:10px" onclick="window.__stopSession('${esc(s.name)}')">Stop</button>
+                        </div>
+                      </div>
+                      <div class="row-between" style="font-size:10.5px;color:var(--muted)">
+                        <span>Up ${formatDuration(s.ageSeconds)} · ≈ ${s.costSoFarCu ?? 0} CU (${s.cuPerHour ?? 0}/h)</span>
+                        <span>${gpuUtil !== null ? `Load ${gpuUtil}%` : "Direct API"}</span>
+                      </div>
+                    </div>
+                  `;
+                })
+                .join("")}
+            </div>
+          `;
         }
 
         // Populate Tab 1: Agent Runs & Output
@@ -1914,24 +1981,33 @@
         }
 
         const filterBarEl = document.getElementById("taskRuntimeFilterBar");
-        const distinctSessions = Array.from(sessionGpuMap.keys());
+        const activeSessionNames = activeSessions.map((a) => a.name);
+        const pastSessionsWithTasks = Array.from(sessionGpuMap.keys())
+          .filter(
+            (sName) =>
+              !activeSessionNames.includes(sName) &&
+              allTasks.some((t) => t.sessionName === sName),
+          )
+          .slice(0, 2);
+        const filterSessions = [...activeSessionNames, ...pastSessionsWithTasks];
+
         if (
           window.__taskFilterSession &&
           !sessionGpuMap.has(window.__taskFilterSession)
         ) {
           window.__taskFilterSession = null;
         }
-        if (distinctSessions.length > 1) {
+        if (filterSessions.length > 1) {
           filterBarEl.classList.remove("hidden");
           const curFilter = window.__taskFilterSession || null;
           filterBarEl.innerHTML = [
-            `<button class="${!curFilter ? "primary" : "ghost"}" style="padding:2px 8px;font-size:10.5px" onclick="window.__setTaskFilterSession(null)">All Runtimes (${allTasks.length})</button>`,
-            ...distinctSessions.map((sName) => {
+            `<button class="${!curFilter ? "primary" : "ghost"}" style="padding:2px 8px;font-size:10.5px;flex-shrink:0" onclick="window.__setTaskFilterSession(null)">All (${allTasks.length})</button>`,
+            ...filterSessions.map((sName) => {
               const count = allTasks.filter((t) => t.sessionName === sName).length;
               const shortId = sName.replace(/^orca-colab-/, "");
-              const gName = sessionGpuMap.get(sName) || "GPU";
-              const isAct = activeSessions.some((a) => a.name === sName);
-              return `<button class="${curFilter === sName ? "primary" : "ghost"}" style="padding:2px 8px;font-size:10.5px" onclick="window.__setTaskFilterSession('${esc(sName)}')">${isAct ? "● " : ""}${esc(gName)} · ${esc(shortId)} (${count})</button>`;
+              const gName = (sessionGpuMap.get(sName) || "GPU").replace(/^Tesla |^NVIDIA /, "");
+              const isAct = activeSessionNames.includes(sName);
+              return `<button class="${curFilter === sName ? "primary" : "ghost"}" style="padding:2px 8px;font-size:10.5px;flex-shrink:0" onclick="window.__setTaskFilterSession('${esc(sName)}')">${isAct ? "● " : ""}${esc(gName)} · ${esc(shortId)} (${count})</button>`;
             }),
           ].join("");
         } else {
@@ -1956,12 +2032,44 @@
           selectedTaskId = snap.activeTaskOutput.taskId;
         }
 
+        const formatTaskDisplay = (t) => {
+          const cmdStr = Array.isArray(t.command)
+            ? t.command.join(" ")
+            : String(t.command || "");
+          const rawName = String(t.name || "").trim();
+          const isAutoName =
+            !rawName ||
+            cmdStr.startsWith(rawName) ||
+            rawName === cmdStr.slice(0, 64);
+          if (!isAutoName) {
+            return { title: rawName, sub: cmdStr };
+          }
+          if (/pip\s+install/i.test(cmdStr)) {
+            const m = cmdStr.match(/pip\s+install\s+(?:-[a-zA-Z]+\s+)*(.+)/i);
+            return {
+              title: `Install Packages (${(m?.[1] || "pip").slice(0, 36)})`,
+              sub: cmdStr,
+            };
+          }
+          if (/^nvidia-smi/i.test(cmdStr)) {
+            return { title: "GPU Hardware Probe (nvidia-smi)", sub: cmdStr };
+          }
+          if (/^python3?\s+-c/i.test(cmdStr)) {
+            return { title: "Python GPU Inline Script", sub: cmdStr };
+          }
+          if (/^python3?\s+(\S+\.py)/i.test(cmdStr)) {
+            const m = cmdStr.match(/^python3?\s+(\S+\.py)/i);
+            return { title: `Run ${m[1]}`, sub: cmdStr };
+          }
+          return { title: rawName || "Remote Command", sub: cmdStr };
+        };
+
         const taskListEl = document.getElementById("taskListContainer");
         if (tasks.length === 0) {
           taskListEl.innerHTML = `<div class="muted" style="font-size:11px;padding:4px 2px">No agent runs recorded yet. Ask the Agent in Orca to run a GPU task on Colab.</div>`;
         } else {
           taskListEl.innerHTML = tasks
-            .slice(0, 12)
+            .slice(0, 15)
             .map((t) => {
               const isSel = t.id === selectedTaskId;
               const tone =
@@ -1970,24 +2078,42 @@
                   : t.status === "succeeded"
                     ? "ok"
                     : "danger";
+              const statusLabel =
+                t.status === "running"
+                  ? "RUN"
+                  : t.status === "succeeded"
+                    ? "OK"
+                    : t.status === "stopped"
+                      ? "STOP"
+                      : "ERR";
               const startMs = Date.parse(t.startedAt);
               const endMs = t.finishedAt ? Date.parse(t.finishedAt) : Date.now();
               const dur = formatDuration(Math.floor((endMs - startMs) / 1000));
               const shortSess = (t.sessionName || "").replace(/^orca-colab-/, "");
-              const gpuLabel =
-                t.gpuName || sessionGpuMap.get(t.sessionName) || "GPU";
-              const runtimeBadge = shortSess
-                ? `<span class="badge neutral mono" style="font-size:9.5px;padding:1px 5px" title="Session ${esc(t.sessionName)}">${esc(gpuLabel.replace(/^Tesla |^NVIDIA /, ""))} · ${esc(shortSess)}</span>`
-                : "";
+              const gpuLabel = (
+                t.gpuName ||
+                sessionGpuMap.get(t.sessionName) ||
+                "GPU"
+              ).replace(/^Tesla |^NVIDIA /, "");
+              const { title, sub } = formatTaskDisplay(t);
               return `
                 <div class="task-row ${isSel ? "selected" : ""}" onclick="window.__selectTask('${esc(t.id)}')">
                   <div class="task-row-main">
-                    <div class="row" style="gap:6px">
-                      <span class="badge ${tone}">${esc(t.status.toUpperCase())}</span>
-                      ${runtimeBadge}
-                      <span class="task-row-title">${esc(t.name)}</span>
+                    <div class="row-between" style="gap:6px;margin-bottom:2px">
+                      <div class="row" style="gap:5px;min-width:0">
+                        <span class="badge ${tone}" style="padding:1px 5px;font-size:9.5px">${statusLabel}</span>
+                        <span class="task-row-title">${esc(title)}</span>
+                      </div>
+                      <div class="row" style="gap:4px;flex-shrink:0">
+                        ${
+                          shortSess
+                            ? `<span class="badge neutral mono" style="font-size:9.5px;padding:1px 5px" title="Runtime ${esc(t.sessionName)}">${esc(gpuLabel)}·${esc(shortSess.slice(0, 6))}</span>`
+                            : ""
+                        }
+                        <span class="muted mono" style="font-size:10px">${dur}</span>
+                      </div>
                     </div>
-                    <div class="task-row-sub">${esc(t.command)} · ${dur}</div>
+                    <div class="task-row-sub">${esc(sub)}</div>
                   </div>
                   ${
                     t.status === "running"
@@ -2324,6 +2450,27 @@
           session: sessionName,
         });
         userForcedView = null;
+        renderAll(res.dashboard);
+      };
+
+      window.__toggleRuntimeFilter = (sessionName) => {
+        if (window.__taskFilterSession === sessionName) {
+          window.__taskFilterSession = null;
+        } else {
+          window.__taskFilterSession = sessionName;
+          window.__selectedBannerSession = sessionName;
+        }
+        if (dashboardState) {
+          renderAll(dashboardState);
+        }
+      };
+
+      window.__clearHistory = async () => {
+        const res = await callWorker("colab.clearFinishedTasks", {
+          sessionName: window.__taskFilterSession || null,
+        });
+        selectedTaskId = null;
+        renderTaskOutputBox(null);
         renderAll(res.dashboard);
       };
 

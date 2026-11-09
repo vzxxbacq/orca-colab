@@ -49,7 +49,12 @@ import {
 } from "../bin/lib/session-store.mjs";
 import { probeSshBannerOnce } from "../bin/lib/ssh-banner-probe.mjs";
 import { execSshCapture } from "../bin/lib/ssh-exec.mjs";
-import { listTasks, readTask, readTaskLog } from "../bin/lib/task-store.mjs";
+import {
+  clearFinishedTasks,
+  listTasks,
+  readTask,
+  readTaskLog,
+} from "../bin/lib/task-store.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOCAL_CLI_PATH = path.resolve(__dirname, "..", "bin", "orca-colab.mjs");
@@ -935,6 +940,15 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
     const snap = await buildDashboardSnapshot();
     orca.panels.post("colab.stateChanged", snap);
     return { ok: true, task: stopped, dashboard: snap };
+  });
+
+  orca.panels.handle("colab.clearFinishedTasks", async (input = {}) => {
+    const sessionName = input?.sessionName ? String(input.sessionName) : null;
+    const removed = clearFinishedTasks(homeDir, { sessionName });
+    selectedTaskId = null;
+    const snap = await buildDashboardSnapshot();
+    orca.panels.post("colab.stateChanged", snap);
+    return { ok: true, removed, dashboard: snap };
   });
 
   orca.panels.handle("colab.getTaskLogs", async (input = {}) => {
