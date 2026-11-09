@@ -136,6 +136,31 @@ export function parseTailscaleStatus(input) {
   };
 }
 
+export function deriveLoginServer({ controlUrl = null, tailnetName = null } = {}) {
+  if (!controlUrl || typeof controlUrl !== "string") {
+    return null;
+  }
+  const trimmed = controlUrl.trim().replace(/\/+$/, "");
+  if (!trimmed || trimmed === "https://controlplane.tailscale.com") {
+    return null;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    const isIpv4 = /^\d+\.\d+\.\d+\.\d+$/.test(parsed.hostname);
+    if (
+      isIpv4 &&
+      typeof tailnetName === "string" &&
+      /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(tailnetName.trim())
+    ) {
+      parsed.hostname = tailnetName.trim();
+      return parsed.toString().replace(/\/+$/, "");
+    }
+    return trimmed;
+  } catch {
+    return trimmed;
+  }
+}
+
 export function getTailscaleStatus({
   binaryPath = null,
   env = process.env,
@@ -150,6 +175,8 @@ export function getTailscaleStatus({
       backendState: "NotInstalled",
       loggedIn: false,
       tailnetName: null,
+      controlUrl: null,
+      detectedLoginServer: null,
       self: null,
       peers: [],
     };
@@ -166,9 +193,29 @@ export function getTailscaleStatus({
 
   const stdout = exec(resolvedBinary, ["status", "--json"]);
   const parsed = parseTailscaleStatus(stdout);
+
+  let controlUrl = null;
+  if (!runCommand) {
+    try {
+      const prefsOut = exec(resolvedBinary, ["debug", "prefs"]);
+      const prefs = JSON.parse(prefsOut);
+      if (typeof prefs?.ControlURL === "string" && prefs.ControlURL.trim()) {
+        controlUrl = prefs.ControlURL.trim();
+      }
+    } catch {
+      // Ignore if debug prefs is unsupported by a custom binary.
+    }
+  }
+  const detectedLoginServer = deriveLoginServer({
+    controlUrl,
+    tailnetName: parsed.tailnetName,
+  });
+
   return {
     found: true,
     binaryPath: resolvedBinary,
+    controlUrl,
+    detectedLoginServer,
     ...parsed,
   };
 }

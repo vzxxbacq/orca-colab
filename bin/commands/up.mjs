@@ -11,6 +11,7 @@ import {
 import { copyToClipboard } from "../lib/clipboard.mjs";
 import {
   getColabPaths,
+  isValidAuthKey,
   readConfig,
   resolveAccount,
 } from "../lib/colab-home.mjs";
@@ -76,8 +77,7 @@ export async function run(
   const config = readConfig(homeDir);
   const paths = getColabPaths(homeDir);
   if (
-    !config?.authKey ||
-    !config.authKey.startsWith("tskey-") ||
+    !isValidAuthKey(config?.authKey, config?.loginServer) ||
     !existsSync(paths.privateKeyPath) ||
     !existsSync(paths.publicKeyPath)
   ) {
@@ -139,7 +139,10 @@ export async function run(
       stderr,
     );
   } else {
-    const clip = copyClipboard(`${config.authKey} ${publicKey}`, { env });
+    const pasteLine = config.loginServer
+      ? `${config.authKey} ${config.loginServer} ${publicKey}`
+      : `${config.authKey} ${publicKey}`;
+    const clip = copyClipboard(pasteLine, { env });
     if (!opts["no-open"]) {
       openBrowser(BOOTSTRAP_NOTEBOOK_COLAB_URL, {
         env,
@@ -148,7 +151,9 @@ export async function run(
     }
     if (clip.copied) {
       log(
-        "Opened bootstrap notebook and copied '<authkey> <pubkey>' to clipboard for the PASTE field. Choose a GPU runtime and press Run.",
+        config.loginServer
+          ? "Opened bootstrap notebook and copied '<authkey> <loginServer> <pubkey>' to clipboard for the PASTE field. Choose a GPU runtime and press Run."
+          : "Opened bootstrap notebook and copied '<authkey> <pubkey>' to clipboard for the PASTE field. Choose a GPU runtime and press Run.",
         stderr,
       );
     } else {

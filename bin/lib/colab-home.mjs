@@ -126,6 +126,23 @@ export function writeConfig(config, homeDir = os.homedir()) {
   return normalized;
 }
 
+export function isValidAuthKey(authKey, loginServer = null) {
+  if (typeof authKey !== "string") {
+    return false;
+  }
+  const trimmed = authKey.trim();
+  if (!trimmed || /\s/.test(trimmed)) {
+    return false;
+  }
+  if (trimmed.startsWith("tskey-")) {
+    return true;
+  }
+  if (loginServer && String(loginServer).trim() !== "") {
+    return trimmed.length >= 16;
+  }
+  return false;
+}
+
 export function resolveAccount(config, requestedLabel) {
   const normalized = normalizeConfig(config ?? {});
   const label = requestedLabel || normalized.defaultAccount || "default";

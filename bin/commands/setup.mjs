@@ -3,12 +3,14 @@ import { parseArgs } from "node:util";
 import { CliError, EXIT_OK, log, writeJson } from "../lib/cli-output.mjs";
 import {
   getColabPaths,
+  isValidAuthKey,
   readConfig,
   resolveAccount,
   writeConfig,
 } from "../lib/colab-home.mjs";
 import { BOOTSTRAP_NOTEBOOK_COLAB_URL, openUrl } from "../lib/open-url.mjs";
 import { ensureSshKeypair } from "../lib/ssh-keypair.mjs";
+import { getTailscaleStatus } from "../lib/tailscale-cli.mjs";
 
 export async function run(
   argv,
@@ -63,27 +65,51 @@ export async function run(
   };
 
   try {
+    let detectedLoginServer = null;
+    if (opts["login-server"] === undefined && !existing?.loginServer) {
+      try {
+        const ts = getTailscaleStatus({ env });
+        detectedLoginServer = ts?.detectedLoginServer ?? null;
+      } catch {
+        // Ignore if tailscale status cannot be queried during setup.
+      }
+    }
+
+    let loginServer =
+      opts["login-server"] !== undefined
+        ? opts["login-server"].trim()
+        : (existing?.loginServer ?? detectedLoginServer ?? "");
+
+    if (
+      opts["login-server"] === undefined &&
+      interactive &&
+      (existing?.loginServer || detectedLoginServer)
+    ) {
+      const defSrv = existing?.loginServer || detectedLoginServer;
+      const enteredSrv = await ask(
+        `Tailscale/Headscale login server [${defSrv}]: `,
+      );
+      loginServer = enteredSrv || defSrv;
+    }
+
     let authKey = opts["auth-key"]?.trim() ?? "";
     if (!authKey && interactive) {
       const hint = existing?.authKey ? " [Enter to keep existing]" : "";
       const entered = await ask(
-        `Paste Tailscale auth key (reusable, ephemeral, tag:orca-colab)${hint}: `,
+        `Paste Tailscale/Headscale auth key (reusable, ephemeral)${hint}: `,
       );
       authKey = entered || existing?.authKey || "";
     } else if (!authKey && existing?.authKey) {
       authKey = existing.authKey;
     }
 
-    if (!authKey || !authKey.startsWith("tskey-")) {
+    if (!isValidAuthKey(authKey, loginServer)) {
       throw new CliError(
-        "Tailscale auth key is required and must start with 'tskey-' (pass --auth-key or run interactively).",
+        loginServer
+          ? "Tailscale/Headscale pre-auth key is required (at least 16 non-whitespace chars; pass --auth-key or run interactively)."
+          : "Tailscale auth key is required and must start with 'tskey-' (or pass --login-server for Headscale).",
       );
     }
-
-    const loginServer =
-      opts["login-server"] !== undefined
-        ? opts["login-server"].trim()
-        : (existing?.loginServer ?? "");
 
     const accountLabel = opts.account?.trim() || existing?.defaultAccount || "default";
     const existingAccount = existing ? resolveAccount(existing, accountLabel) : null;

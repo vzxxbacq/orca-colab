@@ -1,6 +1,11 @@
 import { existsSync } from "node:fs";
 import os from "node:os";
-import { getColabPaths, readConfig, resolveAccount } from "./colab-home.mjs";
+import {
+  getColabPaths,
+  isValidAuthKey,
+  readConfig,
+  resolveAccount,
+} from "./colab-home.mjs";
 import {
   findExecutableOnPath,
   getTailscaleStatus,
@@ -154,9 +159,9 @@ export function runDoctor({
   const paths = getColabPaths(homeDir);
   const config = readConfig(homeDir);
   const configPresent = Boolean(config);
-  const hasAuthKey = Boolean(
-    config?.authKey && config.authKey.startsWith("tskey-"),
-  );
+  const effectiveLoginServer =
+    config?.loginServer ?? ts.detectedLoginServer ?? null;
+  const hasAuthKey = isValidAuthKey(config?.authKey, effectiveLoginServer);
   const sshKeyPresent =
     existsSync(paths.privateKeyPath) && existsSync(paths.publicKeyPath);
   const defaultAcc = config ? resolveAccount(config) : null;
