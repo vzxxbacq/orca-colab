@@ -2716,6 +2716,28 @@
         refreshAll(includeLive);
       }, 2000);
 
+      // Focus changes: ask the worker to re-resolve right away instead of waiting for the next poll.
+      async function onFocusMaybeChanged() {
+        try {
+          const snap = await callWorker("colab.focusChanged", {}, { timeoutMs: 8000 });
+          renderAll(snap);
+        } catch {
+          // The regular poll picks it up.
+        }
+      }
+      for (const eventName of ["workspace.changed", "workspace.created", "workspace.removed"]) {
+        try {
+          orcaApi?.host?.call?.("events.subscribe", { event: eventName }).catch(() => {});
+          orcaApi?.on?.(eventName, onFocusMaybeChanged);
+        } catch {
+          // Events unavailable in this host.
+        }
+      }
+      window.addEventListener("focus", onFocusMaybeChanged);
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") onFocusMaybeChanged();
+      });
+
       onWorkerEvent("colab.oauthUrl", (payload) => {
         if (!payload?.authUrl) return;
         window.__lastOAuthUrl = payload.authUrl;

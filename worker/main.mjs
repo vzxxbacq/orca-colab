@@ -898,7 +898,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
   // Which bridge serves the panel follows the focused workspace: a `hostId` means the workspace, its
   // terminals and its ~/.orca-colab live on a remote Orca server.
   const resolveBridge = async ({ force = false } = {}) => {
-    if (!force && Date.now() - lastResolveAt < 4000) {
+    if (!force && Date.now() - lastResolveAt < 1000) {
       return activeBridge;
     }
     lastResolveAt = Date.now();
@@ -1068,6 +1068,12 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
     };
   });
 
+  // The panel calls this on workspace events and on its own focus so a switch shows within a poll.
+  orca.panels.handle("colab.focusChanged", async () => {
+    const bridge = await resolveBridge({ force: true });
+    return bridge.snapshot();
+  });
+
   orca.panels.handle("colab.dashboard", async (input = {}) => {
     const bridge = await resolveBridge();
     if (input?.selectedTaskId) {
@@ -1229,7 +1235,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
   });
 
   const statusInterval = setInterval(() => void refreshStatusBar(), 30_000);
-  const bridgeInterval = setInterval(() => void resolveBridge(), 3000);
+  const bridgeInterval = setInterval(() => void resolveBridge(), 1000);
   // Focus changes arrive as workspace events on hosts that emit them; the interval covers the rest.
   for (const eventName of ["workspace.changed", "workspace.created", "workspace.removed"]) {
     try {
