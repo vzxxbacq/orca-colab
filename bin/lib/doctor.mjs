@@ -5,7 +5,9 @@ import {
   isValidAuthKey,
   readConfig,
   resolveAccount,
+  resolveAgentPolicy,
 } from "./colab-home.mjs";
+import { readOAuthAccountStatus } from "./colab-oauth.mjs";
 import {
   findExecutableOnPath,
   getTailscaleStatus,
@@ -159,6 +161,7 @@ export function runDoctor({
 
   const paths = getColabPaths(homeDir);
   const config = readConfig(homeDir);
+  const policy = resolveAgentPolicy(config);
   const configPresent = Boolean(config);
   const effectiveLoginServer =
     config?.loginServer ?? ts.detectedLoginServer ?? null;
@@ -167,6 +170,17 @@ export function runDoctor({
     existsSync(paths.privateKeyPath) && existsSync(paths.publicKeyPath);
   const defaultAcc = config ? resolveAccount(config) : null;
   const notebookUrlConfigured = Boolean(defaultAcc?.notebookUrl);
+
+  const oauthStatus = readOAuthAccountStatus(
+    defaultAcc?.label || "default",
+    homeDir,
+  );
+  const oauthOk = Boolean(oauthStatus?.authenticated);
+  const oauthCheck = {
+    ok: oauthOk,
+    account: oauthStatus?.account || defaultAcc?.label || "default",
+    email: oauthStatus?.email || null,
+  };
 
   let authKeyAgeDays = null;
   let authKeyExpired = false;
@@ -208,27 +222,45 @@ export function runDoctor({
       configCheck.action = `Tailscale auth key is ${authKeyAgeDays} days old (>= 90 days); create a new key and run 'orca-colab setup'.`;
     } else if (!configPresent || !hasAuthKey || !sshKeyPresent) {
       configCheck.action =
-        "Run 'orca-colab setup' to save your Tailscale auth key and generate ~/.orca-colab/id_ed25519.";
+        "Run 'orca-colab auth login' (recommended, Tailscale-free Direct API) or 'orca-colab setup' (Tailscale SSH).";
     }
-    actions.push(configCheck.action);
-  } else if (!notebookUrlConfigured) {
+    if (!oauthOk) {
+      actions.push(configCheck.action);
+    }
+  } else if (!notebookUrlConfigured && !oauthOk) {
     warnings.push(
       "No Drive notebook copy URL configured for default account; 'up' will use the GitHub bootstrap notebook with clipboard paste.",
     );
   }
 
+  // When Google OAuth is connected (Tailscale-free Direct API mode), remove Tailscale actions.
+  const effectiveActions = oauthOk
+    ? actions.filter((a) => !a.includes("Tailscale") && !a.includes("tailscale"))
+    : actions;
+
   const ok =
     nodeCheck.ok &&
-    tailscaleCheck.ok &&
-    sshCheck.ok &&
-    sshKeygenCheck.ok &&
     gitCheck.ok &&
-    configCheck.ok;
+    (oauthOk ||
+      (tailscaleCheck.ok &&
+        sshCheck.ok &&
+        sshKeygenCheck.ok &&
+        configCheck.ok));
+
+  const mode =
+    oauthOk && !configOk
+      ? "direct-api"
+      : configOk
+        ? "tailscale-ssh"
+        : "unconfigured";
 
   return {
     ok,
+    mode,
+    policy,
     checks: {
       node: nodeCheck,
+      oauth: oauthCheck,
       tailscale: tailscaleCheck,
       ssh: sshCheck,
       sshKeygen: sshKeygenCheck,
@@ -237,7 +269,7 @@ export function runDoctor({
       clipboard: clipboardCheck,
       config: configCheck,
     },
-    actions,
+    actions: effectiveActions,
     warnings,
   };
 }

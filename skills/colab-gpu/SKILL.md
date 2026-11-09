@@ -1,15 +1,15 @@
 ---
 name: colab-gpu
-description: Set up and use a Google Colab GPU runtime as a remote compute backend over your Tailscale tailnet. Trigger when a task needs a GPU or CUDA, model training, fine-tuning, heavy inference that exceeds local laptop resources, or when the user mentions "Colab" or "run this on a GPU".
+description: Set up and use a Google Colab GPU runtime as a remote compute backend via Google Colab Direct API (or optional Tailscale SSH). Trigger when a task needs a GPU or CUDA, model training, fine-tuning, heavy inference that exceeds local laptop resources, or when the user mentions "Colab" or "run this on a GPU".
 ---
 
 # Colab GPU Compute Backend (`colab-gpu`)
 
-Use a disposable Google Colab GPU runtime over the user's Tailscale tailnet while keeping the workspace, coding agent, and credentials on the local machine. See [`references/cli.md`](references/cli.md) for the full command and exit-code table.
+Use disposable Google Colab GPU runtimes directly from the local machine while keeping the workspace, coding agent, and credentials local. See [`references/cli.md`](references/cli.md) for the full command and exit-code table.
 
 ## 1. Resolve the CLI
 
-Prefer `orca-colab` if installed on `PATH`; otherwise run:
+Prefer `orca-colab` if installed on `PATH` (or `node bin/orca-colab.mjs` inside the repo); otherwise run:
 
 ```sh
 npx -y github:vzxxbacq/orca-colab#v0.1.0 <command> --json
@@ -17,42 +17,34 @@ npx -y github:vzxxbacq/orca-colab#v0.1.0 <command> --json
 
 Always pass `--json` and parse **stdout** only (progress and diagnostics go to `stderr` prefixed with `[colab]`).
 
-## 2. First run with the user
+## 2. Resource Discovery & User Guardrails
 
-1. Run `doctor --json`.
-2. For each failed check (`checks.<name>.ok === false`), give the user the single actionable step from `actions[]`.
-3. When `checks.config.ok === false`, ask the user to create a **reusable, ephemeral, pre-approved** Tailscale auth key tagged `tag:orca-colab` in the Tailscale admin console. Explain its scope in one sentence: *this key only lets an ephemeral tagged Colab container join your tailnet, and the node disappears automatically when the Colab runtime ends.*
-4. Run `orca-colab setup` in an interactive terminal the user can see (or ask them to run it) so they can paste the auth key, optionally save a prefilled copy of `notebooks/orca-colab-bootstrap.ipynb` in Google Drive, and paste the Drive copy's URL back.
-5. Recommended: run `orca-colab auth login` once so the user can sign in with Google in their system default browser (Passkey supported). Once authenticated, `up`, `down`, and `credits calibrate` use the Colab VS Code Direct API with **zero browser tabs**.
-6. Run `doctor --json` again and confirm `ok: true`.
+1. Run `doctor --json`:
+   - Inspect `ok`, `mode` (`"direct-api"` or `"tailscale-ssh"`), `checks.oauth`, and `policy` (`allowedGpus`, `maxConcurrentSessions`).
+   - If `ok === false`, ask the user to sign in once via `orca-colab auth login` (or click **Sign in with Google** in the Orca Colab panel). No Tailscale setup is required in Direct API mode.
+2. Run `status --json` (or `ls --json`) to discover any already-active GPU sessions (`name`, `gpu`, `rateKey`, `cuPerHour`, `reachable`, `ageSeconds`).
+3. Run `credits --json` (or `credits calibrate --json`) to check the user's approximate Compute Units balance (`estimatedBalanceCu`) and monthly budget (`budgetCu`, `estimatedBudgetUsedPercent`).
 
-## 3. Start a session
+## 3. Resource Management (Provisioning & Scaling Sessions)
 
-1. Check `credits --json` first. If `budgetCu` is set and `estimatedBudgetUsedPercent >= 100`, confirm with the user before starting a new session.
-2. Prefer **T4** unless the task specifically requires L4 or A100 VRAM/throughput.
-3. Run `up --gpu T4 --json`.
-   - If the user has signed in with `orca-colab auth login`, `up` assigns the Colab runtime directly via `colaboratory.googleapis.com/v1beta/runtimes` and runs the Tailscale + `sshd` bootstrap over `/colab/tty` with **no browser needed**.
-   - Otherwise (notebook fallback), tell the user:
-     > "A Colab tab opened. Choose a GPU runtime (`Runtime → Change runtime type`) if needed and press **Run** on the cell."
-4. Do not poll faster than the CLI does; `up --json` blocks until the new `orca-colab-*` peer joins, `sshd` responds on port 22, and `nvidia-smi` reports the GPU.
-5. Before launching long jobs, state the approximate burn rate (`estimatedCuPerHour` from `up --json`) and estimated hours of balance remaining (`estimatedHoursRemaining` from `credits --json`), explicitly noting that credit figures are **estimates**.
+1. Choose an accelerator within the user's `policy.allowedGpus` (from `doctor --json`). Prefer `T4` for inference/debugging or `L4` / `A100` for training if allowed by `policy.allowedGpus`.
+2. Provision or attach to a runtime:
+   - Reuse or start a session: `up --gpu T4 --json` (or `up --gpu auto --json` to pick the default allowed GPU).
+   - Start an additional concurrent session (up to `policy.maxConcurrentSessions` on Colab Pro+): `up --gpu L4 --new --name worker2 --json`.
+   - If `up` exits `1` with `step: "policy"`, respect the user's hardware guardrail and select from the returned `allowedGpus` list.
 
-## 4. Do the work
+## 4. Calling Compute Resources (Sync, Run, and Jobs)
 
-1. **Sync workspace**: `sync --json` pushes the current directory (honoring `.gitignore` and `.colabignore`, excluding `.git/`) to `/content/orca/<basename>` and records `remoteRoot`.
-2. **Install dependencies**: `run -- pip install -r requirements.txt`.
-3. **Run training or inference (`job` or `run`)**:
-   - **Managed tasks (recommended for training/benchmarks)**: `job submit --name "Train Model" [--sync] [--wait] --json -- python3 train.py ...` records the task in `~/.orca-colab/tasks/<id>.json` and streams live output to `~/.orca-colab/tasks/<id>.log` (visible in the Orca Colab GPU panel's **Current Task Output** console). Check status with `job ls --json`, read logs with `job logs <id> --json`, or stop with `job stop <id> --json`.
-   - **Direct SSH commands**: `run -- python3 train.py ...` or `run --detach train -- python3 train.py ...`.
-4. **Pull artifacts**: `pull <remotePath> <localPath> --json` to fetch checkpoints, metrics, or outputs back to the local workspace.
-5. **Port forwarding**: `forward <localPort>[:<remotePort>] --json` for TensorBoard (`6006`), Jupyter (`8888`), Gradio (`7860`), or vLLM (`8000`), then give the user the `http://localhost:<localPort>` URL.
+1. **Sync workspace**: `sync [--session N] --json` pushes the current directory (honoring `.gitignore` and `.colabignore`, excluding `.git/`) to `/content/orca/<basename>` and records `remoteRoot`.
+2. **Execute GPU tasks (`job submit` or `run`)**:
+   - **Managed task (`job submit`)**: `job submit [--session N] --name "Train Model" [--sync] [--wait] --json -- python3 train.py ...` streams live clean output to `~/.orca-colab/tasks/<id>.log` (visible in the Orca Colab panel's **Agent Runs & Live Output** console).
+   - **Quick command (`run`)**: `run [--session N] --json -- python3 -c "import torch; ..."` executes directly and returns `{ ok, session, exitCode, stdout, stderr }` (also recorded in the panel's Agent Runs history).
+   - **Inspect / manage tasks**: `job ls --json`, `job logs <id> --json`, `job stop <id> --json`.
+3. **Pull artifacts**: `pull [--session N] <remotePath> <localPath> --json` fetches checkpoints, weights, or metrics back to the local workspace.
 
 ## 5. Hygiene
 
-- Colab runtimes are ephemeral (≈90 min idle timeout / 12 h cap on free tier; longer on Pro). Tell the user to **keep the Colab browser tab open**.
-- Write checkpoints frequently to the synced directory and `pull` results as soon as they exist.
-- Never store persistent credentials on Colab. Pass runtime API keys with `run --env KEY=VALUE` only when the user explicitly agrees.
-- Run `down --json` as soon as GPU work is finished so the runtime is unassigned and stops burning compute units. If `down` exits with code `4` (`state: "zombie"`), instruct the user to click `Runtime → Disconnect and delete runtime` in Colab.
+- Run `down [--session N | --all] --json` as soon as GPU work is finished so the runtime is unassigned (`DELETE /v1beta/runtimes/<id>`) and stops burning compute units.
 
 ## 6. Failure table
 

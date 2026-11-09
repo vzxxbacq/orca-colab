@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, watch } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, watch } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,6 +53,40 @@ import { listTasks, readTask, readTaskLog } from "../bin/lib/task-store.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOCAL_CLI_PATH = path.resolve(__dirname, "..", "bin", "orca-colab.mjs");
+const BUNDLED_SKILL_DIR = path.resolve(__dirname, "..", "skills", "colab-gpu");
+
+export function syncBundledSkillToAgentDirs(homeDir = os.homedir()) {
+  const skillMdSrc = path.join(BUNDLED_SKILL_DIR, "SKILL.md");
+  const cliMdSrc = path.join(BUNDLED_SKILL_DIR, "references", "cli.md");
+  if (!existsSync(skillMdSrc)) {
+    return { installed: false, targets: [] };
+  }
+
+  const targetRoots = [
+    path.join(homeDir, ".agents", "skills", "colab-gpu"),
+    path.join(homeDir, ".claude", "skills", "colab-gpu"),
+    path.join(homeDir, ".gemini", "config", "skills", "colab-gpu"),
+  ];
+
+  const installedTargets = [];
+  for (const destDir of targetRoots) {
+    try {
+      const refDir = path.join(destDir, "references");
+      mkdirSync(refDir, { recursive: true });
+      copyFileSync(skillMdSrc, path.join(destDir, "SKILL.md"));
+      if (existsSync(cliMdSrc)) {
+        copyFileSync(cliMdSrc, path.join(refDir, "cli.md"));
+      }
+      installedTargets.push(destDir);
+    } catch {
+      // Non-fatal if a specific agent directory is read-only.
+    }
+  }
+  return {
+    installed: installedTargets.length > 0,
+    targets: installedTargets,
+  };
+}
 
 let cleanupFns = [];
 
@@ -144,6 +178,7 @@ function queryLiveGpuMetricsViaSsh(ip, homeDir) {
 
 export default async function activate(orca, { homeDir = os.homedir() } = {}) {
   const paths = ensureColabHome(homeDir);
+  const skillSync = syncBundledSkillToAgentDirs(homeDir);
   const gpuUtilSamplesBySession = new Map();
   const graceTimersBySession = new Map();
   const budgetNotifiedKeys = {};
@@ -318,6 +353,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
       accounts,
       doctor,
       policy: resolveAgentPolicy(config),
+      skillSync,
       provisioning: provisioningState,
       auth: authByAccount[defaultAccount] || {
         account: defaultAccount,
