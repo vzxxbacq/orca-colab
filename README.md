@@ -5,23 +5,31 @@ your coding agent to set it up with you and use it; a zero-dependency CLI does t
 shows the sessions. Your agent, code and credentials stay on your machine. Colab is a disposable GPU box
 reached over your Tailscale tailnet.
 
-Status: design complete, implementation in progress. See `docs/DESIGN.md` and `docs/TODO.md`.
+Status: Milestone 1 (`v0.1.0`) — Skill + CLI + Bootstrap notebook. See `docs/DESIGN.md` and `docs/TODO.md`.
 
-## How it will work
+## Quick start
 
-One-time, guided by the agent: `orca-colab doctor`, then `orca-colab setup` with a Tailscale auth key
-(reusable, ephemeral, tagged) and a personal copy of the bootstrap notebook saved in Drive.
+One-time setup (about 5 minutes, guided by your coding agent):
+
+```sh
+npx skills add vzxxbacq/orca-colab                      # install the colab-gpu agent skill
+npx -y github:vzxxbacq/orca-colab#v0.1.0 doctor --json  # check local prerequisites
+npx -y github:vzxxbacq/orca-colab#v0.1.0 setup          # save Tailscale auth key (0600) & generate SSH keypair
+```
 
 Per session:
 
-1. The agent runs `orca-colab up`. Your notebook copy opens in Colab.
-2. You pick a GPU runtime and press Run. The cell joins your tailnet and starts `sshd`.
-3. The CLI finds the new peer and reports the GPU. The agent then `sync`s the workspace, `run`s jobs,
-   `forward`s ports (TensorBoard, Jupyter, Gradio) and `pull`s results. `down` releases the runtime.
+1. The agent runs `orca-colab up --json` (or `npx -y github:vzxxbacq/orca-colab#v0.1.0 up --json`). Your bootstrap notebook opens in Colab (inside Orca's embedded browser when running in an Orca terminal).
+2. You pick a GPU runtime (`Runtime → Change runtime type`) and press **Run**. The cell joins your tailnet and starts `sshd`.
+3. The CLI detects the new `orca-colab-*` peer, verifies SSH, and reports the GPU and approximate CU/h burn rate. The agent then `sync`s the workspace, `run`s jobs, `forward`s ports (TensorBoard, Jupyter, Gradio) and `pull`s results. `down` triggers the in-kernel `runtime.unassign()` watcher and verifies port 22 closes.
 
 ```sh
-npx skills add vzxxbacq/orca-colab          # install the agent skill
-npx -y github:vzxxbacq/orca-colab doctor    # or: npm i -g github:vzxxbacq/orca-colab
+npx -y github:vzxxbacq/orca-colab#v0.1.0 up --json
+npx -y github:vzxxbacq/orca-colab#v0.1.0 sync --json
+npx -y github:vzxxbacq/orca-colab#v0.1.0 run -- nvidia-smi
+npx -y github:vzxxbacq/orca-colab#v0.1.0 pull /content/orca/out ./out --json
+npx -y github:vzxxbacq/orca-colab#v0.1.0 credits set 85.4 --json
+npx -y github:vzxxbacq/orca-colab#v0.1.0 down --json
 ```
 
 Requirements on your machine: Node ≥ 20, Tailscale signed in, OpenSSH, `rsync` (recommended), `git`.

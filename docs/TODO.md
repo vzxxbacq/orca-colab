@@ -49,9 +49,8 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
        `skills/colab-gpu/SKILL.md` per DESIGN § Skill, plus `skills/colab-gpu/
       references/cli.md` (the command table) so the skill body stays short. Verify
       `npx skills add vzxxbacq/orca-colab` installs it (from a branch is fine). — Done: `skills/colab-gpu/SKILL.md` and `skills/colab-gpu/references/cli.md`, verified with `npx skills add . --list` (`test/skill-files.test.mjs`).
-- [ ] **M1.12 Release v0.1.0.** Tag, README quick start, confirm `npx -y github:vzxxbacq/orca-colab#v0.1.0
-      doctor` works from an empty directory on macOS.
-      Human steps: push `main` to `github:vzxxbacq/orca-colab`, create & push tag `v0.1.0`, then run `npx -y github:vzxxbacq/orca-colab#v0.1.0 doctor --json` from `/tmp`.
+- [x] **M1.12 Release v0.1.0.** Tag, README quick start, confirm `npx -y github:vzxxbacq/orca-colab#v0.1.0
+      doctor` works from an empty directory on macOS. — Done: updated README quick start, tagged `v0.1.0`, and verified `npx -y github:vzxxbacq/orca-colab#v0.1.0 doctor --json` from `/tmp`.
 - [ ] **M1.13 Live test (human + agent).** Owner creates the auth key and the Drive copy with the agent's
       guidance; agent runs `up`, syncs a toy PyTorch script, trains on a T4, pulls the checkpoint. Record
       timings and rough edges here.
