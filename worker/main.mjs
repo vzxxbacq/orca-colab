@@ -27,7 +27,8 @@ const BRIDGE_TERMINAL_TITLE = "Colab Bridge";
 const isBridgeTitle = (title) => typeof title === "string" && title.startsWith(BRIDGE_TERMINAL_TITLE);
 const DEFAULT_CLI_COMMAND = "npx -y github:vzxxbacq/orca-colab#v0.1.0";
 // The bridge needs `watch`, which v0.1.0 lacks; point at the branch until the next tag ships.
-const DEFAULT_REMOTE_CLI_COMMAND = "npx -y github:vzxxbacq/orca-colab#remote-host-bridge";
+// --prefer-online makes npx re-resolve the branch instead of reusing a cached older checkout.
+const DEFAULT_REMOTE_CLI_COMMAND = "npx -y --prefer-online github:vzxxbacq/orca-colab#remote-host-bridge";
 const WATCH_UNSUPPORTED_RE = /unknown command: watch/;
 const ACTION_TIMEOUTS_MS = {
   authLogin: 320_000,
@@ -770,7 +771,7 @@ class TerminalBridge {
   // bridge frames, so the user may run `watch` in any terminal they like.
   async findRunningBridgeTerminal() {
     for (const t of this.workspace.terminals || []) {
-      if (!t?.id) continue;
+      if (!t?.id || this.deadTerminals.has(t.id)) continue;
       try {
         const res = await this.orca.host.call("terminal.read", { terminalId: t.id, maxLines: 400 });
         if (Array.isArray(res?.lines) && res.lines.some((l) => String(l).includes("@@OC "))) {
@@ -845,7 +846,7 @@ class TerminalBridge {
   async ensureTerminalUncached() {
     try {
       const stored = await this.orca.storage?.get?.(this.storageKey);
-      if (typeof stored === "string" && stored) {
+      if (typeof stored === "string" && stored && !this.deadTerminals.has(stored)) {
         const probe = await this.orca.host.call("terminal.read", { terminalId: stored, maxLines: 5 });
         if (probe && Array.isArray(probe.lines)) {
           this.terminalId = stored;
@@ -986,6 +987,20 @@ class TerminalBridge {
   handleFrame({ kind, payload }) {
     if (kind === "snap") {
       this.remoteProtocol = Number(payload.origin?.protocol) || 1;
+      if (
+        this.remoteProtocol < 2 &&
+        this.autoBridge &&
+        this.terminalId &&
+        (this.canCreateTerminal || this.helper?.available)
+      ) {
+        // An older watch would silently ignore batches; start a current one and let the user close this.
+        this.deadTerminals.add(this.terminalId);
+        this.lastError = "Replaced an outdated bridge terminal; you can close the older Colab Bridge terminal.";
+        this.terminalId = null;
+        this.lastFrameAt = 0;
+        this.lastCreateAt = 0;
+        return;
+      }
       this.latestSnap = payload;
       this.onSnapshot(this.decorate(payload), { stateChanged: true });
       const out = payload.activeTaskOutput;
