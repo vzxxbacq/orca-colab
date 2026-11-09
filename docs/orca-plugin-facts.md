@@ -52,6 +52,27 @@ it conflicts with the current Orca source, fix this file.
   `--orca-muted-foreground`, `--orca-border`, `--orca-secondary`, `--orca-primary`.
 - Example: `examples/plugins/hello-orca/panel.html`, `examples/plugins/hello-worker-panel/`.
 
+## Embedded browser CLI (verified on 1.4.254)
+
+- `orca browser` holds only `identity get|set`. The browser is driven by top-level commands:
+  `orca tab create --url <url> [--worktree <sel>] [--profile <id>] [--json]`, `orca tab list --json`,
+  `orca tab show|current|switch`, `orca tab profile …`, and `orca eval --expression <js> [--worktree <sel>]
+  --json` which evaluates JavaScript in the page context (same origin, user cookies). Always check
+  `orca <cmd> --help` for the exact flags of the installed build before scripting against it.
+- Panels cannot be opened from the worker's host API (there is no `panel.open`; `commands.run` only has
+  the built-in sidebar toggles and needs `workspace:write`). From a worker, spawn
+  `orca plugin open <plugin-key> --panel <id>`; the key is `vzxxbacq.colab` once installed from GitHub and
+  `local.colab` while loaded from a folder with `orca plugin dev watch`.
+- Environment Orca injects into its terminals (`src/shared/codex-shell-function.ts` and the spawn env
+  keys): `ORCA_WORKTREE_ID`, `ORCA_WORKSPACE_ID`, `ORCA_PANE_KEY`, `ORCA_TERMINAL_HANDLE`,
+  `ORCA_USER_DATA_PATH`. `ORCA_WORKSPACE_ID` set ⇒ "running inside an Orca terminal".
+- `terminal.create` takes `{ workspaceId, title?, command? }` and returns `{ terminalId }`;
+  `workspace.readContext` returns only `{ branch, displayName, terminals }`, so resolve the id with
+  `workspace.list` (`workspace:read`; rows have `id`, `kind`, `name`, `path`, `branch`, `hostId`) and match
+  by name/path, otherwise the strict params fail with `invalid_params`.
+- Declared settings need **both** `contributes.settings[]` and `{ "kind": "settings:own" }`; `settings.get`
+  returns declared defaults when unset.
+
 ## Skills
 
 - `orca skills install` installs only the skills bundled with the Orca build (via the community skills
@@ -96,7 +117,7 @@ it conflicts with the current Orca source, fix this file.
   linked worktree (`src/main/runtime/workspaces/creation/runtime-provisioned-root-adoption.ts`); it
   verifies the checkout matches the imported Git root. Sparse checkout is refused in this mode.
 - `orca-worktree` (default): Orca manages the checkout under `projectRoot` itself on the host, which needs
-  the host to be able to clone `ORCA_REPO_URL`. We use `provisioned-root` (D6).
+  the host to be able to clone `ORCA_REPO_URL`. The optional remote-workspace mode (DESIGN § Optional remote-workspace mode) would use `provisioned-root`.
 - Timeouts: per-mode wall clock from `timeoutSeconds`; on timeout or non-zero exit Orca reports
   `ephemeralVmTimeoutFailure` / `ephemeralVmExitFailure`. Processes are killed as a group
   (`taskkill /t /f` on Windows).

@@ -7,7 +7,8 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
 
 - [ ] **M1.1 Scaffold.** `package.json` (`"type": "module"`, `"bin": {"orca-colab": "bin/orca-colab.mjs"}`,
       `"engines": {"node": ">=20"}`, no dependencies), `bin/orca-colab.mjs` dispatching
-      `doctor|setup|up|status|ls|run|sync|pull|forward|down` to `bin/commands/<name>.mjs`, shared stderr
+      `doctor|setup|up|status|ls|run|sync|pull|forward|down|credits|ledger|rates` to
+      `bin/commands/<name>.mjs` (credits/ledger/rates are stubs until M1.9b), shared stderr
       logger with `[colab]` prefix, `--json` flag plumbing, exit codes per DESIGN. Exit: `node
       bin/orca-colab.mjs --help` lists commands.
 - [ ] **M1.2 State + config.** `bin/lib/colab-home.mjs` (home dir via `os.homedir()`, 0700 dir, atomic
@@ -29,15 +30,22 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
 - [ ] **M1.8 `sync`, `pull`.** rsync detection, filters for `.gitignore` and `.colabignore`, `tar | ssh`
       fallback, `remoteRoot` recorded. Test the filter/argv builder only.
 - [ ] **M1.9 `forward`, `down`.** Background `ssh -N -L` with pid in the session file, `--stop`; `down`
-      kills forwards, best-effort `runtime.unassign()`, deletes the session.
+      kills forwards, touches `/root/.orca-colab/unassign` over SSH, waits ≤30 s for port 22 to close,
+      deletes the session or marks it `zombie` (exit 4) with instructions (D10). Activity stamping
+      (`lastActivityAt` start/60 s/exit, `activePids`) added to the shared command runner here.
 - [ ] **M1.9b Credits (ledger + rates + manual calibration).** `bin/lib/rate-table.mjs` (defaults,
       `nvidia-smi` name → key mapping, user overrides), `bin/lib/credit-ledger.mjs` (append-only JSONL,
       balance projection from last calibration), `credits`, `credits set`, `credits budget`, `ledger`,
       `rates` commands; `up` records `rateKey`/`cuPerHour` and returns `estimatedCuPerHour`; `down` writes
       `session.end`. Tests: projection math with hardcoded events; GPU name mapping.
 - [ ] **M1.10 Bootstrap notebook.** Per DESIGN. Validate inputs, sshd, tailscaled userspace, `tailscale up`
-      with auth key and optional login server, GPU/IP report, separate keepalive cell. No outputs.
-- [ ] **M1.11 SKILL.md.** `skills/colab-gpu/SKILL.md` per DESIGN § Skill, plus `skills/colab-gpu/
+      with auth key and optional login server, in-kernel unassign watcher thread (D10), GPU/IP report,
+      separate keepalive cell. No outputs. Verify in M1.13 that touching the sentinel over SSH really
+      releases the runtime (watch Colab's UI); if `runtime.unassign()` needs the frontend connected,
+      document that the tab must be open for `down` to work.
+- [ ] **M1.11 SKILL.md.** Writes the pinned command `npx -y github:vzxxbacq/orca-colab#v0.1.0`; it cannot
+      run until M1.12 tags, so this item verifies only the skill install, and M1.12 verifies the command.
+       `skills/colab-gpu/SKILL.md` per DESIGN § Skill, plus `skills/colab-gpu/
       references/cli.md` (the command table) so the skill body stays short. Verify
       `npx skills add vzxxbacq/orca-colab` installs it (from a branch is fine).
 - [ ] **M1.12 Release v0.1.0.** Tag, README quick start, confirm `npx -y github:vzxxbacq/orca-colab#v0.1.0
@@ -51,8 +59,10 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
 - [ ] `orca-plugin.json` per DESIGN, `worker/main.mjs` (sessions + ledger watch, status bar text and
       tone, `colab.up`/`colab.down` via `terminal.create`), `panel/index.html` with the credit block.
       `orca plugin validate .` → 0.
-- [ ] Idle watchdog (D14): `lastActivityAt` stamping in every CLI command, worker samples GPU utilisation
-      over SSH, notify → 5-min grace → `down`; `up --keep` exemption; `settings.autoStopIdleMinutes`.
+- [ ] Idle watchdog (D14): worker reads `lastActivityAt`/`activePids`, samples GPU utilisation over SSH
+      every 5 min, requires three consecutive <5 % samples **and** no activity/live pid for
+      `autoStopIdleMinutes`, then notify → 5-min grace → `down`; `up --keep` exemption. Test the decision
+      function with hardcoded sample sequences (a 40-minute run with one low sample must not trigger).
 - [ ] Budget alerts: `monthlyBudgetCu` in config, status bar tone at 80 % / 100 %, notification once per
       threshold per month, skill rule to confirm before `up` when over budget.
 - [ ] Orca browser research (D16): confirm Google sign-in and Colab cell execution work inside Orca's
@@ -69,7 +79,7 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
 - [ ] Linux (`xdg-open`, `wl-copy`/`xclip`, `orca-ide` wording) and Windows (`clip.exe`, `start`, no
       rsync → tar fallback, ssh from OpenSSH-for-Windows).
 - [ ] Abort: SIGTERM/SIGINT during `up` leaves no partial session file; test by aborting the signal.
-- [ ] Auth-key age tracking in config (`authKeyCreatedAt`), `doctor` warns at 83 days.
+- [ ] `doctor` warns at 83 days from `authKeyCreatedAt` (written by `setup`, already in the config schema).
 - [ ] Headscale: `loginServer` end to end.
 - [ ] CI: `node --test`; manifest check against Orca's JSON schema (fetch the schema file in the workflow).
 - [ ] Add the `orca-plugin` GitHub topic once the plugin exists.
