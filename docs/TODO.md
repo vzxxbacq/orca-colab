@@ -5,12 +5,12 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
 
 ## M1 — Skill + CLI end to end on macOS
 
-- [ ] **M1.1 Scaffold.** `package.json` (`"type": "module"`, `"bin": {"orca-colab": "bin/orca-colab.mjs"}`,
+- [x] **M1.1 Scaffold.** `package.json` (`"type": "module"`, `"bin": {"orca-colab": "bin/orca-colab.mjs"}`,
       `"engines": {"node": ">=20"}`, no dependencies), `bin/orca-colab.mjs` dispatching
       `doctor|setup|up|status|ls|run|sync|pull|forward|down|credits|ledger|rates` to
       `bin/commands/<name>.mjs` (credits/ledger/rates are stubs until M1.9b), shared stderr
       logger with `[colab]` prefix, `--json` flag plumbing, exit codes per DESIGN. Exit: `node
-      bin/orca-colab.mjs --help` lists commands.
+      bin/orca-colab.mjs --help` lists commands. — Done: CLI entry, 13 command handlers, `--json` and `[colab]` stderr plumbing (`test/cli-scaffold.test.mjs`).
 - [ ] **M1.2 State + config.** `bin/lib/colab-home.mjs` (home dir via `os.homedir()`, 0700 dir, atomic
       JSON write tmp+rename, 0600 for config; config shape per DESIGN with `accounts: [{ label: "default",
       notebookUrl? }]` and `defaultAccount: "default"` from day one), `bin/lib/session-store.mjs` (list/read/write/delete

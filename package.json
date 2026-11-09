@@ -1,0 +1,20 @@
+{
+  "name": "orca-colab",
+  "version": "0.1.0",
+  "description": "Use a Google Colab GPU runtime as a compute backend from your local Orca workspace and agents.",
+  "type": "module",
+  "bin": {
+    "orca-colab": "bin/orca-colab.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vzxxbacq/orca-colab.git"
+  },
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test"
+  }
+}
