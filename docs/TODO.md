@@ -55,9 +55,12 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
       over SSH, notify → 5-min grace → `down`; `up --keep` exemption; `settings.autoStopIdleMinutes`.
 - [ ] Budget alerts: `monthlyBudgetCu` in config, status bar tone at 80 % / 100 %, notification once per
       threshold per month, skill rule to confirm before `up` when over budget.
-- [ ] Browser calibration: `credits calibrate --browser` using `orca browser` (orca-cli skill) to open
-      colab.research.google.com and read the compute-units text; panel Calibrate button. Must degrade to
-      "could not read, enter manually" without failing anything else.
+- [ ] Browser calibration, step 1 (research): open Colab in Orca's browser with DevTools network
+      capture, open the Resources pane, record the request that returns compute units (URL, method,
+      headers, response shape). Write it to `docs/colab-internal-endpoints.md` with the capture date.
+- [ ] Browser calibration, step 2: `credits calibrate --browser` using `orca browser` to run a
+      same-origin page-context `fetch` of that endpoint and parse the JSON; fallback to pane text;
+      fallback to a clear "enter manually" message. Panel Calibrate button. Never fail `up`/`down` on it.
 - [ ] Multiple accounts (D15): `accounts[]` in config, `up --account`, per-account balance in panel.
 - [ ] Linux (`xdg-open`, `wl-copy`/`xclip`, `orca-ide` wording) and Windows (`clip.exe`, `start`, no
       rsync → tar fallback, ssh from OpenSSH-for-Windows).

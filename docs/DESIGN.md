@@ -33,7 +33,7 @@ Three deliverables, one repo:
 | D10 | **`down` = `google.colab.runtime.unassign()` over SSH, best effort, then local cleanup.** No suspend/resume: a dead runtime is a dead runtime. | Colab cannot pause. Frees quota promptly without extra credentials. |
 | D11 | **The Orca plugin is thin on provisioning, thick on stewardship.** It never provisions; it reads `~/.orca-colab/`, launches the CLI in an Orca terminal, and owns the always-on parts: credit ledger, idle watchdog, budget alerts. | Provisioning needs the user's shell, clipboard and browser. Watching sessions and credits needs a process that outlives any one CLI call; the worker is kept alive by its status bar item. |
 | D12 | **Credits are tracked locally in a ledger, not read from an API.** Each session records GPU type, start, end and a per-hour rate from an editable rate table; the user enters the balance shown in Colab's Resources pane, and the plugin counts down from there. | Colab exposes no compute-unit API, not even inside the VM. A ledger with periodic calibration is the only honest option; the plugin always labels numbers as estimates and shows when the balance was last calibrated. |
-| D13 | **Calibration can be automated through Orca's embedded browser** (`orca browser`, user's own Google session) by reading the Resources pane text. Optional, M2; manual entry stays the default. | Avoids OAuth and scraping from the VM; uses a session the user already has. Fragile to UI changes, so it is a convenience over the ledger, never the source of truth. |
+| D13 | **Calibration can be automated through Orca's embedded browser** (`orca browser`, the user's own persistent Google session): a same-origin `fetch` in page context against the internal endpoint the Resources pane itself calls, falling back to the pane's text, falling back to "enter it manually". Optional, M2; manual entry stays the source of truth. No headless browser, no Google OAuth token: Google blocks sign-in from automated browsers, and a headless stack would add a heavy dependency for a session the user already has in Orca. | Real Chromium with a login the user did once; we store no credential. Structured JSON from the internal endpoint is far more stable than UI copy, but it is still undocumented, so every failure degrades to manual. Precise, API-backed numbers exist only on Colab Enterprise via GCP Billing (M4). |
 | D14 | **Idle watchdog in the worker.** When a session shows no CLI activity (`run`/`sync`/`pull`/`forward` traffic) and GPU utilisation under 5 % for `autoStopIdleMinutes` (default 20), the worker notifies, then runs `down` after a 5-minute grace unless the user cancels. Sessions started with `up --keep` are exempt. | Forgotten runtimes are where Colab credits actually go. Paid GPUs burn units even when idle. |
 | D15 | **Several Google accounts = several credit pools.** Config holds `accounts: [{ label, notebookUrl, balance, calibratedAt }]`; `up --account` picks one; the panel shows each pool. | Users with Pro on one account and pay-as-you-go on another need to choose where a session's cost lands. |
 
@@ -80,8 +80,10 @@ Mechanics:
 - **Pre-flight estimate**: `up --json` returns `estimatedCuPerHour`; the skill makes the agent state
   "about N CU/h, ~H hours of balance left" before long jobs and prefer T4 unless the task needs more.
 - **Calibration sources**: `credits set <balance> [--account]` (manual, from Colab's Resources pane);
-  M2 `credits calibrate --browser` opens colab.research.google.com in Orca's embedded browser and reads
-  the "compute units available" text; the panel's Calibrate button runs the same.
+  M2 `credits calibrate --browser` opens colab.research.google.com in Orca's embedded browser, calls the
+  Resources pane's internal endpoint from page context (same origin, user cookies), parses the JSON, and
+  only then falls back to the pane text; the panel's Calibrate button runs the same. The user signs in
+  to Google inside Orca's browser once; nothing is stored by this plugin.
 - **Idle watchdog** (D14): the CLI stamps `lastActivityAt` in the session file on every command; the
   worker samples `nvidia-smi --query-gpu=utilization.gpu` over SSH every 5 min; both idle → notify → `down`.
 
