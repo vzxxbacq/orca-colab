@@ -419,7 +419,12 @@ class TerminalBridge {
       manualCommand: this.manualCommand,
       transport: this.transport,
       helper: this.helper
-        ? { available: this.helper.available, error: this.lastHelperError, environment: this.environmentName }
+        ? {
+            available: this.helper.available,
+            error: this.lastHelperError,
+            environment: this.environmentName,
+            attempts: this.environmentAttempts || [],
+          }
         : { available: false, error: "no helper" },
     };
   }
@@ -443,8 +448,10 @@ class TerminalBridge {
       return this.environment;
     }
     const selectors = this.workspaceSelectors();
+    this.environmentAttempts = [];
     for (const selector of selectors) {
       const local = await this.helper.showWorktree(selector);
+      this.environmentAttempts.push({ environment: null, selector, ok: local.ok, error: local.error, hostId: local.data?.hostId || null });
       if (local.ok) {
         this.environment = null;
         this.environmentResolved = true;
@@ -460,6 +467,7 @@ class TerminalBridge {
       const envSelector = env.id || env.name;
       for (const selector of selectors) {
         const shown = await this.helper.showWorktree(selector, { environment: envSelector });
+        this.environmentAttempts.push({ environment: envSelector, selector, ok: shown.ok, error: shown.error, hostId: shown.data?.hostId || null });
         if (shown.ok) {
           this.environment = envSelector;
           this.environmentResolved = true;
@@ -468,7 +476,8 @@ class TerminalBridge {
         }
       }
     }
-    this.lastHelperError = `no local worktree or saved environment (${envs.data.length} checked) has a workspace named "${this.workspace.workspaceName}"`;
+    const lastErr = this.environmentAttempts.filter((a) => a.environment && a.error).at(-1)?.error || "";
+    this.lastHelperError = `no local worktree or saved environment (${envs.data.length} checked) has a workspace named "${this.workspace.workspaceName}"${lastErr ? `; last: ${lastErr}` : ""}`;
     return null;
   }
 
@@ -1058,7 +1067,11 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
       activeBridge: activeBridge?.kind || null,
       bridge: activeBridge?.describe?.() || null,
       orcaCli: remoteHelper.available
-        ? { bin: remoteHelper.orcaBin, activeWorktree: await remoteHelper.activeWorktree() }
+        ? {
+            bin: remoteHelper.orcaBin,
+            activeWorktree: await remoteHelper.activeWorktree(),
+            environments: await remoteHelper.listEnvironments(),
+          }
         : { bin: null },
       hostHas: {
         terminalSend: await hostHas(orca, "terminal.send"),
