@@ -1,68 +1,36 @@
 import { spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, watch } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, watch } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { run as runCreditsCommand } from "../bin/commands/credits.mjs";
-import { run as runDownCommand } from "../bin/commands/down.mjs";
-import { stopTaskById, submitTask } from "../bin/commands/job.mjs";
-import { run as runSetupCommand } from "../bin/commands/setup.mjs";
-import { run as runUpCommand } from "../bin/commands/up.mjs";
-import {
-  getConsumptionUserInfo,
-  getRuntime,
-  getRuntimeResources,
-} from "../bin/lib/colab-api-client.mjs";
+import { FrameAssembler } from "../bin/lib/bridge-frames.mjs";
+import { getRuntime } from "../bin/lib/colab-api-client.mjs";
 import { locateOrcaBinary } from "../bin/lib/colab-browser-automation.mjs";
-import {
-  ensureColabHome,
-  getColabPaths,
-  listKnownAccountLabels,
-  readConfig,
-  resolveAccount,
-  resolveAgentPolicy,
-  setDefaultAccount,
-  writeConfig,
-} from "../bin/lib/colab-home.mjs";
-import {
-  getValidAccessToken,
-  listOAuthAccounts,
-  readOAuthAccountStatus,
-  removeOAuthCredentials,
-  resolveOAuthAccountKey,
-  runLoopbackOAuthFlow,
-} from "../bin/lib/colab-oauth.mjs";
-import {
-  projectAccountCredits,
-  readLedgerEvents,
-  recordBudgetSetEvent,
-  recordCalibrateEvent,
-} from "../bin/lib/credit-ledger.mjs";
-import { runDoctor } from "../bin/lib/doctor.mjs";
+import { ensureColabHome } from "../bin/lib/colab-home.mjs";
+import { getValidAccessToken, readOAuthAccountStatus } from "../bin/lib/colab-oauth.mjs";
+import { DashboardSnapshotBuilder, pickActiveTask } from "../bin/lib/dashboard-snapshot.mjs";
 import {
   DEFAULT_AUTO_STOP_IDLE_MINUTES,
   evaluateBudgetAlert,
   evaluateSessionIdleState,
   GRACE_PERIOD_MINUTES,
 } from "../bin/lib/idle-watchdog.mjs";
-import { readRateTable } from "../bin/lib/rate-table.mjs";
-import {
-  listSessions,
-  readSession,
-  writeSession,
-} from "../bin/lib/session-store.mjs";
-import { probeSshBannerOnce } from "../bin/lib/ssh-banner-probe.mjs";
-import { execSshCapture } from "../bin/lib/ssh-exec.mjs";
-import {
-  clearFinishedTasks,
-  listTasks,
-  readTask,
-  readTaskLog,
-} from "../bin/lib/task-store.mjs";
+import { createPanelActions, PANEL_ACTION_NAMES } from "../bin/lib/panel-actions.mjs";
+import { listSessions, readSession, writeSession } from "../bin/lib/session-store.mjs";
+import { listTasks, readTaskLog } from "../bin/lib/task-store.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOCAL_CLI_PATH = path.resolve(__dirname, "..", "bin", "orca-colab.mjs");
 const BUNDLED_SKILL_DIR = path.resolve(__dirname, "..", "skills", "colab-gpu");
+const BRIDGE_TERMINAL_TITLE = "Colab Bridge";
+const DEFAULT_CLI_COMMAND = "npx -y github:vzxxbacq/orca-colab#v0.1.0";
+const ACTION_TIMEOUTS_MS = {
+  authLogin: 320_000,
+  startSession: 15 * 60_000,
+  stopSession: 90_000,
+  submitTask: 120_000,
+  calibrateCredits: 60_000,
+};
 
 export function syncBundledSkillToAgentDirs(homeDir = os.homedir()) {
   const skillMdSrc = path.join(BUNDLED_SKILL_DIR, "SKILL.md");
@@ -99,339 +67,628 @@ export function syncBundledSkillToAgentDirs(homeDir = os.homedir()) {
 
 let cleanupFns = [];
 
+function workspaceRows(listRes) {
+  return Array.isArray(listRes) ? listRes : Array.isArray(listRes?.workspaces) ? listRes.workspaces : [];
+}
+
+// readContext has no id, so the focused workspace is matched against the list by name and branch.
 async function resolveWorkspaceInfo(orca) {
-  let workspaceId = null;
-  let workspacePath = null;
   try {
     const [ctx, listRes] = await Promise.all([
       orca.host.call("workspace.readContext", {}).catch(() => null),
       orca.host.call("workspace.list", {}).catch(() => null),
     ]);
-    const rows = Array.isArray(listRes)
-      ? listRes
-      : Array.isArray(listRes?.workspaces)
-        ? listRes.workspaces
-        : [];
-    if (rows.length > 0) {
-      const matched =
-        rows.find(
-          (w) =>
-            (ctx?.displayName && w.name === ctx.displayName) ||
-            (ctx?.branch && w.branch === ctx.branch),
-        ) || rows[0];
-      workspaceId = matched?.id || null;
-      workspacePath = matched?.path || null;
+    const rows = workspaceRows(listRes);
+    if (rows.length === 0) {
+      return { workspaceId: null, workspacePath: null, workspaceName: null, hostId: null, terminals: [] };
     }
+    const matched =
+      rows.find(
+        (w) =>
+          (ctx?.displayName && w.name === ctx.displayName) ||
+          (ctx?.branch && w.branch === ctx.branch),
+      ) || rows[0];
+    return {
+      workspaceId: matched?.id || null,
+      workspacePath: matched?.path || null,
+      workspaceName: matched?.name || null,
+      hostId: matched?.hostId || null,
+      terminals: Array.isArray(ctx?.terminals) ? ctx.terminals : [],
+    };
   } catch {
-    // Ignore workspace resolution errors when no workspace is open.
+    return { workspaceId: null, workspacePath: null, workspaceName: null, hostId: null, terminals: [] };
   }
-  return { workspaceId, workspacePath };
 }
 
-async function resolveCliCommand(orca) {
-  if (existsSync(LOCAL_CLI_PATH)) {
+async function readSetting(orca, key, fallback) {
+  try {
+    const value = await orca.settings.get(key);
+    return value === undefined || value === null || value === "" ? fallback : value;
+  } catch {
+    return fallback;
+  }
+}
+
+async function resolveCliCommand(orca, { remote = false } = {}) {
+  if (remote) {
+    const remoteConfigured = await readSetting(orca, "remoteCliCommand", null);
+    if (typeof remoteConfigured === "string" && remoteConfigured.trim()) {
+      return remoteConfigured.trim();
+    }
+  } else if (existsSync(LOCAL_CLI_PATH)) {
     return `node ${JSON.stringify(LOCAL_CLI_PATH)}`;
   }
-  try {
-    const configured = await orca.settings.get("cliCommand");
-    if (typeof configured === "string" && configured.trim()) {
-      return configured.trim();
-    }
-  } catch {
-    // Use default.
-  }
-  return "npx -y github:vzxxbacq/orca-colab#v0.1.0";
+  const configured = await readSetting(orca, "cliCommand", null);
+  return typeof configured === "string" && configured.trim() ? configured.trim() : DEFAULT_CLI_COMMAND;
 }
 
-async function openTerminalWithCommand(orca, { title, command }) {
-  const { workspaceId } = await resolveWorkspaceInfo(orca);
-  if (!workspaceId) {
-    throw new Error("No active Orca workspace found to open a terminal.");
-  }
-  return await orca.host.call("terminal.create", {
-    workspaceId,
-    title: title || "Colab GPU",
-    command,
-  });
+function taskStreamFingerprint(snap) {
+  const out = snap?.activeTaskOutput;
+  return out ? `${out.taskId}:${out.status}:${out.exitCode}:${out.totalBytes}` : "";
 }
 
-function queryLiveGpuMetricsViaSsh(ip, homeDir) {
-  try {
-    const res = execSshCapture({
-      ip,
-      remoteCommand:
-        "nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits",
+function listFingerprint(snap) {
+  const tasks = (snap?.tasks || []).map((t) => `${t.id}:${t.status}:${t.exitCode}:${t.finishedAt || ""}`);
+  const sessions = (snap?.sessions || []).map((s) => `${s.name}:${s.state}:${s.keep ? 1 : 0}`);
+  return `${tasks.join("|")}#${sessions.join("|")}`;
+}
+
+// Reads ~/.orca-colab on this machine; used when the focused workspace is local.
+class LocalBridge {
+  constructor({ orca, homeDir, env, skillSync, notifyUser, onSnapshot }) {
+    this.kind = "local";
+    this.orca = orca;
+    this.homeDir = homeDir;
+    this.env = env;
+    this.notifyUser = notifyUser;
+    this.onSnapshot = onSnapshot;
+    this.builder = new DashboardSnapshotBuilder({
       homeDir,
-      timeoutMs: 4000,
+      env,
+      skillSync,
+      origin: { kind: "local", host: os.hostname(), platform: process.platform },
     });
-    if (res.exitCode !== 0 || !res.stdout.trim()) {
+    this.actions = createPanelActions({ homeDir, env });
+    this.provisioningState = { active: false, message: null, error: null };
+    this.selectedTaskId = null;
+    this.lastListFp = "";
+    this.lastStreamFp = "";
+    this.lastNewestTaskId = null;
+    this.graceTimers = new Map();
+    this.timers = [];
+    this.watchers = [];
+  }
+
+  describe() {
+    return { connected: true };
+  }
+
+  selectTask(taskId) {
+    this.selectedTaskId = taskId || null;
+  }
+
+  setLive() {}
+
+  async snapshot({ includeLiveMetrics = false } = {}) {
+    const snap = await this.builder.build({
+      includeLiveMetrics,
+      selectedTaskId: this.selectedTaskId,
+      provisioningState: this.provisioningState,
+    });
+    return { ...snap, bridge: this.describe() };
+  }
+
+  async call(action, input, hooks = {}) {
+    const fn = this.actions[action];
+    if (typeof fn !== "function") {
+      throw new Error(`unknown action: ${action}`);
+    }
+    const result = await fn(input, hooks);
+    if (action === "authLogin" || action === "authSwitch" || action === "authLogout") {
+      this.builder.invalidateDoctor();
+    }
+    if (action === "submitTask" && result?.task?.id) {
+      this.selectedTaskId = result.task.id;
+    }
+    return result;
+  }
+
+  start(paths) {
+    for (const dirPath of [paths.baseDir, paths.sessionsDir, paths.tasksDir]) {
+      try {
+        const watcher = watch(dirPath, () => void this.broadcastIfChanged());
+        this.watchers.push(watcher);
+      } catch {
+        // Directory not ready yet; the interval below still polls.
+      }
+    }
+    this.timers.push(setInterval(() => void this.broadcastIfChanged(), 1500));
+    this.timers.push(setInterval(() => void this.watchdogTick(), 5 * 60_000));
+  }
+
+  stop() {
+    for (const t of this.timers) clearInterval(t);
+    for (const w of this.watchers) {
+      try {
+        w.close();
+      } catch {
+        // Already closed.
+      }
+    }
+    for (const t of this.graceTimers.values()) clearTimeout(t);
+    this.timers = [];
+    this.watchers = [];
+  }
+
+  async broadcastIfChanged() {
+    try {
+      const tasks = listTasks(this.homeDir);
+      const newestId = tasks[0]?.id || null;
+      if (newestId && newestId !== this.lastNewestTaskId) {
+        if (this.lastNewestTaskId !== null) {
+          this.selectedTaskId = newestId;
+        }
+        this.lastNewestTaskId = newestId;
+      }
+      const target = pickActiveTask(tasks, this.selectedTaskId);
+      const logSnap = target ? readTaskLog(target.id, this.homeDir, { tailLines: 250 }) : null;
+      const streamFp = target ? `${target.id}:${target.status}:${target.exitCode}:${logSnap.totalBytes}` : "";
+      const listFp = listFingerprint({ tasks, sessions: listSessions(this.homeDir) });
+      const changed = listFp !== this.lastListFp;
+      this.lastListFp = listFp;
+      if (changed) {
+        const snap = await this.snapshot();
+        this.onSnapshot(snap, { stateChanged: true });
+      }
+      if (target && streamFp !== this.lastStreamFp) {
+        this.lastStreamFp = streamFp;
+        this.onSnapshot(null, {
+          taskOutput: {
+            task: target,
+            output: logSnap.text,
+            totalBytes: logSnap.totalBytes,
+            truncated: logSnap.truncated,
+          },
+        });
+      }
+    } catch {
+      // Transient read error; the next tick retries.
+    }
+  }
+
+  async watchdogTick() {
+    const { homeDir } = this;
+    const autoStopIdleMinutes = Number(
+      await readSetting(this.orca, "autoStopIdleMinutes", DEFAULT_AUTO_STOP_IDLE_MINUTES),
+    );
+    const sessions = listSessions(homeDir).filter((s) => s.state !== "zombie");
+    const tasks = listTasks(homeDir);
+    for (const s of sessions) {
+      if (s.colabRuntime?.id) {
+        try {
+          const accessToken = await getValidAccessToken({ account: s.account || "default", homeDir });
+          const refreshed = accessToken
+            ? await getRuntime({ runtimeId: s.colabRuntime.id, accessToken })
+            : null;
+          if (refreshed?.connectionInfo?.token) {
+            writeSession(
+              {
+                ...s,
+                colabRuntime: {
+                  ...s.colabRuntime,
+                  token: refreshed.connectionInfo.token,
+                  tokenExpiry: refreshed.connectionInfo.expireTime || s.colabRuntime.tokenExpiry,
+                },
+              },
+              homeDir,
+            );
+          }
+        } catch {
+          // Best effort; the next tick retries.
+        }
+      }
+      if (s.ip) {
+        const metrics = this.builder.liveMetricsBySession.get(s.name);
+        if (metrics && typeof metrics.gpuUtilizationPercent === "number") {
+          this.builder.recordGpuSample(s.name, metrics.gpuUtilizationPercent);
+        }
+      }
+      const runningCount = tasks.filter((t) => t.sessionName === s.name && t.status === "running").length;
+      const decision = evaluateSessionIdleState({
+        session: s,
+        gpuSamples: this.builder.gpuUtilSamplesBySession.get(s.name) || [],
+        runningTasksCount: runningCount,
+        autoStopIdleMinutes,
+        nowMs: Date.now(),
+      });
+      if (decision.isIdle && !this.graceTimers.has(s.name)) {
+        await this.notifyUser(
+          `Colab session ${s.name} has been idle for ${Math.round(decision.idleMinutes)} min (<5% GPU). Stopping in ${GRACE_PERIOD_MINUTES} min unless used or marked Keep.`,
+          "warning",
+        );
+        const timer = setTimeout(async () => {
+          this.graceTimers.delete(s.name);
+          const latest = readSession(s.name, homeDir);
+          const latestRunning = listTasks(homeDir).filter(
+            (t) => t.sessionName === s.name && t.status === "running",
+          ).length;
+          const recheck = evaluateSessionIdleState({
+            session: latest,
+            gpuSamples: this.builder.gpuUtilSamplesBySession.get(s.name) || [],
+            runningTasksCount: latestRunning,
+            autoStopIdleMinutes,
+            nowMs: Date.now(),
+          });
+          if (recheck.isIdle) {
+            await this.actions.stopSession({ session: s.name, cause: "idle-watchdog" }).catch(() => {});
+            await this.notifyUser(`Auto-stopped idle Colab session ${s.name} to save compute units.`, "info");
+            this.onSnapshot(await this.snapshot(), { stateChanged: true });
+          }
+        }, GRACE_PERIOD_MINUTES * 60_000);
+        this.graceTimers.set(s.name, timer);
+      } else if (!decision.isIdle && this.graceTimers.has(s.name)) {
+        clearTimeout(this.graceTimers.get(s.name));
+        this.graceTimers.delete(s.name);
+      }
+    }
+  }
+}
+
+// Drives `orca-colab watch` inside one terminal of a workspace on a remote Orca server. The terminal is
+// the only channel Orca gives a desktop plugin to a remote host, so state arrives as frames read back
+// from the screen and actions are typed in as control lines.
+class TerminalBridge {
+  constructor({ orca, workspace, remoteCli, autoStopIdleMinutes, onSnapshot, onEvent }) {
+    this.kind = "remote";
+    this.orca = orca;
+    this.workspace = workspace;
+    this.remoteCli = remoteCli;
+    this.autoStopIdleMinutes = autoStopIdleMinutes;
+    this.onSnapshot = onSnapshot;
+    this.onEvent = onEvent;
+    this.terminalId = null;
+    this.assembler = new FrameAssembler();
+    this.pending = new Map();
+    this.latestSnap = null;
+    this.lastFrameAt = 0;
+    this.lastCreateAt = 0;
+    this.lastError = null;
+    this.reqCounter = 0;
+    this.timers = [];
+    this.lastStreamFp = "";
+    this.storageKey = `bridgeTerminal:${workspace.workspaceId}`;
+  }
+
+  describe() {
+    return {
+      connected: Boolean(this.terminalId) && Date.now() - this.lastFrameAt < 45_000,
+      terminalId: this.terminalId,
+      lastFrameAt: this.lastFrameAt || null,
+      error: this.lastError,
+      remoteCli: this.remoteCli,
+    };
+  }
+
+  start() {
+    this.timers.push(setInterval(() => void this.poll(), 1500));
+    void this.poll();
+  }
+
+  stop() {
+    for (const t of this.timers) clearInterval(t);
+    this.timers = [];
+    for (const p of this.pending.values()) {
+      clearTimeout(p.timer);
+      p.reject(new Error("Bridge stopped."));
+    }
+    this.pending.clear();
+  }
+
+  async rememberTerminal(id) {
+    this.terminalId = id;
+    try {
+      await this.orca.storage?.set?.(this.storageKey, id);
+    } catch {
+      // Storage is a convenience to survive worker restarts.
+    }
+  }
+
+  async ensureTerminal() {
+    if (this.terminalId) {
+      return this.terminalId;
+    }
+    try {
+      const stored = await this.orca.storage?.get?.(this.storageKey);
+      if (typeof stored === "string" && stored) {
+        const probe = await this.orca.host.call("terminal.read", { terminalId: stored, maxLines: 5 });
+        if (probe && Array.isArray(probe.lines)) {
+          this.terminalId = stored;
+          this.sendRaw("snap");
+          return stored;
+        }
+      }
+    } catch {
+      // Stored terminal is gone; fall through to create a new one.
+    }
+    const existing = (this.workspace.terminals || []).find((t) => t.title === BRIDGE_TERMINAL_TITLE);
+    if (existing?.id) {
+      await this.rememberTerminal(existing.id);
+      this.sendRaw("snap");
+      return existing.id;
+    }
+    if (Date.now() - this.lastCreateAt < 30_000) {
       return null;
     }
-    const parts = res.stdout
-      .trim()
-      .split("\n")[0]
-      .split(",")
-      .map((s) => Number(s.trim()));
-    if (parts.length >= 3 && parts.every((n) => Number.isFinite(n))) {
-      return {
-        gpuUtilizationPercent: parts[0],
-        vramUsedMiB: parts[1],
-        vramTotalMiB: parts[2],
-      };
+    this.lastCreateAt = Date.now();
+    const res = await this.orca.host.call("terminal.create", {
+      workspaceId: this.workspace.workspaceId,
+      title: BRIDGE_TERMINAL_TITLE,
+      command: `${this.remoteCli} watch --auto-stop-idle-minutes ${this.autoStopIdleMinutes}`,
+    });
+    if (!res?.terminalId) {
+      throw new Error("terminal.create returned no terminalId");
     }
-  } catch {
-    // Ignore transient SSH probe failure.
+    await this.rememberTerminal(res.terminalId);
+    return res.terminalId;
   }
-  return null;
+
+  sendRaw(text) {
+    if (!this.terminalId) {
+      return;
+    }
+    this.orca.host
+      .call("terminal.send", { terminalId: this.terminalId, text, enter: true })
+      .catch((err) => {
+        this.lastError = `terminal.send: ${err?.message || err}`;
+      });
+  }
+
+  async poll() {
+    try {
+      const terminalId = await this.ensureTerminal();
+      if (!terminalId) {
+        return;
+      }
+      const res = await this.orca.host.call("terminal.read", { terminalId, maxLines: 2000 });
+      if (!res || !Array.isArray(res.lines)) {
+        throw new Error("terminal.read returned no lines");
+      }
+      for (const frame of this.assembler.ingest(res.lines.join("\n"))) {
+        this.lastFrameAt = Date.now();
+        this.lastError = null;
+        this.handleFrame(frame);
+      }
+      if (this.lastFrameAt && Date.now() - this.lastFrameAt > 90_000) {
+        // The watch process died or the terminal was closed; start over with a fresh one.
+        this.terminalId = null;
+        this.lastFrameAt = 0;
+      }
+    } catch (err) {
+      this.lastError = err?.message || String(err);
+      this.terminalId = null;
+    }
+  }
+
+  handleFrame({ kind, payload }) {
+    if (kind === "snap") {
+      this.latestSnap = payload;
+      this.onSnapshot(this.decorate(payload), { stateChanged: true });
+      const out = payload.activeTaskOutput;
+      const fp = taskStreamFingerprint(payload);
+      if (out && fp !== this.lastStreamFp) {
+        this.lastStreamFp = fp;
+        const task = (payload.tasks || []).find((t) => t.id === out.taskId) || { id: out.taskId, status: out.status };
+        this.onSnapshot(null, {
+          taskOutput: { task, output: out.output, totalBytes: out.totalBytes, truncated: out.truncated },
+        });
+      }
+      return;
+    }
+    if (kind === "res") {
+      const entry = this.pending.get(payload.reqId);
+      if (!entry) {
+        return;
+      }
+      this.pending.delete(payload.reqId);
+      clearTimeout(entry.timer);
+      if (payload.ok) {
+        entry.resolve(payload.result ?? {});
+      } else {
+        entry.reject(new Error(payload.error || "remote action failed"));
+      }
+      return;
+    }
+    if (kind === "evt") {
+      this.onEvent(payload.name, payload.payload, this);
+    }
+  }
+
+  decorate(snap) {
+    return {
+      ...snap,
+      origin: {
+        ...(snap.origin || { kind: "remote" }),
+        hostId: this.workspace.hostId,
+        workspaceName: this.workspace.workspaceName,
+      },
+      bridge: this.describe(),
+    };
+  }
+
+  selectTask(taskId) {
+    this.sendRaw(`select ${taskId || ""}`.trim());
+  }
+
+  setLive(on) {
+    this.sendRaw(`live ${on ? 1 : 0}`);
+  }
+
+  async snapshot() {
+    if (this.latestSnap) {
+      return this.decorate(this.latestSnap);
+    }
+    await this.ensureTerminal().catch(() => null);
+    const deadline = Date.now() + 12_000;
+    while (!this.latestSnap && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 400));
+      await this.poll();
+    }
+    if (this.latestSnap) {
+      return this.decorate(this.latestSnap);
+    }
+    return {
+      origin: { kind: "remote", hostId: this.workspace.hostId, workspaceName: this.workspace.workspaceName },
+      bridge: this.describe(),
+      doctor: { ok: false, checks: {}, actions: [], warnings: [] },
+      auth: { authenticated: false },
+      authByAccount: {},
+      accounts: [],
+      oauthAccounts: [],
+      sessions: [],
+      tasks: [],
+      credits: null,
+      creditsByAccount: {},
+      provisioning: { active: false, message: null, error: null },
+      policy: { allowedGpus: [], maxConcurrentSessions: 1 },
+      activeTaskOutput: null,
+      rates: null,
+    };
+  }
+
+  async call(action, input, hooks = {}) {
+    const terminalId = await this.ensureTerminal();
+    if (!terminalId) {
+      throw new Error(this.lastError || "Colab bridge terminal is not available yet; try again in a moment.");
+    }
+    this.reqCounter += 1;
+    const reqId = `r${Date.now().toString(36)}${this.reqCounter}`;
+    const b64 = Buffer.from(JSON.stringify(input ?? {}), "utf8").toString("base64");
+    const timeoutMs = hooks.timeoutMs || ACTION_TIMEOUTS_MS[action] || 45_000;
+    const promise = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(reqId);
+        reject(new Error(`Timed out waiting for the remote ${action} to finish.`));
+      }, timeoutMs);
+      this.pending.set(reqId, { resolve, reject, timer, hooks });
+    });
+    this.sendRaw(`call ${reqId} ${action} ${b64}`);
+    return promise;
+  }
 }
 
 export default async function activate(orca, { homeDir = os.homedir() } = {}) {
   const paths = ensureColabHome(homeDir);
   const skillSync = syncBundledSkillToAgentDirs(homeDir);
-  const gpuUtilSamplesBySession = new Map();
-  const liveMetricsBySession = new Map();
-  const graceTimersBySession = new Map();
   const budgetNotifiedKeys = {};
-  let selectedTaskId = null;
-  let lastStreamedSnapshot = "";
-  let lastTasksListFingerprint = "";
-  let lastSessionsFingerprint = "";
-  let lastNewestTaskId = null;
-  let cachedDoctor = null;
-  let lastDoctorAt = 0;
-  let provisioningState = { active: false, message: null, error: null };
+  const remoteBridges = new Map();
+  let activeBridge = null;
+  let lastResolveAt = 0;
+  let resolvedWorkspace = null;
 
   const notifyUser = async (message, tone = "info") => {
     try {
       if (await orca.host.has("notifications.show")) {
-        await orca.host.call("notifications.show", {
-          title: "Google Colab GPU",
-          message,
-          tone,
-        });
+        await orca.host.call("notifications.show", { title: "Google Colab GPU", message, tone });
       }
     } catch {
-      // Ignore notification error.
+      // Notifications are optional.
     }
   };
 
-  const buildDashboardSnapshot = async ({ includeLiveMetrics = false } = {}) => {
-    const config = readConfig(homeDir);
-    const configuredDefault = resolveAccount(config).label;
-    const accounts = listKnownAccountLabels(homeDir, config);
-    const oauthAccounts = listOAuthAccounts(homeDir);
-    const defaultAccount =
-      oauthAccounts.some((a) => a.account === configuredDefault) ||
-      oauthAccounts.length === 0
-        ? configuredDefault
-        : oauthAccounts[0].account;
+  const postFromBridge = (bridge) => (snap, { stateChanged = false, taskOutput = null } = {}) => {
+    if (bridge !== activeBridge) {
+      return;
+    }
+    if (stateChanged && snap) {
+      orca.panels.post("colab.stateChanged", snap);
+      void refreshStatusBar(snap);
+    }
+    if (taskOutput) {
+      orca.panels.post("colab.taskOutput", taskOutput);
+    }
+  };
 
-    const sessions = listSessions(homeDir);
-    const tasks = listTasks(homeDir);
-    const events = readLedgerEvents(homeDir);
-    const rates = readRateTable(homeDir);
+  const onRemoteEvent = (name, payload, bridge) => {
+    if (bridge !== activeBridge) {
+      return;
+    }
+    if (name === "oauthUrl") {
+      orca.panels.post("colab.oauthUrl", { ...payload, manual: true, origin: "remote" });
+    } else if (name === "provisioningProgress") {
+      orca.panels.post("colab.provisioningProgress", payload);
+    } else if (name === "notify") {
+      void notifyUser(payload?.message || "", payload?.tone || "info");
+    }
+  };
 
-    const enrichedSessions = await Promise.all(
-      sessions.map(async (s) => {
-        const ageSeconds = Math.max(
-          0,
-          Math.floor((Date.now() - Date.parse(s.createdAt)) / 1000),
-        );
-        const sessionRunningTasks = tasks.filter(
-          (t) => t.sessionName === s.name && t.status === "running",
-        ).length;
-        const samples = gpuUtilSamplesBySession.get(s.name) || [];
-        const idleInfo = evaluateSessionIdleState({
-          session: s,
-          gpuSamples: samples,
-          runningTasksCount: sessionRunningTasks,
-          nowMs: Date.now(),
-        });
+  const localBridge = new LocalBridge({
+    orca,
+    homeDir,
+    env: process.env,
+    skillSync,
+    notifyUser,
+    onSnapshot: (snap, meta) => postFromBridge(localBridge)(snap, meta),
+  });
+  localBridge.start(paths);
+  activeBridge = localBridge;
 
-        let reachable = s.state !== "zombie";
-        let liveMetrics = liveMetricsBySession.get(s.name) || null;
-        if (includeLiveMetrics && s.state !== "zombie") {
-          if (s.ip) {
-            const probe = await probeSshBannerOnce({
-              host: s.ip,
-              port: 22,
-              timeoutMs: 2500,
-            }).catch(() => ({ ok: false }));
-            reachable = Boolean(probe?.ok);
-          }
-
-          if (s.colabRuntime?.baseUrl && s.colabRuntime?.token) {
-            try {
-              const resInfo = await getRuntimeResources({
-                baseUrl: s.colabRuntime.baseUrl,
-                proxyToken: s.colabRuntime.token,
-                timeoutMs: 3500,
-              });
-              const g0 = Array.isArray(resInfo?.gpus) ? resInfo.gpus[0] : null;
-              liveMetrics = {
-                gpuUtilizationPercent:
-                  typeof g0?.gpuUtilization === "number"
-                    ? Math.round(g0.gpuUtilization * 100)
-                    : null,
-                vramUsedMiB:
-                  typeof g0?.memoryUsedBytes === "number"
-                    ? Math.round(g0.memoryUsedBytes / (1024 * 1024))
-                    : null,
-                vramTotalMiB:
-                  typeof g0?.memoryTotalBytes === "number"
-                    ? Math.round(g0.memoryTotalBytes / (1024 * 1024))
-                    : s.gpu?.memoryTotalMiB || null,
-                ramTotalGiB:
-                  typeof resInfo?.memory?.totalBytes === "number"
-                    ? Number(
-                        (
-                          resInfo.memory.totalBytes /
-                          (1024 * 1024 * 1024)
-                        ).toFixed(1),
-                      )
-                    : null,
-                ramUsedGiB:
-                  typeof resInfo?.memory?.totalBytes === "number" &&
-                  typeof resInfo?.memory?.freeBytes === "number"
-                    ? Number(
-                        (
-                          (resInfo.memory.totalBytes -
-                            resInfo.memory.freeBytes) /
-                          (1024 * 1024 * 1024)
-                        ).toFixed(1),
-                      )
-                    : null,
-              };
-              liveMetricsBySession.set(s.name, liveMetrics);
-            } catch {
-              // Fall back to SSH nvidia-smi below if IP is present.
-            }
-          }
-
-          if (!liveMetrics && s.ip && reachable) {
-            liveMetrics = queryLiveGpuMetricsViaSsh(s.ip, homeDir);
-            if (liveMetrics) {
-              liveMetricsBySession.set(s.name, liveMetrics);
-            }
-          }
-        }
-
-        const safeRuntime = s.colabRuntime
-          ? {
-              id: s.colabRuntime.id,
-              endpoint: s.colabRuntime.endpoint,
-              baseUrl: s.colabRuntime.baseUrl,
-              tokenExpiry: s.colabRuntime.tokenExpiry,
-            }
-          : null;
-
-        return {
-          ...s,
-          colabRuntime: safeRuntime,
-          reachable,
-          ageSeconds,
-          runningTasksCount: sessionRunningTasks,
-          idleInfo,
-          liveMetrics,
-          costSoFarCu: Number(((ageSeconds / 3600) * (s.cuPerHour || 0)).toFixed(2)),
-        };
-      }),
-    );
-
-    const creditsByAccount = {};
-    const authByAccount = {};
-    for (const acc of accounts) {
-      creditsByAccount[acc] = projectAccountCredits({
-        events,
-        activeSessions: sessions,
-        account: acc,
-        nowMs: Date.now(),
+  // Which bridge serves the panel follows the focused workspace: a `hostId` means the workspace, its
+  // terminals and its ~/.orca-colab live on a remote Orca server.
+  const resolveBridge = async ({ force = false } = {}) => {
+    if (!force && Date.now() - lastResolveAt < 4000) {
+      return activeBridge;
+    }
+    lastResolveAt = Date.now();
+    const info = await resolveWorkspaceInfo(orca);
+    resolvedWorkspace = info;
+    if (!info.hostId || !info.workspaceId) {
+      if (activeBridge !== localBridge) {
+        activeBridge = localBridge;
+        orca.panels.post("colab.stateChanged", await localBridge.snapshot());
+      }
+      return localBridge;
+    }
+    let bridge = remoteBridges.get(info.workspaceId);
+    if (!bridge) {
+      const remoteCli = await resolveCliCommand(orca, { remote: true });
+      const autoStopIdleMinutes = Number(
+        await readSetting(orca, "autoStopIdleMinutes", DEFAULT_AUTO_STOP_IDLE_MINUTES),
+      );
+      bridge = new TerminalBridge({
+        orca,
+        workspace: info,
+        remoteCli,
+        autoStopIdleMinutes,
+        onSnapshot: (snap, meta) => postFromBridge(bridge)(snap, meta),
+        onEvent: onRemoteEvent,
       });
-      authByAccount[acc] = readOAuthAccountStatus(acc, homeDir);
+      remoteBridges.set(info.workspaceId, bridge);
+      bridge.start();
+    } else {
+      bridge.workspace = info;
     }
-
-    const activeTask =
-      (selectedTaskId && tasks.find((t) => t.id === selectedTaskId)) ||
-      tasks.find((t) => t.status === "running") ||
-      tasks[0] ||
-      null;
-
-    let activeTaskOutput = null;
-    if (activeTask) {
-      const logSnap = readTaskLog(activeTask.id, homeDir, { tailLines: 250 });
-      activeTaskOutput = {
-        taskId: activeTask.id,
-        status: activeTask.status,
-        exitCode: activeTask.exitCode,
-        output: logSnap.text,
-        totalBytes: logSnap.totalBytes,
-        truncated: logSnap.truncated,
-      };
-    }
-
-    if (!cachedDoctor || Date.now() - lastDoctorAt > 30_000) {
-      cachedDoctor = runDoctor({ homeDir, env: process.env });
-      lastDoctorAt = Date.now();
-    }
-    const doctor = cachedDoctor;
-
-    let effectiveProvisioning = provisioningState;
-    if (!effectiveProvisioning.active) {
-      const lockFile = path.join(paths.baseDir, "assign.lock");
-      if (existsSync(lockFile)) {
-        try {
-          const lockObj = JSON.parse(readFileSync(lockFile, "utf8"));
-          const ageMs = Date.now() - (lockObj.ts || 0);
-          process.kill(lockObj.pid, 0);
-          if (ageMs < 90_000) {
-            effectiveProvisioning = {
-              active: true,
-              message: `Agent (PID ${lockObj.pid}) is provisioning Colab ${lockObj.gpu || "GPU"} runtime (${Math.max(1, Math.round(ageMs / 1000))}s)...`,
-              error: null,
-            };
-          }
-        } catch {
-          // Stale or finished lock.
-        }
+    if (activeBridge !== bridge) {
+      activeBridge = bridge;
+      if (bridge.latestSnap) {
+        orca.panels.post("colab.stateChanged", bridge.decorate(bridge.latestSnap));
       }
     }
-
-    return {
-      defaultAccount,
-      accounts,
-      oauthAccounts,
-      doctor,
-      policy: resolveAgentPolicy(config),
-      skillSync,
-      provisioning: effectiveProvisioning,
-      auth: authByAccount[defaultAccount] || {
-        account: defaultAccount,
-        authenticated: false,
-      },
-      authByAccount,
-      sessions: enrichedSessions,
-      credits: creditsByAccount[defaultAccount],
-      creditsByAccount,
-      tasks,
-      activeTaskOutput,
-      rates,
-    };
+    return bridge;
   };
 
-  const refreshStatusBar = async () => {
+  const refreshStatusBar = async (snapInput = null) => {
     try {
-      const snap = await buildDashboardSnapshot({ includeLiveMetrics: false });
-      const activeSessions = snap.sessions.filter((s) => s.state !== "zombie");
-      const runningTasks = snap.tasks.filter((t) => t.status === "running");
+      const bridge = await resolveBridge();
+      const snap = snapInput || (await bridge.snapshot());
+      const activeSessions = (snap.sessions || []).filter((s) => s.state !== "zombie");
+      const runningTasks = (snap.tasks || []).filter((t) => t.status === "running");
       const primaryCredits = snap.credits;
-
       const monthKey = new Date().toISOString().slice(0, 7);
       const budgetState = evaluateBudgetAlert({
         projection: primaryCredits,
         monthKey,
         alreadyNotified: budgetNotifiedKeys,
       });
-
       if (budgetState.shouldNotify && budgetState.notifyKey) {
         budgetNotifiedKeys[budgetState.notifyKey] = true;
         await notifyUser(
@@ -439,50 +696,34 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
           budgetState.tone === "danger" ? "error" : "warning",
         );
       }
-
-      if (
-        activeSessions.length === 0 &&
-        runningTasks.length === 0 &&
-        primaryCredits?.estimatedBalanceCu === null
-      ) {
-        await orca.host.call("statusBar.update", {
-          id: "colab-sessions",
-          text: "Colab",
-          icon: "zap",
-          visible: false,
-        });
+      const balance = primaryCredits?.estimatedBalanceCu ?? null;
+      if (activeSessions.length === 0 && runningTasks.length === 0 && balance === null) {
+        await orca.host.call("statusBar.update", { id: "colab-sessions", text: "Colab", icon: "zap", visible: false });
         return;
       }
-
       const parts = [];
       if (activeSessions.length > 0) {
         const s0 = activeSessions[0];
         const gpuLabel = s0.rateKey && s0.rateKey !== "unknown" ? s0.rateKey : "GPU";
-        parts.push(
-          activeSessions.length > 1
-            ? `${activeSessions.length}×${gpuLabel}`
-            : gpuLabel,
-        );
-        parts.push(`${primaryCredits.estimatedBurnCuPerHour} CU/h`);
+        parts.push(activeSessions.length > 1 ? `${activeSessions.length}×${gpuLabel}` : gpuLabel);
+        parts.push(`${primaryCredits?.estimatedBurnCuPerHour ?? 0} CU/h`);
       }
       if (runningTasks.length > 0) {
-        parts.push(
-          runningTasks.length === 1
-            ? `1 task`
-            : `${runningTasks.length} tasks`,
-        );
+        parts.push(runningTasks.length === 1 ? "1 task" : `${runningTasks.length} tasks`);
       }
-      if (primaryCredits?.estimatedBalanceCu !== null) {
-        parts.push(`≈${Math.round(primaryCredits.estimatedBalanceCu)} CU`);
+      if (balance !== null) {
+        parts.push(`≈${Math.round(balance)} CU`);
       }
-
-      const text = `Colab: ${parts.join(" · ") || "Idle"}`;
+      const prefix = snap.origin?.kind === "remote" ? "Colab@server" : "Colab";
       await orca.host.call("statusBar.update", {
         id: "colab-sessions",
-        text,
+        text: `${prefix}: ${parts.join(" · ") || "Idle"}`,
         icon: "zap",
         tone: budgetState.tone,
-        tooltip: "Click to open Google Colab GPU & Task Manager panel",
+        tooltip:
+          snap.origin?.kind === "remote"
+            ? `Colab state of ${snap.origin.workspaceName || "remote workspace"} on its Orca server`
+            : "Click to open Google Colab GPU & Task Manager panel",
         visible: true,
       });
     } catch (err) {
@@ -490,656 +731,212 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
     }
   };
 
-  const broadcastTaskStreamIfChanged = () => {
-    try {
-      const tasks = listTasks(homeDir);
-      const sessions = listSessions(homeDir);
-      const newestId = tasks[0]?.id || null;
-      if (newestId && newestId !== lastNewestTaskId) {
-        if (lastNewestTaskId !== null) {
-          selectedTaskId = newestId;
-        }
-        lastNewestTaskId = newestId;
-      }
-
-      const tasksFp = tasks
-        .map((t) => `${t.id}:${t.status}:${t.exitCode}:${t.finishedAt || ""}`)
-        .join("|");
-      const sessionsFp = sessions
-        .map((s) => `${s.name}:${s.state}:${s.keep ? 1 : 0}`)
-        .join("|");
-
-      if (
-        tasksFp !== lastTasksListFingerprint ||
-        sessionsFp !== lastSessionsFingerprint
-      ) {
-        lastTasksListFingerprint = tasksFp;
-        lastSessionsFingerprint = sessionsFp;
-        buildDashboardSnapshot({ includeLiveMetrics: false })
-          .then((snap) => {
-            orca.panels.post("colab.stateChanged", snap);
-          })
-          .catch(() => {});
-      }
-
-      const target =
-        (selectedTaskId && tasks.find((t) => t.id === selectedTaskId)) ||
-        tasks.find((t) => t.status === "running") ||
-        tasks[0] ||
-        null;
-      if (!target) {
-        return;
-      }
-      const logSnap = readTaskLog(target.id, homeDir, { tailLines: 250 });
-      const fingerprint = `${target.id}:${target.status}:${target.exitCode}:${logSnap.totalBytes}`;
-      if (fingerprint !== lastStreamedSnapshot) {
-        lastStreamedSnapshot = fingerprint;
-        orca.panels.post("colab.taskOutput", {
-          task: target,
-          output: logSnap.text,
-          totalBytes: logSnap.totalBytes,
-          truncated: logSnap.truncated,
-        });
-      }
-    } catch {
-      // Ignore transient read error.
-    }
-  };
-
-  const sampleWatchdogAndKeepalive = async () => {
-    const sessions = listSessions(homeDir).filter((s) => s.state !== "zombie");
-    const tasks = listTasks(homeDir);
-    let autoStopIdleMinutes = DEFAULT_AUTO_STOP_IDLE_MINUTES;
-    try {
-      const val = await orca.settings.get("autoStopIdleMinutes");
-      if (typeof val === "number" && val >= 0) {
-        autoStopIdleMinutes = val;
-      }
-    } catch {
-      // Default 20 min.
-    }
-
-    for (const s of sessions) {
-      if (s.colabRuntime?.id) {
-        try {
-          const accessToken = await getValidAccessToken({
-            account: s.account || "default",
-            homeDir,
-          });
-          if (accessToken) {
-            const refreshed = await getRuntime({
-              runtimeId: s.colabRuntime.id,
-              accessToken,
-            });
-            if (refreshed?.connectionInfo?.token) {
-              writeSession(
-                {
-                  ...s,
-                  colabRuntime: {
-                    ...s.colabRuntime,
-                    token: refreshed.connectionInfo.token,
-                    tokenExpiry:
-                      refreshed.connectionInfo.expireTime ||
-                      s.colabRuntime.tokenExpiry,
-                  },
-                },
-                homeDir,
-              );
-            }
-          }
-        } catch {
-          // Non-fatal keepalive refresh error.
-        }
-      }
-
-      if (s.ip) {
-        const metrics = queryLiveGpuMetricsViaSsh(s.ip, homeDir);
-        if (metrics && typeof metrics.gpuUtilizationPercent === "number") {
-          const prev = gpuUtilSamplesBySession.get(s.name) || [];
-          const next = [...prev.slice(-5), metrics.gpuUtilizationPercent];
-          gpuUtilSamplesBySession.set(s.name, next);
-        }
-      }
-
-      const runningCount = tasks.filter(
-        (t) => t.sessionName === s.name && t.status === "running",
-      ).length;
-
-      const decision = evaluateSessionIdleState({
-        session: s,
-        gpuSamples: gpuUtilSamplesBySession.get(s.name) || [],
-        runningTasksCount: runningCount,
-        autoStopIdleMinutes,
-        nowMs: Date.now(),
-      });
-
-      if (decision.isIdle && !graceTimersBySession.has(s.name)) {
-        await notifyUser(
-          `Colab session ${s.name} has been idle for ${Math.round(decision.idleMinutes)} min (<5% GPU). Stopping in ${GRACE_PERIOD_MINUTES} min unless used or marked Keep.`,
-          "warning",
-        );
-        const timer = setTimeout(async () => {
-          graceTimersBySession.delete(s.name);
-          const latestSession = readSession(s.name, homeDir);
-          const latestRunning = listTasks(homeDir).filter(
-            (t) => t.sessionName === s.name && t.status === "running",
-          ).length;
-          const recheck = evaluateSessionIdleState({
-            session: latestSession,
-            gpuSamples: gpuUtilSamplesBySession.get(s.name) || [],
-            runningTasksCount: latestRunning,
-            autoStopIdleMinutes,
-            nowMs: Date.now(),
-          });
-          if (recheck.isIdle) {
-            const nullStream = { write() {} };
-            await runDownCommand(
-              ["--session", s.name, "--cause", "idle-watchdog"],
-              {
-                json: true,
-                stdout: nullStream,
-                stderr: nullStream,
-                homeDir,
-              },
-            ).catch(() => {});
-            await notifyUser(
-              `Auto-stopped idle Colab session ${s.name} to save compute units.`,
-              "info",
-            );
-            await refreshStatusBar();
-            orca.panels.post("colab.stateChanged", await buildDashboardSnapshot());
-          }
-        }, GRACE_PERIOD_MINUTES * 60_000);
-        graceTimersBySession.set(s.name, timer);
-      } else if (!decision.isIdle && graceTimersBySession.has(s.name)) {
-        clearTimeout(graceTimersBySession.get(s.name));
-        graceTimersBySession.delete(s.name);
-      }
-    }
+  const finish = async (bridge, extra = {}) => {
+    const snap = await bridge.snapshot();
+    orca.panels.post("colab.stateChanged", snap);
+    void refreshStatusBar(snap);
+    return { ok: true, ...extra, dashboard: snap };
   };
 
   orca.commands.register("colab.up", async () => {
-    const cli = await resolveCliCommand(orca);
-    await openTerminalWithCommand(orca, {
-      title: "Colab: Start GPU",
-      command: `${cli} up`,
-    });
+    const bridge = await resolveBridge({ force: true });
+    const cli = await resolveCliCommand(orca, { remote: bridge.kind === "remote" });
+    await openTerminalWithCommand({ title: "Colab: Start GPU", command: `${cli} up` });
   });
 
   orca.commands.register("colab.down", async () => {
-    const cli = await resolveCliCommand(orca);
-    await openTerminalWithCommand(orca, {
-      title: "Colab: Stop GPU",
-      command: `${cli} down`,
-    });
+    const bridge = await resolveBridge({ force: true });
+    const cli = await resolveCliCommand(orca, { remote: bridge.kind === "remote" });
+    await openTerminalWithCommand({ title: "Colab: Stop GPU", command: `${cli} down` });
   });
 
   orca.commands.register("colab.showPanel", async () => {
     const orcaBin = locateOrcaBinary(process.env) || "orca";
     for (const key of ["vzxxbacq.colab", "local.colab"]) {
-      const child = spawn(orcaBin, ["plugin", "open", key, "--panel", "colab"], {
-        stdio: "ignore",
-        detached: true,
-      });
+      const child = spawn(orcaBin, ["plugin", "open", key, "--panel", "colab"], { stdio: "ignore", detached: true });
       child.unref();
     }
   });
 
-  orca.panels.handle("colab.dashboard", async (input = {}) => {
-    if (input?.selectedTaskId) {
-      selectedTaskId = String(input.selectedTaskId);
+  // Terminals always open in the focused workspace, which is exactly where the matching CLI lives.
+  const openTerminalWithCommand = async ({ title, command }) => {
+    const info = resolvedWorkspace?.workspaceId ? resolvedWorkspace : await resolveWorkspaceInfo(orca);
+    if (!info.workspaceId) {
+      throw new Error("No active Orca workspace found to open a terminal.");
     }
-    return await buildDashboardSnapshot({
-      includeLiveMetrics: Boolean(input?.includeLiveMetrics),
-    });
+    return orca.host.call("terminal.create", { workspaceId: info.workspaceId, title: title || "Colab GPU", command });
+  };
+
+  orca.panels.handle("colab.dashboard", async (input = {}) => {
+    const bridge = await resolveBridge();
+    if (input?.selectedTaskId) {
+      bridge.selectTask(String(input.selectedTaskId));
+    }
+    bridge.setLive(Boolean(input?.includeLiveMetrics));
+    return bridge.snapshot({ includeLiveMetrics: Boolean(input?.includeLiveMetrics) });
   });
 
   orca.panels.handle("colab.sessions", async () => {
-    return await buildDashboardSnapshot({ includeLiveMetrics: true });
+    const bridge = await resolveBridge();
+    return bridge.snapshot({ includeLiveMetrics: true });
   });
 
   orca.panels.handle("colab.doctor", async () => {
-    return runDoctor({ homeDir, env: process.env });
+    const bridge = await resolveBridge();
+    return (await bridge.snapshot()).doctor;
   });
 
-  orca.panels.handle("colab.setupConfig", async (input = {}) => {
-    const authKey = String(input?.authKey || "").trim();
-    if (!authKey) {
-      throw new Error("Tailscale auth key is required.");
-    }
-    const args = ["--auth-key", authKey, "--non-interactive", "--no-open"];
-    if (input?.loginServer && String(input.loginServer).trim()) {
-      args.push("--login-server", String(input.loginServer).trim());
-    }
-    if (input?.notebookUrl && String(input.notebookUrl).trim()) {
-      args.push("--notebook-url", String(input.notebookUrl).trim());
-    }
-    const nullStream = { write() {} };
-    await runSetupCommand(args, {
-      json: true,
-      stdout: nullStream,
-      stderr: nullStream,
-      env: process.env,
-      homeDir,
+  const simpleActions = PANEL_ACTION_NAMES.filter(
+    (n) => !["authLogin", "startSession", "submitTask", "getTaskLogs", "oauthReplay"].includes(n),
+  );
+  for (const name of simpleActions) {
+    orca.panels.handle(`colab.${name}`, async (input = {}) => {
+      const bridge = await resolveBridge();
+      const result = await bridge.call(name, input);
+      const out = await finish(bridge, result);
+      if (name === "setupConfig") {
+        out.doctor = out.dashboard.doctor;
+      }
+      return out;
     });
-    const snap = await buildDashboardSnapshot();
-    const doc = runDoctor({ homeDir, env: process.env });
-    orca.panels.post("colab.stateChanged", snap);
-    return { ok: true, dashboard: snap, doctor: doc };
-  });
-
-  orca.panels.handle("colab.updatePolicy", async (input = {}) => {
-    const existing = readConfig(homeDir) || {};
-    const currentPolicy = resolveAgentPolicy(existing);
-    const nextAllowed =
-      Array.isArray(input?.allowedGpus) && input.allowedGpus.length > 0
-        ? input.allowedGpus.map((g) => String(g).trim().toUpperCase())
-        : currentPolicy.allowedGpus;
-    const nextMaxConcurrent =
-      typeof input?.maxConcurrentSessions === "number" &&
-      Number.isFinite(input.maxConcurrentSessions) &&
-      input.maxConcurrentSessions >= 1
-        ? Math.floor(input.maxConcurrentSessions)
-        : currentPolicy.maxConcurrentSessions;
-
-    writeConfig(
-      {
-        ...existing,
-        allowedGpus: nextAllowed,
-        maxConcurrentSessions: nextMaxConcurrent,
-      },
-      homeDir,
-    );
-    const snap = await buildDashboardSnapshot();
-    orca.panels.post("colab.stateChanged", snap);
-    return { ok: true, policy: snap.policy, dashboard: snap };
-  });
+  }
 
   orca.panels.handle("colab.authLogin", async (input = {}) => {
-    const config = readConfig(homeDir);
-    const addAccount = Boolean(input?.addAccount);
-    const requested = input?.account
-      ? String(input.account).trim()
-      : addAccount
-        ? "auto"
-        : resolveAccount(config).label;
-    const status = await runLoopbackOAuthFlow({
-      account: requested,
-      addAccount,
-      homeDir,
-      onAuthUrl: (authUrl) => {
-        orca.panels.post("colab.oauthUrl", { authUrl });
-      },
-    });
-    const savedAccount = status.account || requested;
-    setDefaultAccount(savedAccount, homeDir);
-    cachedDoctor = null;
-    try {
-      const accessToken = await getValidAccessToken({
-        account: savedAccount,
-        homeDir,
-      });
-      if (accessToken) {
-        const ccu = await getConsumptionUserInfo({ accessToken });
-        if (typeof ccu.paidComputeUnitsBalance === "number") {
-          recordCalibrateEvent(
-            {
-              account: savedAccount,
-              balanceCu: ccu.paidComputeUnitsBalance,
-              source: "colab-api",
-            },
-            homeDir,
-          );
-        }
-      }
-    } catch {
-      // Non-fatal.
-    }
-    await refreshStatusBar();
-    const snap = await buildDashboardSnapshot();
-    orca.panels.post("colab.stateChanged", snap);
-    return { ok: true, status, dashboard: snap };
-  });
-
-  orca.panels.handle("colab.authSwitch", async (input = {}) => {
-    const raw = String(input?.account || "").trim();
-    if (!raw) {
-      throw new Error("Account is required.");
-    }
-    const targetKey = resolveOAuthAccountKey(raw, null, homeDir);
-    setDefaultAccount(targetKey, homeDir);
-    cachedDoctor = null;
-    await refreshStatusBar();
-    const snap = await buildDashboardSnapshot();
-    orca.panels.post("colab.stateChanged", snap);
-    return { ok: true, defaultAccount: targetKey, dashboard: snap };
-  });
-
-  orca.panels.handle("colab.authLogout", async (input = {}) => {
-    const config = readConfig(homeDir);
-    const target = input?.account
-      ? resolveOAuthAccountKey(input.account, null, homeDir)
-      : resolveAccount(config).label;
-    removeOAuthCredentials(target, homeDir);
-    const remaining = listOAuthAccounts(homeDir);
-    if (remaining.length > 0 && resolveAccount(config).label === target) {
-      setDefaultAccount(remaining[0].account, homeDir);
-    }
-    cachedDoctor = null;
-    await refreshStatusBar();
-    const snap = await buildDashboardSnapshot();
-    orca.panels.post("colab.stateChanged", snap);
-    return { ok: true, dashboard: snap };
-  });
-
-  orca.panels.handle("colab.startSession", async (input = {}) => {
-    const gpu = String(input?.gpu || "T4").toUpperCase();
-    const account = input?.account || undefined;
-    const keep = Boolean(input?.keep);
-    const useTerminal = Boolean(input?.useTerminal);
-    const runAsync = Boolean(input?.async);
-
-    const authStatus = readOAuthAccountStatus(account || "default", homeDir);
-    if (useTerminal || !authStatus.authenticated) {
-      const cli = await resolveCliCommand(orca);
-      const flags = [`--gpu ${gpu}`];
-      if (account) flags.push(`--account ${account}`);
-      if (keep) flags.push("--keep");
-      await openTerminalWithCommand(orca, {
-        title: `Colab: Start ${gpu}`,
-        command: `${cli} up ${flags.join(" ")}`,
-      });
-      return { ok: true, mode: "terminal" };
-    }
-
-    if (provisioningState.active) {
-      return {
-        ok: true,
-        mode: "already-provisioning",
-        dashboard: await buildDashboardSnapshot(),
-      };
-    }
-
-    provisioningState = {
-      active: true,
-      message: `Assigning Colab ${gpu} runtime via Google Colab Direct API...`,
-      error: null,
-    };
-    const initialSnap = await buildDashboardSnapshot();
-    orca.panels.post("colab.stateChanged", initialSnap);
-
-    const args = ["--gpu", gpu];
-    if (account) args.push("--account", String(account));
-    if (keep) args.push("--keep");
-
-    const logStream = {
-      write(chunk) {
-        const line = String(chunk).replace(/^\[colab\]\s*/, "").trim();
-        if (line) {
-          provisioningState = { active: true, message: line, error: null };
-          orca.panels.post("colab.provisioningProgress", provisioningState);
-        }
-      },
-    };
-    const outStream = { write() {} };
-
-    const startMs = Date.now();
-    const tickTimer = setInterval(() => {
-      if (provisioningState.active) {
-        const sec = Math.floor((Date.now() - startMs) / 1000);
-        const baseMsg =
-          provisioningState.message?.replace(/\s*\(\d+s.*\)$/, "") ||
-          `Assigning Colab ${gpu} runtime...`;
-        const progressNext = {
-          active: true,
-          message: `${baseMsg} (${sec}s elapsed)`,
-          error: null,
-        };
-        provisioningState = progressNext;
-        orca.panels.post("colab.provisioningProgress", progressNext);
-      }
-    }, 2000);
-
-    const executeProvisioning = async () => {
-      try {
-        await runUpCommand(args, {
-          json: true,
-          stdout: outStream,
-          stderr: logStream,
-          env: process.env,
-          homeDir,
-        });
-        clearInterval(tickTimer);
-        provisioningState = { active: false, message: null, error: null };
-        orca.panels.post("colab.provisioningProgress", provisioningState);
-        await refreshStatusBar();
-        const snap = await buildDashboardSnapshot({ includeLiveMetrics: true });
-        orca.panels.post("colab.stateChanged", snap);
-        return { ok: true, mode: "direct-api", dashboard: snap };
-      } catch (err) {
-        clearInterval(tickTimer);
-        const msg = err instanceof Error ? err.message : String(err);
-        provisioningState = { active: false, message: null, error: msg };
-        orca.panels.post("colab.provisioningProgress", provisioningState);
-        const snap = await buildDashboardSnapshot();
-        orca.panels.post("colab.stateChanged", snap);
-        throw err;
-      }
-    };
-
-    if (runAsync) {
-      executeProvisioning().catch((err) => {
-        orca.log(`startSession async error: ${err?.message || err}`);
-      });
-      return { ok: true, mode: "direct-api-async", dashboard: initialSnap };
-    }
-
-    return await executeProvisioning();
-  });
-
-  orca.panels.handle("colab.stopSession", async (input = {}) => {
-    const args = input?.session ? ["--session", String(input.session)] : [];
-    const nullStream = { write() {} };
-    await runDownCommand(args, {
-      json: true,
-      stdout: nullStream,
-      stderr: nullStream,
-      homeDir,
-    });
-    await refreshStatusBar();
-    const snap = await buildDashboardSnapshot();
-    orca.panels.post("colab.stateChanged", snap);
-    return { ok: true, dashboard: snap };
-  });
-
-  orca.panels.handle("colab.toggleKeep", async (input = {}) => {
-    const session = readSession(String(input?.session || ""), homeDir);
-    if (!session) {
-      throw new Error(`Session not found: ${input?.session}`);
-    }
-    writeSession({ ...session, keep: !session.keep }, homeDir);
-    const snap = await buildDashboardSnapshot();
-    orca.panels.post("colab.stateChanged", snap);
-    return { ok: true, dashboard: snap };
-  });
-
-  orca.panels.handle("colab.submitTask", async (input = {}) => {
-    const rawCommand = String(input?.command || "").trim();
-    if (!rawCommand) {
-      throw new Error("Task command cannot be empty.");
-    }
-    const activeSessions = listSessions(homeDir).filter(
-      (s) => s.state !== "zombie",
-    );
-    if (activeSessions.length === 0) {
-      return {
-        ok: false,
-        code: "NO_ACTIVE_SESSION",
-        message:
-          "No active Colab GPU runtime. Let's launch a GPU session first.",
-        dashboard: await buildDashboardSnapshot(),
-      };
-    }
-    const { workspacePath } = await resolveWorkspaceInfo(orca);
-    const syncPath = input?.syncWorkspace
-      ? workspacePath || process.cwd()
-      : null;
-
-    const { task } = await submitTask(
+    const bridge = await resolveBridge({ force: true });
+    const result = await bridge.call(
+      "authLogin",
+      { ...input, noBrowser: bridge.kind === "remote" || Boolean(input?.noBrowser) },
       {
-        name: input?.name ? String(input.name).trim() : undefined,
-        command: [rawCommand],
-        sessionName: input?.session || undefined,
-        cwd: input?.cwd ? String(input.cwd).trim() : null,
-        syncPath,
-        wait: false,
-      },
-      {
-        homeDir,
-        localCwd: workspacePath || process.cwd(),
-        env: process.env,
+        timeoutMs: ACTION_TIMEOUTS_MS.authLogin,
+        onAuthUrl: (payload) => orca.panels.post("colab.oauthUrl", { ...payload, origin: "local" }),
       },
     );
-
-    selectedTaskId = task.id;
-    await refreshStatusBar();
-    const snap = await buildDashboardSnapshot();
-    orca.panels.post("colab.stateChanged", snap);
-    return { ok: true, task, dashboard: snap };
+    return finish(bridge, result);
   });
 
-  orca.panels.handle("colab.stopTask", async (input = {}) => {
-    const taskId = String(input?.taskId || "");
-    const stopped = stopTaskById(taskId, { homeDir });
-    await refreshStatusBar();
-    const snap = await buildDashboardSnapshot();
-    orca.panels.post("colab.stateChanged", snap);
-    return { ok: true, task: stopped, dashboard: snap };
-  });
-
-  orca.panels.handle("colab.clearFinishedTasks", async (input = {}) => {
-    const sessionName = input?.sessionName ? String(input.sessionName) : null;
-    const removed = clearFinishedTasks(homeDir, { sessionName });
-    selectedTaskId = null;
-    const snap = await buildDashboardSnapshot();
-    orca.panels.post("colab.stateChanged", snap);
-    return { ok: true, removed, dashboard: snap };
+  orca.panels.handle("colab.oauthReplay", async (input = {}) => {
+    const bridge = await resolveBridge();
+    const result = await bridge.call("oauthReplay", input);
+    return { ok: true, ...result };
   });
 
   orca.panels.handle("colab.getTaskLogs", async (input = {}) => {
-    const taskId = String(input?.taskId || "");
-    selectedTaskId = taskId;
-    const task = readTask(taskId, homeDir);
-    if (!task) {
-      throw new Error(`Task not found: ${taskId}`);
+    const bridge = await resolveBridge();
+    bridge.selectTask(String(input?.taskId || ""));
+    const result = await bridge.call("getTaskLogs", input);
+    return { ok: true, ...result };
+  });
+
+  orca.panels.handle("colab.submitTask", async (input = {}) => {
+    const bridge = await resolveBridge();
+    const workspacePath = resolvedWorkspace?.workspacePath || null;
+    const result = await bridge.call("submitTask", { ...input, workspacePath });
+    if (result?.ok === false) {
+      return { ...result, dashboard: await bridge.snapshot() };
     }
-    const logSnap = readTaskLog(taskId, homeDir, {
-      tailLines: Number(input?.tailLines || 300),
-    });
-    return {
-      ok: true,
-      task,
-      output: logSnap.text,
-      totalBytes: logSnap.totalBytes,
-      truncated: logSnap.truncated,
+    return finish(bridge, result);
+  });
+
+  let provisioningTicker = null;
+  orca.panels.handle("colab.startSession", async (input = {}) => {
+    const bridge = await resolveBridge({ force: true });
+    const gpu = String(input?.gpu || "T4").toUpperCase();
+    const account = input?.account || undefined;
+    const useTerminal = Boolean(input?.useTerminal);
+    const runAsync = Boolean(input?.async);
+
+    const current = await bridge.snapshot();
+    const authenticated = Boolean(
+      current.authByAccount?.[account || current.defaultAccount || "default"]?.authenticated ??
+        (bridge.kind === "local" ? readOAuthAccountStatus(account || "default", homeDir).authenticated : false),
+    );
+    if (useTerminal || !authenticated) {
+      const cli = await resolveCliCommand(orca, { remote: bridge.kind === "remote" });
+      const flags = [`--gpu ${gpu}`];
+      if (account) flags.push(`--account ${account}`);
+      if (input?.keep) flags.push("--keep");
+      await openTerminalWithCommand({ title: `Colab: Start ${gpu}`, command: `${cli} up ${flags.join(" ")}` });
+      return { ok: true, mode: "terminal" };
+    }
+    if (current.provisioning?.active) {
+      return { ok: true, mode: "already-provisioning", dashboard: current };
+    }
+
+    const setProvisioning = (state) => {
+      if (bridge.kind === "local") {
+        bridge.provisioningState = state;
+      }
+      orca.panels.post("colab.provisioningProgress", state);
     };
-  });
+    setProvisioning({ active: true, message: `Assigning Colab ${gpu} runtime via Google Colab Direct API...`, error: null });
+    orca.panels.post("colab.stateChanged", await bridge.snapshot());
+    const startMs = Date.now();
+    clearInterval(provisioningTicker);
+    let lastMessage = `Assigning Colab ${gpu} runtime...`;
+    provisioningTicker = setInterval(() => {
+      const sec = Math.floor((Date.now() - startMs) / 1000);
+      setProvisioning({ active: true, message: `${lastMessage} (${sec}s elapsed)`, error: null });
+    }, 2000);
 
-  orca.panels.handle("colab.calibrateCredits", async (input = {}) => {
-    const args = ["calibrate"];
-    if (input?.account) args.push("--account", String(input.account));
-    if (input?.browser) args.push("--browser");
-    const nullStream = { write() {} };
-    await runCreditsCommand(args, {
-      json: true,
-      stdout: nullStream,
-      stderr: nullStream,
-      env: process.env,
-      homeDir,
-    });
-    await refreshStatusBar();
-    const snap = await buildDashboardSnapshot();
-    orca.panels.post("colab.stateChanged", snap);
-    return { ok: true, dashboard: snap };
-  });
-
-  orca.panels.handle("colab.setCredits", async (input = {}) => {
-    const balanceCu = Number(input?.balanceCu);
-    if (!Number.isFinite(balanceCu) || balanceCu < 0) {
-      throw new Error("Balance must be a non-negative number.");
+    const execute = async () => {
+      try {
+        await bridge.call("startSession", { gpu, account, keep: Boolean(input?.keep) }, {
+          timeoutMs: ACTION_TIMEOUTS_MS.startSession,
+          onProgress: (line) => {
+            lastMessage = line;
+            setProvisioning({ active: true, message: line, error: null });
+          },
+        });
+        clearInterval(provisioningTicker);
+        setProvisioning({ active: false, message: null, error: null });
+        const out = await finish(bridge, { mode: "direct-api" });
+        return out;
+      } catch (err) {
+        clearInterval(provisioningTicker);
+        const msg = err instanceof Error ? err.message : String(err);
+        setProvisioning({ active: false, message: null, error: msg });
+        orca.panels.post("colab.stateChanged", await bridge.snapshot());
+        throw err;
+      }
+    };
+    if (runAsync) {
+      execute().catch((err) => orca.log(`startSession async error: ${err?.message || err}`));
+      return { ok: true, mode: "direct-api-async", dashboard: await bridge.snapshot() };
     }
-    const config = readConfig(homeDir);
-    const account = resolveAccount(config, input?.account).label;
-    recordCalibrateEvent({ account, balanceCu, source: "manual" }, homeDir);
-    await refreshStatusBar();
-    const snap = await buildDashboardSnapshot();
-    orca.panels.post("colab.stateChanged", snap);
-    return { ok: true, dashboard: snap };
-  });
-
-  orca.panels.handle("colab.setBudget", async (input = {}) => {
-    const budgetCu = Number(input?.budgetCu);
-    if (!Number.isFinite(budgetCu) || budgetCu < 0) {
-      throw new Error("Budget must be a non-negative number.");
-    }
-    const config = readConfig(homeDir);
-    const account = resolveAccount(config, input?.account).label;
-    recordBudgetSetEvent({ account, budgetCu }, homeDir);
-    await refreshStatusBar();
-    const snap = await buildDashboardSnapshot();
-    orca.panels.post("colab.stateChanged", snap);
-    return { ok: true, dashboard: snap };
+    return execute();
   });
 
   orca.panels.handle("colab.openTerminal", async (input = {}) => {
-    const activeSessions = listSessions(homeDir).filter(
-      (s) => s.state !== "zombie",
-    );
+    const bridge = await resolveBridge({ force: true });
+    const snap = await bridge.snapshot();
+    const activeSessions = (snap.sessions || []).filter((s) => s.state !== "zombie");
     if (!input?.command && activeSessions.length === 0) {
       return {
         ok: false,
         code: "NO_ACTIVE_SESSION",
-        message:
-          "No active Colab GPU runtime. Launch a GPU session first to open an SSH shell.",
+        message: "No active Colab GPU runtime. Launch a GPU session first to open an SSH shell.",
       };
     }
     const targetSession = input?.session || activeSessions[0]?.name;
-    const cli = await resolveCliCommand(orca);
-    const cmd = targetSession
-      ? `${cli} run --session ${targetSession} -- bash -l`
-      : input?.command || `${cli} status`;
-    await openTerminalWithCommand(orca, {
+    const cli = await resolveCliCommand(orca, { remote: bridge.kind === "remote" });
+    const cmd = targetSession ? `${cli} run --session ${targetSession} -- bash -l` : input?.command || `${cli} status`;
+    await openTerminalWithCommand({
       title: input?.title || (targetSession ? `SSH: ${targetSession}` : "Colab Shell"),
       command: cmd,
     });
     return { ok: true };
   });
 
-  for (const dirPath of [paths.baseDir, paths.sessionsDir, paths.tasksDir]) {
-    try {
-      const watcher = watch(dirPath, () => {
-        broadcastTaskStreamIfChanged();
-        void refreshStatusBar();
-      });
-      cleanupFns.push(() => watcher.close());
-    } catch {
-      // Ignore watch error if dir not ready.
-    }
-  }
-
-  const streamInterval = setInterval(() => {
-    broadcastTaskStreamIfChanged();
-  }, 1500);
-  const statusInterval = setInterval(() => {
-    void refreshStatusBar();
-  }, 30_000);
-  const watchdogInterval = setInterval(() => {
-    void sampleWatchdogAndKeepalive();
-  }, 5 * 60_000);
-
-  cleanupFns.push(() => clearInterval(streamInterval));
+  const statusInterval = setInterval(() => void refreshStatusBar(), 30_000);
+  const bridgeInterval = setInterval(() => void resolveBridge(), 5000);
   cleanupFns.push(() => clearInterval(statusInterval));
-  cleanupFns.push(() => clearInterval(watchdogInterval));
+  cleanupFns.push(() => clearInterval(bridgeInterval));
+  cleanupFns.push(() => clearInterval(provisioningTicker));
+  cleanupFns.push(() => localBridge.stop());
+  cleanupFns.push(() => {
+    for (const b of remoteBridges.values()) b.stop();
+    remoteBridges.clear();
+  });
 
   await refreshStatusBar();
 }

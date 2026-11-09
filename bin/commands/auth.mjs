@@ -46,6 +46,7 @@ export async function run(
         account: { type: "string" },
         add: { type: "boolean", default: false },
         all: { type: "boolean", default: false },
+        "no-browser": { type: "boolean", default: false },
       },
       strict: true,
       allowPositionals: true,
@@ -63,8 +64,11 @@ export async function run(
 
   if (sub === "login" || sub === "add") {
     const addAccount = Boolean(parsed.values.add || sub === "add");
+    const noBrowser = Boolean(parsed.values["no-browser"]);
     log(
-      addAccount
+      noBrowser
+        ? `Open the URL below in any browser, then paste the http://127.0.0.1:... URL it redirects to into 'orca-colab auth redirect <url>' on this machine.`
+        : addAccount
         ? `Opening Google sign-in in your default browser to add an account (Passkey supported)...`
         : `Opening Google sign-in in your default browser for account '${account}' (Passkey supported)...`,
       stderr,
@@ -74,11 +78,11 @@ export async function run(
         account: addAccount && !requestedAccount ? "auto" : account,
         addAccount,
         homeDir,
-        ...(openBrowser ? { openBrowser } : {}),
+        ...(noBrowser ? { openBrowser: async () => {} } : openBrowser ? { openBrowser } : {}),
         fetchImpl,
         signal,
         onAuthUrl: (url) => {
-          log(`If the browser did not open, visit: ${url}`, stderr);
+          log(noBrowser ? `Sign-in URL: ${url}` : `If the browser did not open, visit: ${url}`, stderr);
         },
       });
       const savedAccount = status.account || account;
@@ -145,6 +149,31 @@ export async function run(
       }
       return EXIT_ERROR;
     }
+  }
+
+  if (sub === "redirect") {
+    // Completes `auth login --no-browser` on this machine: the pasted URL points at the loopback server
+    // that the login command is still holding open.
+    const rawUrl = String(parsed.positionals[1] || "").trim();
+    let target;
+    try {
+      target = new URL(rawUrl);
+    } catch {
+      throw new CliError("usage: orca-colab auth redirect <http://127.0.0.1:PORT/?state=...&code=...>");
+    }
+    if (target.hostname !== "127.0.0.1" && target.hostname !== "localhost") {
+      throw new CliError("The redirect URL must point at 127.0.0.1.");
+    }
+    const res = await fetchImpl(target.toString());
+    if (!res.ok) {
+      throw new CliError(`Sign-in server rejected the redirect: HTTP ${res.status}.`);
+    }
+    if (json) {
+      writeJson({ ok: true }, stdout);
+    } else {
+      log("Redirect delivered; the waiting 'auth login --no-browser' command will finish now.", stderr);
+    }
+    return EXIT_OK;
   }
 
   if (sub === "switch" || sub === "default") {

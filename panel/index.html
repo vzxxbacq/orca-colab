@@ -825,6 +825,7 @@
           <div class="brand-status">
             <span id="topStatusDot" class="status-dot"></span>
             <span id="topStatusText">Checking environment...</span>
+            <span id="originBadge" class="badge neutral hidden" style="margin-left: 6px"></span>
           </div>
         </div>
       </div>
@@ -843,6 +844,26 @@
         <button id="closeNoticeBtn" class="ghost" style="padding: 0 4px">
           ✕
         </button>
+      </div>
+      <div id="oauthManualBox" class="card hidden" style="border-color: var(--accent-border)">
+        <div class="card-header">
+          <div class="card-title" style="font-size: 13px">Finish Google sign-in on the server</div>
+          <span class="badge info">Remote</span>
+        </div>
+        <div class="card-subtitle">
+          The sign-in runs on the Orca server, so your browser cannot reach its callback. Open the link,
+          approve access, then paste the <span class="mono">http://127.0.0.1:…</span> address your browser lands on.
+        </div>
+        <div class="row" style="gap: 6px; margin-bottom: 8px">
+          <button id="oauthOpenBtn" class="primary">Open sign-in link</button>
+          <button id="oauthCopyBtn" class="ghost">Copy link</button>
+          <button id="oauthCancelBtn" class="ghost">Hide</button>
+        </div>
+        <input id="oauthRedirectInput" type="text" placeholder="Paste the redirected http://127.0.0.1:PORT/?state=…&code=… URL here" />
+        <div class="row" style="gap: 6px; margin-top: 8px">
+          <button id="oauthCompleteBtn" class="primary">Complete sign-in</button>
+          <span id="oauthManualStatus" class="muted" style="font-size: 11px"></span>
+        </div>
       </div>
 
       <!-- ================================================================= -->
@@ -1621,7 +1642,22 @@
         // Update Top Status Bar
         const dot = document.getElementById("topStatusDot");
         const statusTxt = document.getElementById("topStatusText");
-        if (!readyToLaunch) {
+        const originBadge = document.getElementById("originBadge");
+        const isRemote = snap.origin?.kind === "remote";
+        originBadge.classList.remove("hidden");
+        originBadge.className = `badge ${isRemote ? "info" : "neutral"}`;
+        originBadge.textContent = isRemote
+          ? `Server · ${snap.origin.workspaceName || snap.origin.hostId || snap.origin.host || "remote"}`
+          : "Local";
+        originBadge.title = isRemote
+          ? `Showing ~/.orca-colab of the Orca server that hosts this workspace (bridge terminal "Colab Bridge"${snap.bridge?.remoteCli ? `, ${snap.bridge.remoteCli}` : ""}).`
+          : "Showing ~/.orca-colab on this computer.";
+        if (isRemote && !snap.bridge?.connected) {
+          dot.className = "status-dot warn";
+          statusTxt.textContent = snap.bridge?.error
+            ? `Server bridge unavailable: ${snap.bridge.error}`
+            : "Connecting to the Colab bridge on the server...";
+        } else if (!readyToLaunch) {
           dot.className = "status-dot warn";
           statusTxt.textContent = "Sign-In Required";
         } else if (activeSessions.length === 0) {
@@ -2392,7 +2428,9 @@
         btnEl.disabled = true;
         btnEl.textContent = "Waiting for browser login...";
         showNotice(
-          "Opened your default browser for Google Sign-In (select any Google account). Complete sign-in to return here automatically.",
+          dashboardState?.origin?.kind === "remote"
+            ? "Sign-in runs on the Orca server. A link will appear below: open it, approve, then paste the redirected URL back here."
+            : "Opened your default browser for Google Sign-In (select any Google account). Complete sign-in to return here automatically.",
           "info",
         );
         try {
@@ -2653,9 +2691,63 @@
       }, 2000);
 
       onWorkerEvent("colab.oauthUrl", (payload) => {
-        if (payload?.authUrl && typeof orcaApi?.shell?.openExternal === "function") {
-          // System browser is already opened by the worker via `open`; keep URL available.
-          window.__lastOAuthUrl = payload.authUrl;
+        if (!payload?.authUrl) return;
+        window.__lastOAuthUrl = payload.authUrl;
+        if (payload.manual) {
+          showOAuthManualBox(payload.authUrl);
+        }
+      });
+
+      function showOAuthManualBox(authUrl) {
+        const box = document.getElementById("oauthManualBox");
+        box.classList.remove("hidden");
+        document.getElementById("oauthRedirectInput").value = "";
+        document.getElementById("oauthManualStatus").textContent = "";
+        box.dataset.authUrl = authUrl;
+        box.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+
+      document.getElementById("oauthOpenBtn").addEventListener("click", () => {
+        const url = document.getElementById("oauthManualBox").dataset.authUrl;
+        if (!url) return;
+        if (typeof orcaApi?.shell?.openExternal === "function") {
+          orcaApi.shell.openExternal(url);
+        } else {
+          document.getElementById("oauthManualStatus").textContent =
+            "Cannot open a browser from here; use Copy link.";
+        }
+      });
+      document.getElementById("oauthCopyBtn").addEventListener("click", async () => {
+        const url = document.getElementById("oauthManualBox").dataset.authUrl;
+        const status = document.getElementById("oauthManualStatus");
+        try {
+          await navigator.clipboard.writeText(url);
+          status.textContent = "Link copied.";
+        } catch {
+          status.textContent = url;
+        }
+      });
+      document.getElementById("oauthCancelBtn").addEventListener("click", () => {
+        document.getElementById("oauthManualBox").classList.add("hidden");
+      });
+      document.getElementById("oauthCompleteBtn").addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        const status = document.getElementById("oauthManualStatus");
+        const redirectUrl = document.getElementById("oauthRedirectInput").value.trim();
+        if (!redirectUrl) {
+          status.textContent = "Paste the redirected URL first.";
+          return;
+        }
+        btn.disabled = true;
+        status.textContent = "Delivering to the server...";
+        try {
+          await callWorker("colab.oauthReplay", { redirectUrl }, { timeoutMs: 30000 });
+          status.textContent = "Delivered. Finishing sign-in...";
+          document.getElementById("oauthManualBox").classList.add("hidden");
+        } catch (err) {
+          status.textContent = err?.message || String(err);
+        } finally {
+          btn.disabled = false;
         }
       });
 

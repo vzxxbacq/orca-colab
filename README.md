@@ -44,6 +44,18 @@ orca-colab pull <remote> <local> --json
 orca-colab down [--all] --json
 ```
 
+## Remote Orca servers
+
+If your project lives on a remote Orca server, the **Colab GPU** panel in the desktop app shows that
+server's sessions, tasks, live output and Google accounts, not your laptop's. The plugin opens one
+background terminal named `Colab Bridge` in the workspace and drives `orca-colab watch` through it; no
+SSH, daemon or extra login is needed beyond the Orca connection you already have. Set the plugin
+setting **orca-colab command on remote Orca servers** if `orca-colab` is not on the server's `PATH`
+(for a checkout: `node /path/to/orca-colab/bin/orca-colab.mjs`). Google sign-in from the panel then
+runs on the server: open the link it shows, approve, and paste the `http://127.0.0.1:…` address your
+browser lands on back into the panel (CLI equivalent: `auth login --no-browser` + `auth redirect <url>`).
+Local projects keep working as before.
+
 ## License
 
 MIT
