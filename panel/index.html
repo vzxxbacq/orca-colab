@@ -1365,30 +1365,9 @@
             </div>
           </div>
 
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <div class="card-title">Google Colab Accounts</div>
-                <div class="card-subtitle" style="margin-bottom: 0; margin-top: 2px">
-                  Connect multiple Google accounts to pool Compute Units and scale concurrent GPU runtimes across accounts.
-                </div>
-              </div>
-              <button
-                id="settingsAddAccountBtn"
-                class="primary"
-                style="flex-shrink: 0"
-              >
-                + Add Account
-              </button>
-            </div>
-            <div
-              id="settingsAccountsList"
-              style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px"
-            ></div>
-            <button id="openWizardFromSettingsBtn" class="ghost" style="width: 100%">
-              ⚙ Open Setup &amp; Tailscale Helper
-            </button>
-          </div>
+          <button id="openWizardFromSettingsBtn" class="ghost" style="width: 100%">
+            ⚙ Open Setup &amp; Tailscale Helper
+          </button>
         </div>
       </div>
     </div>
@@ -1917,17 +1896,15 @@
           bannerEl.innerHTML = `
             <div class="runtime-top">
               <div class="runtime-title">
-                <span class="badge info">STANDBY</span>
-                <span>Agent Ready · No Active GPU Runtime</span>
+                <span class="status-dot ${oauthOk ? "ok" : "warn"}"></span>
+                <span>${oauthOk ? "Google Connected" : "Not Connected"} · ${esc(balStr)}</span>
               </div>
-              <button class="ghost" onclick="window.__openGuardrailsTab()">
-                ⚙ Guardrails
+              <button class="primary" style="padding: 3px 8px; font-size: 10.5px" onclick="window.__addAccountFromBanner(this)">
+                + Add Account
               </button>
             </div>
-            <div class="runtime-meta">
-              <span>${oauthOk ? "Google Connected" : "Not Connected"} · ${balStr}</span>
-              <span>Allowed: <strong>${esc(policy.allowedGpus.join(", "))}</strong></span>
-              <span>The Agent will automatically provision &amp; release GPUs within your policy.</span>
+            <div style="display: flex; flex-direction: column; gap: 5px; margin-top: 2px">
+              ${renderAccountsRows()}
             </div>
           `;
         } else if (activeSessions.length === 1) {
@@ -1978,6 +1955,15 @@
                 ? `<div class="bar-wrap"><div class="bar-fill" style="width:${Math.min(100, gpuUtil)}%"></div></div>`
                 : ""
             }
+            <details class="helper-details" style="margin: 2px 0 0 0; padding: 5px 8px">
+              <summary class="row-between" style="font-size: 10.5px">
+                <span>Google Colab Accounts (${oauthAccounts.length})</span>
+                <button style="padding: 2px 7px; font-size: 10px" onclick="event.preventDefault(); event.stopPropagation(); window.__addAccountFromBanner(this)">+ Add Account</button>
+              </summary>
+              <div style="display: flex; flex-direction: column; gap: 5px; margin-top: 6px">
+                ${renderAccountsRows()}
+              </div>
+            </details>
           `;
         } else {
           // Multi-Runtime Dock: render each active runtime as a sleek interactive mini-card
@@ -2041,6 +2027,15 @@
                 })
                 .join("")}
             </div>
+            <details class="helper-details" style="margin: 2px 0 0 0; padding: 5px 8px">
+              <summary class="row-between" style="font-size: 10.5px">
+                <span>Google Colab Accounts (${oauthAccounts.length})</span>
+                <button style="padding: 2px 7px; font-size: 10px" onclick="event.preventDefault(); event.stopPropagation(); window.__addAccountFromBanner(this)">+ Add Account</button>
+              </summary>
+              <div style="display: flex; flex-direction: column; gap: 5px; margin-top: 6px">
+                ${renderAccountsRows()}
+              </div>
+            </details>
           `;
         }
 
@@ -2278,11 +2273,6 @@
             ? `Calibrated ${calAgeHours ?? 0}h ago · Monthly used: ≈ ${c.estimatedMonthlyUsedCu ?? 0} CU`
             : "Click 'Sync from Colab API' to fetch your live Google Colab Compute Units balance.";
 
-        const settingsAccListEl = document.getElementById("settingsAccountsList");
-        if (settingsAccListEl) {
-          settingsAccListEl.innerHTML = renderAccountsRows();
-        }
-
         const budgetSec = document.getElementById("budgetSection");
         if (c.budgetCu && c.budgetCu > 0) {
           budgetSec.classList.remove("hidden");
@@ -2437,11 +2427,9 @@
       document
         .getElementById("launcherLoginBtn")
         .addEventListener("click", (e) => handleGoogleSignIn(e.currentTarget));
-      document
-        .getElementById("settingsAddAccountBtn")
-        .addEventListener("click", (e) =>
-          handleGoogleSignIn(e.currentTarget, { addAccount: true }),
-        );
+
+      window.__addAccountFromBanner = (btnEl) =>
+        handleGoogleSignIn(btnEl, { addAccount: true });
 
       window.__switchAccount = async (accountKey) => {
         try {
