@@ -44,16 +44,18 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
       separate keepalive cell. No outputs. Verify in M1.13 that touching the sentinel over SSH really
       releases the runtime (watch Colab's UI); if `runtime.unassign()` needs the frontend connected,
       document that the tab must be open for `down` to work. — Done: `notebooks/orca-colab-bootstrap.ipynb` with input validation, sshd, tailscaled userspace, D10 unassign watcher and keepalive cell (`test/bootstrap-notebook.test.mjs`).
-- [ ] **M1.11 SKILL.md.** Writes the pinned command `npx -y github:vzxxbacq/orca-colab#v0.1.0`; it cannot
+- [x] **M1.11 SKILL.md.** Writes the pinned command `npx -y github:vzxxbacq/orca-colab#v0.1.0`; it cannot
       run until M1.12 tags, so this item verifies only the skill install, and M1.12 verifies the command.
        `skills/colab-gpu/SKILL.md` per DESIGN § Skill, plus `skills/colab-gpu/
       references/cli.md` (the command table) so the skill body stays short. Verify
-      `npx skills add vzxxbacq/orca-colab` installs it (from a branch is fine).
+      `npx skills add vzxxbacq/orca-colab` installs it (from a branch is fine). — Done: `skills/colab-gpu/SKILL.md` and `skills/colab-gpu/references/cli.md`, verified with `npx skills add . --list` (`test/skill-files.test.mjs`).
 - [ ] **M1.12 Release v0.1.0.** Tag, README quick start, confirm `npx -y github:vzxxbacq/orca-colab#v0.1.0
       doctor` works from an empty directory on macOS.
+      Human steps: push `main` to `github:vzxxbacq/orca-colab`, create & push tag `v0.1.0`, then run `npx -y github:vzxxbacq/orca-colab#v0.1.0 doctor --json` from `/tmp`.
 - [ ] **M1.13 Live test (human + agent).** Owner creates the auth key and the Drive copy with the agent's
       guidance; agent runs `up`, syncs a toy PyTorch script, trains on a T4, pulls the checkpoint. Record
       timings and rough edges here.
+      Human steps: (1) create a reusable, ephemeral, pre-approved Tailscale auth key with tag `tag:orca-colab` in the Tailscale admin console; (2) run `node bin/orca-colab.mjs setup`, paste the `tskey-auth-...` key, save a personal copy of `notebooks/orca-colab-bootstrap.ipynb` in Google Drive with the prefill values, and paste the Drive URL; (3) when `node bin/orca-colab.mjs up --json` opens the notebook in Colab, select a T4 GPU runtime (`Runtime → Change runtime type`) and press **Run**.
 
 ## M2 — Orca plugin + platforms
 
