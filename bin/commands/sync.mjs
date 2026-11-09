@@ -12,6 +12,7 @@ import {
   resolveRemoteRoot,
   runSyncTransfer,
 } from "../lib/file-transfer.mjs";
+import { withSessionActivity } from "../lib/session-activity.mjs";
 import { resolveSession, writeSession } from "../lib/session-store.mjs";
 
 export async function run(
@@ -25,7 +26,7 @@ export async function run(
     homeDir,
     findBinary = undefined,
     spawnProcess = undefined,
-    withActivity = null,
+    withActivity = withSessionActivity,
   },
 ) {
   let parsed;

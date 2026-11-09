@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import { CliError, writeJson } from "../lib/cli-output.mjs";
+import { withSessionActivity } from "../lib/session-activity.mjs";
 import { resolveSession } from "../lib/session-store.mjs";
 import { buildSshExecArgs } from "../lib/ssh-exec.mjs";
 
@@ -65,7 +66,7 @@ export async function run(
     homeDir,
     stdinIsTTY = Boolean(process.stdin.isTTY),
     spawnSsh = spawnSync,
-    withActivity = null,
+    withActivity = withSessionActivity,
   },
 ) {
   const dashDash = argv.indexOf("--");

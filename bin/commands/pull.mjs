@@ -8,6 +8,7 @@ import {
   writeJson,
 } from "../lib/cli-output.mjs";
 import { runPullTransfer } from "../lib/file-transfer.mjs";
+import { withSessionActivity } from "../lib/session-activity.mjs";
 import { resolveSession } from "../lib/session-store.mjs";
 
 export async function run(
@@ -21,7 +22,7 @@ export async function run(
     homeDir,
     findBinary = undefined,
     spawnProcess = undefined,
-    withActivity = null,
+    withActivity = withSessionActivity,
   },
 ) {
   let parsed;
