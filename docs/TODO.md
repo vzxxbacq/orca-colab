@@ -21,9 +21,9 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
 - [x] **M1.4 Setup.** Prompts (`node:readline/promises`) or flags; `bin/lib/ssh-keypair.mjs` (ed25519,
       comment `orca-colab`); writes config; prints prefill values; `bin/lib/open-url.mjs` and
       `bin/lib/clipboard.mjs` (pbcopy / wl-copy / xclip / clip.exe, graceful fallback). — Done: `setup` command, ed25519 keygen, clipboard and Orca/system browser helpers (`test/setup.test.mjs`).
-- [ ] **M1.5 Peer discovery + SSH probe.** `bin/lib/tailscale-peer-wait.mjs` (snapshot, poll 3 s, new
+- [x] **M1.5 Peer discovery + SSH probe.** `bin/lib/tailscale-peer-wait.mjs` (snapshot, poll 3 s, new
       online `orca-colab-*` peer, IPv4), `bin/lib/ssh-banner-probe.mjs` (TCP 22, `SSH-` banner, deadline,
-      AbortSignal). Tests with a fake status runner and a local fake banner server.
+      AbortSignal). Tests with a fake status runner and a local fake banner server. — Done: Tailscale peer discovery and TCP 22 SSH banner probe with timeout/abort handling (`test/peer-and-probe.test.mjs`).
 - [ ] **M1.6 `up`.** Orchestrates M1.3–M1.5, fallback clipboard line when `accounts[default].notebookUrl` is absent, GPU
       query via `bin/lib/ssh-exec.mjs` (common ssh argv builder), writes the session, prints JSON, exit
       codes 1/2/3, overall deadline. Test: JSON shape for fixed inputs (hardcoded expected).
