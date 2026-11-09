@@ -67,6 +67,11 @@ export function syncBundledSkillToAgentDirs(homeDir = os.homedir()) {
 
 let cleanupFns = [];
 
+// Orca reports the machine it runs on as host "local" (observed on 1.4.254), not as null.
+export function isRemoteHostId(hostId) {
+  return typeof hostId === "string" && hostId.trim() !== "" && hostId.trim().toLowerCase() !== "local";
+}
+
 function workspaceRows(listRes) {
   return Array.isArray(listRes) ? listRes : Array.isArray(listRes?.workspaces) ? listRes.workspaces : [];
 }
@@ -92,7 +97,7 @@ async function resolveWorkspaceInfo(orca) {
       workspaceId: matched?.id || null,
       workspacePath: matched?.path || null,
       workspaceName: matched?.name || null,
-      hostId: matched?.hostId || null,
+      hostId: isRemoteHostId(matched?.hostId) ? matched.hostId : null,
       terminals: Array.isArray(ctx?.terminals) ? ctx.terminals : [],
     };
   } catch {
@@ -432,15 +437,30 @@ class TerminalBridge {
     return res.terminalId;
   }
 
+  async resolveSendMethod() {
+    if (this.sendMethod) {
+      return this.sendMethod;
+    }
+    // Older hosts only know the terminal.sendText spelling.
+    for (const name of ["terminal.send", "terminal.sendText"]) {
+      if (await this.orca.host.has(name).catch(() => false)) {
+        this.sendMethod = name;
+        return name;
+      }
+    }
+    this.sendMethod = "terminal.send";
+    return this.sendMethod;
+  }
+
   sendRaw(text) {
     if (!this.terminalId) {
       return;
     }
-    this.orca.host
-      .call("terminal.send", { terminalId: this.terminalId, text, enter: true })
-      .catch((err) => {
-        this.lastError = `terminal.send: ${err?.message || err}`;
-      });
+    void this.resolveSendMethod().then((method) =>
+      this.orca.host.call(method, { terminalId: this.terminalId, text, enter: true }).catch((err) => {
+        this.lastError = `${method}: ${err?.message || err}`;
+      }),
+    );
   }
 
   async poll() {

@@ -101,3 +101,12 @@ test("watch answers a call over stdin with a res frame and emits snap frames", a
   child.stdin.write("quit\n");
   await new Promise((r) => child.once("exit", r));
 });
+
+test("isRemoteHostId treats Orca's own machine ('local', null, '') as local", async () => {
+  const { isRemoteHostId } = await import("../worker/main.mjs");
+  assert.equal(isRemoteHostId(null), false);
+  assert.equal(isRemoteHostId(""), false);
+  assert.equal(isRemoteHostId("local"), false);
+  assert.equal(isRemoteHostId("Local"), false);
+  assert.equal(isRemoteHostId("host_7f3a"), true);
+});
