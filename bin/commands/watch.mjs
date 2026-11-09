@@ -50,7 +50,7 @@ export function parseControlLine(line) {
         try {
           input = JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
         } catch {
-          return { verb, reqId, action, error: "malformed input" };
+          return { verb, reqId, action, error: `malformed input (${b64.length} chars: ${b64.slice(0, 24)}…)` };
         }
       }
       return { verb, reqId, action, input };

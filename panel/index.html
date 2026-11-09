@@ -850,9 +850,10 @@
           <span class="badge info">Remote</span>
         </div>
         <div class="card-subtitle">
-          This project lives on an Orca server. Orca does not let plugins open terminals there, so open a
-          terminal in this project yourself and run the command below once. The panel adopts it automatically
-          within a few seconds; leave it running.
+          This project lives on an Orca server. The plugin first tries to open the bridge terminal there by
+          itself through the local <span class="mono">orca</span> CLI; that did not work here (see the status
+          line above), so open a terminal in this project yourself and run the command below once. The panel
+          adopts it automatically within a few seconds; leave it running.
         </div>
         <div class="row" style="gap: 6px; align-items: center">
           <code id="bridgeHintCmd" class="mono" style="flex: 1; overflow: auto; white-space: nowrap">orca-colab watch</code>
@@ -1669,7 +1670,7 @@
         if (isRemote && !snap.bridge?.connected) {
           dot.className = "status-dot warn";
           statusTxt.textContent = snap.bridge?.needsManualTerminal
-            ? "Waiting for the bridge terminal on the server"
+            ? `Waiting for the bridge terminal on the server${snap.bridge?.helper?.error ? ` (${snap.bridge.helper.error})` : ""}`
             : snap.bridge?.error
               ? `Server bridge unavailable: ${snap.bridge.error}`
               : "Connecting to the Colab bridge on the server...";

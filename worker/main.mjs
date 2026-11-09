@@ -17,6 +17,7 @@ import {
 } from "../bin/lib/idle-watchdog.mjs";
 import { createPanelActions, PANEL_ACTION_NAMES } from "../bin/lib/panel-actions.mjs";
 import { listSessions, readSession, writeSession } from "../bin/lib/session-store.mjs";
+import { createOrcaRemoteHelper } from "../bin/lib/orca-remote-helper.mjs";
 import { listTasks, readTaskLog } from "../bin/lib/task-store.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -361,7 +362,7 @@ class LocalBridge {
 // the only channel Orca gives a desktop plugin to a remote host, so state arrives as frames read back
 // from the screen and actions are typed in as control lines.
 class TerminalBridge {
-  constructor({ orca, workspace, remoteCli, autoStopIdleMinutes, onSnapshot, onEvent }) {
+  constructor({ orca, workspace, remoteCli, autoStopIdleMinutes, onSnapshot, onEvent, helper = null }) {
     this.kind = "remote";
     this.orca = orca;
     this.workspace = workspace;
@@ -379,6 +380,9 @@ class TerminalBridge {
     this.reqCounter = 0;
     this.timers = [];
     this.lastStreamFp = "";
+    this.helper = helper;
+    this.transport = "host";
+    this.lastHelperError = null;
     this.storageKey = `bridgeTerminal:${workspace.workspaceId || `name:${workspace.workspaceName}`}`;
   }
 
@@ -398,9 +402,85 @@ class TerminalBridge {
       lastFrameAt: this.lastFrameAt || null,
       error: this.lastError,
       remoteCli: this.remoteCli,
-      needsManualTerminal: !connected && !this.canCreateTerminal,
+      needsManualTerminal: !connected && !this.canCreateTerminal && !this.helperCanCreate,
       manualCommand: this.manualCommand,
+      transport: this.transport,
+      helper: this.helper
+        ? { available: this.helper.available, error: this.lastHelperError }
+        : { available: false, error: "no helper" },
     };
+  }
+
+  get helperCanCreate() {
+    return Boolean(this.helper?.available) && !this.lastHelperError;
+  }
+
+  // Where the host API cannot see the workspace, the local `orca` CLI still can. It finds a terminal
+  // that already prints frames or creates one running `watch`; errors are kept for the panel hint.
+  async ensureTerminalViaHelper() {
+    if (!this.helper?.available) {
+      this.lastHelperError = "orca CLI not found on this machine";
+      return null;
+    }
+    const selectors = ["active"];
+    if (this.workspace.workspaceName) selectors.push(`name:${this.workspace.workspaceName}`);
+    for (const selector of selectors) {
+      const listed = await this.helper.listTerminals(selector);
+      if (!listed.ok) {
+        this.lastHelperError = listed.error;
+        continue;
+      }
+      for (const t of listed.data) {
+        if (t.title === BRIDGE_TERMINAL_TITLE || /@@OC /.test(t.preview)) {
+          this.lastHelperError = null;
+          return t.handle;
+        }
+      }
+      if (Date.now() - this.lastCreateAt < 30_000) {
+        return null;
+      }
+      this.lastCreateAt = Date.now();
+      const created = await this.helper.createTerminal({
+        selector,
+        title: BRIDGE_TERMINAL_TITLE,
+        command: this.manualCommand,
+      });
+      if (created.ok) {
+        this.lastHelperError = null;
+        return created.data.handle;
+      }
+      this.lastHelperError = created.error;
+    }
+    return null;
+  }
+
+  async readTerminal(terminalId) {
+    if (this.transport === "host") {
+      try {
+        const res = await this.orca.host.call("terminal.read", { terminalId, maxLines: 2000 });
+        if (res && Array.isArray(res.lines)) {
+          return res.lines;
+        }
+      } catch (err) {
+        // The host may not know a handle the CLI issued; fall through to the CLI transport.
+        if (!this.helper?.available) throw err;
+      }
+      if (!this.helper?.available) {
+        throw new Error("terminal.read returned no lines");
+      }
+      this.transport = "cli";
+    }
+    const res = await this.helper.readTerminal(terminalId, { cursor: this.cliCursor, limit: 2000 });
+    if (!res.ok) {
+      throw new Error(`orca terminal read: ${res.error}`);
+    }
+    if (res.data.nextCursor !== null && res.data.nextCursor !== undefined) {
+      this.cliCursor = res.data.nextCursor;
+    }
+    if (res.data.status && res.data.status !== "running") {
+      throw new Error(`bridge terminal is ${res.data.status}`);
+    }
+    return res.data.lines;
   }
 
   // Reads the first lines of every terminal in the focused workspace and adopts the one that prints
@@ -437,6 +517,8 @@ class TerminalBridge {
 
   async rememberTerminal(id) {
     this.terminalId = id;
+    this.cliCursor = undefined;
+    this.liveSent = null;
     try {
       await this.orca.storage?.set?.(this.storageKey, id);
     } catch {
@@ -469,7 +551,15 @@ class TerminalBridge {
       return found;
     }
     if (!this.canCreateTerminal) {
-      this.lastError = `Open a terminal in this workspace and run: ${this.manualCommand}`;
+      const viaHelper = await this.ensureTerminalViaHelper();
+      if (viaHelper) {
+        await this.rememberTerminal(viaHelper);
+        this.sendRaw("snap");
+        return viaHelper;
+      }
+      this.lastError = this.lastHelperError
+        ? `${this.lastHelperError}. Open a terminal in this workspace and run: ${this.manualCommand}`
+        : `Open a terminal in this workspace and run: ${this.manualCommand}`;
       return null;
     }
     if (Date.now() - this.lastCreateAt < 30_000) {
@@ -503,15 +593,26 @@ class TerminalBridge {
     return this.sendMethod;
   }
 
+  // Sends are serialised: two concurrent writes to one pty interleave their text and Enter keys.
   sendRaw(text) {
     if (!this.terminalId) {
       return;
     }
-    void this.resolveSendMethod().then((method) =>
-      this.orca.host.call(method, { terminalId: this.terminalId, text, enter: true }).catch((err) => {
+    const terminalId = this.terminalId;
+    this.sendChain = (this.sendChain || Promise.resolve()).then(async () => {
+      if (process.env.ORCA_COLAB_BRIDGE_DEBUG) {
+        this.orca.log(`bridge send via ${this.transport} to ${terminalId}: ${JSON.stringify(text)}`);
+      }
+      if (this.transport === "cli") {
+        const res = await this.helper.sendTerminal(terminalId, text);
+        if (!res.ok) this.lastError = `orca terminal send: ${res.error}`;
+        return;
+      }
+      const method = await this.resolveSendMethod();
+      await this.orca.host.call(method, { terminalId, text, enter: true }).catch((err) => {
         this.lastError = `${method}: ${err?.message || err}`;
-      }),
-    );
+      });
+    });
   }
 
   async poll() {
@@ -520,11 +621,8 @@ class TerminalBridge {
       if (!terminalId) {
         return;
       }
-      const res = await this.orca.host.call("terminal.read", { terminalId, maxLines: 2000 });
-      if (!res || !Array.isArray(res.lines)) {
-        throw new Error("terminal.read returned no lines");
-      }
-      for (const frame of this.assembler.ingest(res.lines.join("\n"))) {
+      const lines = await this.readTerminal(terminalId);
+      for (const frame of this.assembler.ingest(lines.join("\n"))) {
         this.lastFrameAt = Date.now();
         this.lastError = null;
         this.handleFrame(frame);
@@ -591,22 +689,24 @@ class TerminalBridge {
   }
 
   setLive(on) {
-    this.sendRaw(`live ${on ? 1 : 0}`);
+    const next = on ? 1 : 0;
+    if (this.liveSent === next) {
+      return;
+    }
+    this.liveSent = next;
+    this.sendRaw(`live ${next}`);
   }
 
+  // Never blocks: the panel polls every 2 s and a slow answer would time out and freeze the old view.
   async snapshot() {
     if (this.latestSnap) {
       return this.decorate(this.latestSnap);
     }
-    await this.ensureTerminal().catch(() => null);
-    const deadline = Date.now() + 12_000;
-    while (!this.latestSnap && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 400));
-      await this.poll();
-    }
-    if (this.latestSnap) {
-      return this.decorate(this.latestSnap);
-    }
+    void this.poll();
+    return this.placeholder();
+  }
+
+  placeholder() {
     return {
       origin: { kind: "remote", hostId: this.workspace.hostId, workspaceName: this.workspace.workspaceName },
       bridge: this.describe(),
@@ -652,6 +752,10 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
   const skillSync = syncBundledSkillToAgentDirs(homeDir);
   const budgetNotifiedKeys = {};
   const remoteBridges = new Map();
+  // ORCA_COLAB_DISABLE_ORCA_CLI=1 keeps tests from touching the real Orca on this machine.
+  const remoteHelper = createOrcaRemoteHelper(
+    process.env.ORCA_COLAB_DISABLE_ORCA_CLI ? { orcaBin: null } : { env: process.env },
+  );
   let activeBridge = null;
   let lastResolveAt = 0;
   let lastResolvedKey = "";
@@ -739,6 +843,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
         autoStopIdleMinutes,
         onSnapshot: (snap, meta) => postFromBridge(bridge)(snap, meta),
         onEvent: onRemoteEvent,
+        helper: remoteHelper,
       });
       remoteBridges.set(bridgeKey, bridge);
       bridge.start();
@@ -747,9 +852,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
     }
     if (activeBridge !== bridge) {
       activeBridge = bridge;
-      if (bridge.latestSnap) {
-        orca.panels.post("colab.stateChanged", bridge.decorate(bridge.latestSnap));
-      }
+      orca.panels.post("colab.stateChanged", await bridge.snapshot());
     }
     return bridge;
   };
@@ -859,6 +962,10 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
       workspaceList: listRes,
       resolved: await resolveWorkspaceInfo(orca),
       activeBridge: activeBridge?.kind || null,
+      bridge: activeBridge?.describe?.() || null,
+      orcaCli: remoteHelper.available
+        ? { bin: remoteHelper.orcaBin, activeWorktree: await remoteHelper.activeWorktree() }
+        : { bin: null },
       hostHas: {
         terminalSend: await hostHas(orca, "terminal.send"),
         terminalSendText: await hostHas(orca, "terminal.sendText"),
@@ -1028,7 +1135,16 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
   });
 
   const statusInterval = setInterval(() => void refreshStatusBar(), 30_000);
-  const bridgeInterval = setInterval(() => void resolveBridge(), 5000);
+  const bridgeInterval = setInterval(() => void resolveBridge(), 3000);
+  // Focus changes arrive as workspace events on hosts that emit them; the interval covers the rest.
+  for (const eventName of ["workspace.changed", "workspace.created", "workspace.removed"]) {
+    try {
+      const off = orca.events?.on?.(eventName, () => void resolveBridge({ force: true }));
+      if (typeof off === "function") cleanupFns.push(off);
+    } catch {
+      // Event not supported on this host.
+    }
+  }
   cleanupFns.push(() => clearInterval(statusInterval));
   cleanupFns.push(() => clearInterval(bridgeInterval));
   cleanupFns.push(() => clearInterval(provisioningTicker));

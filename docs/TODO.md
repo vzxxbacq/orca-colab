@@ -75,8 +75,10 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
       Human steps: (1) in the desktop Orca, reload the plugin from this branch and approve the new
       fingerprint (it now asks to read terminals); (2) set the plugin setting "orca-colab command on
       remote Orca servers" to `node /Users/user/orca/projects/orca-colab/bin/orca-colab.mjs`; (3) focus
-      the server-hosted project: the top bar should show `Server · <workspace>`, a `Colab Bridge`
-      terminal should appear in that workspace, and the Agent Runs list should show the server's tasks;
+      the server-hosted project: the top bar should show `Server · <host>`, a `Colab Bridge` terminal
+      should appear in that workspace within a few seconds (created through the local `orca` CLI), and
+      the Agent Runs list should show the server's tasks; if instead a card asks you to run `watch` by
+      hand, send the output of `orca plugin dev request . colab.debugWorkspace --data '{}'`;
       (4) click Sign in with Google, open the link, approve, paste the redirected URL, confirm the
       account appears; (5) switch to a local project and confirm the badge says `Local`.
 - [ ] Orca browser research (D16): confirm Google sign-in and Colab cell execution work inside Orca's

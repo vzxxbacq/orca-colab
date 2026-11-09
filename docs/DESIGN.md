@@ -255,10 +255,17 @@ No outputs committed. No pip packages.
   6. **Origin badge**: `Local` or `Server · <workspace>` in the top bar, so the user always knows whose
      `~/.orca-colab` is on screen; a paste box for the redirect URL appears during a remote sign-in.
 - Remote workspaces (D18): `worker/main.mjs` holds one `LocalBridge` plus one `TerminalBridge` per remote
-  workspace id and switches between them as the focused workspace changes (`workspace.list` → `hostId`).
-  The bridge terminal runs `<remoteCliCommand> watch --auto-stop-idle-minutes N`; `watch` also carries
-  the token refresh and the idle watchdog for that server, since the client worker cannot reach its
-  sessions. Settings: `remoteCliCommand` (empty → `cliCommand`). Capability `terminal:read` added.
+  workspace and switches between them as the focused workspace changes. A workspace is remote when its
+  `workspace.list` row has a `hostId` other than `local`, or when `readContext` names a workspace that
+  `workspace.list` does not contain at all (what the desktop client reports for server-hosted projects).
+  Finding or starting the bridge terminal, in order: a terminal from `readContext.terminals` that already
+  prints frames; `terminal.create` when the host API has the workspace id; otherwise the local `orca` CLI
+  (`bin/lib/orca-remote-helper.mjs`: `worktree show --worktree active`, `terminal list/create/read/send`)
+  through the same client↔server connection, switching the bridge to the CLI transport when the host API
+  does not know the handle; only when all of that fails does the panel show the exact command to run by
+  hand. The bridge terminal runs `<remoteCliCommand> watch --auto-stop-idle-minutes N`; `watch` also
+  carries the token refresh and the idle watchdog for that server. Settings: `remoteCliCommand` (empty →
+  `cliCommand`). Capability `terminal:read` added.
 - Install identity `vzxxbacq.colab` (publisher derived from the repo owner).
 
 ## Optional remote-workspace mode (not scheduled)
