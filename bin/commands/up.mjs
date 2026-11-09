@@ -191,8 +191,8 @@ export async function run(
     const gpuLabel = selectedGpu;
     const lockPath = path.join(paths.baseDir, "assign.lock");
     mkdirSync(paths.baseDir, { recursive: true, mode: 0o700 });
-    const lockDeadline = Date.now() + 90_000;
-    while (existsSync(lockPath) && Date.now() < lockDeadline) {
+    if (existsSync(lockPath)) {
+      let activeLock = null;
       try {
         const lockObj = JSON.parse(readFileSync(lockPath, "utf8"));
         const ageMs = Date.now() - (lockObj.ts || 0);
@@ -203,20 +203,39 @@ export async function run(
         } catch {
           alive = false;
         }
-        if (!alive || ageMs > 90_000) {
+        if (alive && ageMs < 90_000) {
+          activeLock = {
+            pid: lockObj.pid,
+            gpu: lockObj.gpu || null,
+            elapsedSeconds: Math.max(1, Math.round(ageMs / 1000)),
+          };
+        } else {
           rmSync(lockPath, { force: true });
-          break;
         }
       } catch {
         rmSync(lockPath, { force: true });
-        break;
       }
-      await new Promise((r) => setTimeout(r, 500));
+
+      if (activeLock) {
+        const errMsg = `Another Colab runtime provisioning is currently in progress (PID ${activeLock.pid}, started ${activeLock.elapsedSeconds}s ago). Wait ~15 seconds and retry 'orca-colab up'.`;
+        throw new CliError(errMsg, {
+          exitCode: EXIT_ERROR,
+          payload: {
+            ok: false,
+            code: "PROVISIONING_IN_PROGRESS",
+            retryAfterSeconds: 15,
+            lockedByPid: activeLock.pid,
+            elapsedSeconds: activeLock.elapsedSeconds,
+            error: errMsg,
+            step: "assign_lock",
+          },
+        });
+      }
     }
     try {
       writeFileSync(
         lockPath,
-        JSON.stringify({ pid: process.pid, ts: Date.now() }),
+        JSON.stringify({ pid: process.pid, gpu: gpuLabel, ts: Date.now() }),
         { mode: 0o600 },
       );
     } catch {

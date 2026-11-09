@@ -31,6 +31,7 @@ Always pass `--json` and parse **stdout** only (progress and diagnostics go to `
 2. Provision or attach to a runtime:
    - Reuse or start a session: `up --gpu T4 --json` (or `up --gpu auto --json` to pick the default allowed GPU).
    - Start an additional concurrent session (up to `policy.maxConcurrentSessions` on Colab Pro+): `up --gpu L4 --new --name worker2 --json`.
+   - If `up` exits `1` with `code: "PROVISIONING_IN_PROGRESS"` (`step: "assign_lock"`), another Agent is currently creating a Colab runtime; wait `retryAfterSeconds` (~15s) and retry `up`.
    - If `up` exits `1` with `step: "policy"`, respect the user's hardware guardrail and select from the returned `allowedGpus` list.
 
 ## 4. Calling Compute Resources (Sync, Run, and Jobs)

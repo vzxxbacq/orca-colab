@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, watch } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, watch } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -185,6 +185,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
   const paths = ensureColabHome(homeDir);
   const skillSync = syncBundledSkillToAgentDirs(homeDir);
   const gpuUtilSamplesBySession = new Map();
+  const liveMetricsBySession = new Map();
   const graceTimersBySession = new Map();
   const budgetNotifiedKeys = {};
   let selectedTaskId = null;
@@ -192,6 +193,8 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
   let lastTasksListFingerprint = "";
   let lastSessionsFingerprint = "";
   let lastNewestTaskId = null;
+  let cachedDoctor = null;
+  let lastDoctorAt = 0;
   let provisioningState = { active: false, message: null, error: null };
 
   const notifyUser = async (message, tone = "info") => {
@@ -239,7 +242,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
         });
 
         let reachable = s.state !== "zombie";
-        let liveMetrics = null;
+        let liveMetrics = liveMetricsBySession.get(s.name) || null;
         if (includeLiveMetrics && s.state !== "zombie") {
           if (s.ip) {
             const probe = await probeSshBannerOnce({
@@ -255,6 +258,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
               const resInfo = await getRuntimeResources({
                 baseUrl: s.colabRuntime.baseUrl,
                 proxyToken: s.colabRuntime.token,
+                timeoutMs: 3500,
               });
               const g0 = Array.isArray(resInfo?.gpus) ? resInfo.gpus[0] : null;
               liveMetrics = {
@@ -291,6 +295,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
                       )
                     : null,
               };
+              liveMetricsBySession.set(s.name, liveMetrics);
             } catch {
               // Fall back to SSH nvidia-smi below if IP is present.
             }
@@ -298,6 +303,9 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
 
           if (!liveMetrics && s.ip && reachable) {
             liveMetrics = queryLiveGpuMetricsViaSsh(s.ip, homeDir);
+            if (liveMetrics) {
+              liveMetricsBySession.set(s.name, liveMetrics);
+            }
           }
         }
 
@@ -354,7 +362,32 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
       };
     }
 
-    const doctor = runDoctor({ homeDir, env: process.env });
+    if (!cachedDoctor || Date.now() - lastDoctorAt > 30_000) {
+      cachedDoctor = runDoctor({ homeDir, env: process.env });
+      lastDoctorAt = Date.now();
+    }
+    const doctor = cachedDoctor;
+
+    let effectiveProvisioning = provisioningState;
+    if (!effectiveProvisioning.active) {
+      const lockFile = path.join(paths.baseDir, "assign.lock");
+      if (existsSync(lockFile)) {
+        try {
+          const lockObj = JSON.parse(readFileSync(lockFile, "utf8"));
+          const ageMs = Date.now() - (lockObj.ts || 0);
+          process.kill(lockObj.pid, 0);
+          if (ageMs < 90_000) {
+            effectiveProvisioning = {
+              active: true,
+              message: `Agent (PID ${lockObj.pid}) is provisioning Colab ${lockObj.gpu || "GPU"} runtime (${Math.max(1, Math.round(ageMs / 1000))}s)...`,
+              error: null,
+            };
+          }
+        } catch {
+          // Stale or finished lock.
+        }
+      }
+    }
 
     return {
       defaultAccount,
@@ -362,7 +395,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
       doctor,
       policy: resolveAgentPolicy(config),
       skillSync,
-      provisioning: provisioningState,
+      provisioning: effectiveProvisioning,
       auth: authByAccount[defaultAccount] || {
         account: defaultAccount,
         authenticated: false,

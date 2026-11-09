@@ -308,14 +308,20 @@ export async function getRuntimeResources({
   proxyToken,
   fetchImpl = fetch,
   signal,
+  timeoutMs = 4000,
 } = {}) {
   const url = new URL("/api/colab/resources", baseUrl);
+  const effectiveSignal =
+    signal ||
+    (typeof AbortSignal?.timeout === "function"
+      ? AbortSignal.timeout(timeoutMs)
+      : undefined);
   const res = await colabJsonRequest(url, {
     headers: {
       [COLAB_PROXY_TOKEN_HEADER]: proxyToken,
     },
     fetchImpl,
-    signal,
+    signal: effectiveSignal,
   });
   return res;
 }
