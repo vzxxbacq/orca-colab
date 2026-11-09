@@ -192,3 +192,49 @@ export function resolveAccount(config, requestedLabel) {
   const found = normalized.accounts.find((a) => a.label === label);
   return found ?? { label };
 }
+
+export function listKnownAccountLabels(homeDir = os.homedir(), configInput = null) {
+  const config = configInput || readConfig(homeDir);
+  const { oauthPath } = getColabPaths(homeDir);
+  const oauthStore = readJsonFile(oauthPath);
+  const oauthKeys =
+    oauthStore?.accounts && typeof oauthStore.accounts === "object"
+      ? Object.keys(oauthStore.accounts).filter(
+          (k) =>
+            oauthStore.accounts[k] &&
+            typeof oauthStore.accounts[k].refreshToken === "string" &&
+            oauthStore.accounts[k].refreshToken,
+        )
+      : [];
+  const configLabels =
+    Array.isArray(config?.accounts) && config.accounts.length > 0
+      ? config.accounts.map((a) => a.label)
+      : ["default"];
+
+  const seen = new Set();
+  const merged = [];
+  for (const label of [...oauthKeys, ...configLabels]) {
+    if (label && !seen.has(label)) {
+      seen.add(label);
+      merged.push(label);
+    }
+  }
+  return merged.length > 0 ? merged : ["default"];
+}
+
+export function setDefaultAccount(accountLabel, homeDir = os.homedir()) {
+  const label = String(accountLabel || "default").trim();
+  const existing = readConfig(homeDir) || {};
+  const accounts = Array.isArray(existing.accounts) ? [...existing.accounts] : [];
+  if (!accounts.some((a) => a.label === label)) {
+    accounts.push({ label });
+  }
+  return writeConfig(
+    {
+      ...existing,
+      accounts,
+      defaultAccount: label,
+    },
+    homeDir,
+  );
+}

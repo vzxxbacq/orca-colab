@@ -27,7 +27,12 @@ import {
   resolveAccount,
   resolveAgentPolicy,
 } from "../lib/colab-home.mjs";
-import { getValidAccessToken } from "../lib/colab-oauth.mjs";
+import {
+  getValidAccessToken,
+  listOAuthAccounts,
+  readOAuthAccountStatus,
+  resolveOAuthAccountKey,
+} from "../lib/colab-oauth.mjs";
 import { recordSessionStartEvent } from "../lib/credit-ledger.mjs";
 import { BOOTSTRAP_NOTEBOOK_COLAB_URL, openUrl } from "../lib/open-url.mjs";
 import { resolveGpuRate as resolveRateFromTable } from "../lib/rate-table.mjs";
@@ -101,7 +106,42 @@ export async function run(
   const config = readConfig(homeDir);
   const policy = resolveAgentPolicy(config);
   const paths = getColabPaths(homeDir);
-  const account = resolveAccount(config, opts.account);
+  const allNonZombieSessions = listSessions(homeDir).filter(
+    (s) => s?.state !== "zombie",
+  );
+  const oauthAccounts = listOAuthAccounts(homeDir);
+  const explicitAccount =
+    opts.account && opts.account !== "auto"
+      ? resolveOAuthAccountKey(opts.account, null, homeDir)
+      : null;
+
+  let account = resolveAccount(config, explicitAccount || undefined);
+  if (!explicitAccount && oauthAccounts.length > 0) {
+    const defaultAuth = readOAuthAccountStatus(account.label, homeDir);
+    const countFor = (label) =>
+      allNonZombieSessions.filter((s) => (s?.account || "default") === label)
+        .length;
+
+    const candidates = [
+      ...(defaultAuth.authenticated ? [defaultAuth.account] : []),
+      ...oauthAccounts
+        .map((a) => a.account)
+        .filter((a) => a !== defaultAuth.account),
+    ];
+
+    if (opts.new) {
+      const available = candidates.find(
+        (label) => countFor(label) < policy.maxConcurrentSessions,
+      );
+      if (available) {
+        account = resolveAccount(config, available);
+      } else if (candidates[0]) {
+        account = resolveAccount(config, candidates[0]);
+      }
+    } else if (!defaultAuth.authenticated && candidates[0]) {
+      account = resolveAccount(config, candidates[0]);
+    }
+  }
 
   const requestedGpuRaw = opts.gpu ? String(opts.gpu).trim().toUpperCase() : null;
   const selectedGpu =

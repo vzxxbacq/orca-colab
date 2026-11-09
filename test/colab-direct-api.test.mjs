@@ -440,3 +440,127 @@ test("Tailscale-free mode: up and execCommandOverTty work with only Google OAuth
     rmSync(homeDir, { recursive: true, force: true });
   }
 });
+
+test("Multi-account OAuth supports listing, switching default, and automatic account pool scaling on up --new", async () => {
+  const homeDir = makeTempHome();
+  try {
+    writeConfig(
+      {
+        accounts: [{ label: "default" }, { label: "acc2@example.com" }],
+        defaultAccount: "default",
+        maxConcurrentSessions: 1,
+      },
+      homeDir,
+    );
+
+    saveOAuthCredentials(
+      "default",
+      {
+        refreshToken: "ref-acc1",
+        accessToken: "tok-acc1",
+        expiryDate: Date.now() + 3600_000,
+        email: "acc1@example.com",
+      },
+      homeDir,
+    );
+    saveOAuthCredentials(
+      "acc2@example.com",
+      {
+        refreshToken: "ref-acc2",
+        accessToken: "tok-acc2",
+        expiryDate: Date.now() + 3600_000,
+        email: "acc2@example.com",
+      },
+      homeDir,
+    );
+
+    const listIo = makeBuffers();
+    const listCode = await runAuth(["list"], {
+      json: true,
+      stdout: listIo.stdout,
+      stderr: listIo.stderr,
+      homeDir,
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            subscriptionTier: "SUBSCRIPTION_TIER_PRO",
+            paidComputeUnitsBalance: 50,
+            runtimes: [],
+          }),
+      }),
+    });
+    assert.equal(listCode, 0);
+    const listJson = JSON.parse(listIo.stdoutText);
+    assert.equal(listJson.accounts.length, 2);
+    assert.equal(listJson.defaultAccount, "default");
+
+    // 1st runtime provisions on default account ("default")
+    const up1Io = makeBuffers();
+    const up1Code = await runUp(["--gpu", "T4", "--name", "m1"], {
+      json: true,
+      stdout: up1Io.stdout,
+      stderr: up1Io.stderr,
+      env: {},
+      homeDir,
+      assignRuntimeFn: async ({ accessToken }) => {
+        assert.equal(accessToken, "tok-acc1");
+        return {
+          id: "rt-m1",
+          endpoint: "ep-m1",
+          baseUrl: "https://8080-rt-m1.colab.dev",
+          token: "ptok-1",
+          tokenExpiry: "2026-11-09T22:00:00Z",
+        };
+      },
+      queryGpuTtyFn: async () => ({
+        name: "Tesla T4",
+        memoryTotalMiB: 15360,
+        driverVersion: "550.54.15",
+      }),
+    });
+    assert.equal(up1Code, 0);
+    assert.equal(JSON.parse(up1Io.stdoutText).account, "default");
+
+    // 2nd runtime with --new automatically overflows to "acc2@example.com" since maxConcurrentSessions=1 per account
+    const up2Io = makeBuffers();
+    const up2Code = await runUp(["--gpu", "T4", "--new", "--name", "m2"], {
+      json: true,
+      stdout: up2Io.stdout,
+      stderr: up2Io.stderr,
+      env: {},
+      homeDir,
+      assignRuntimeFn: async ({ accessToken }) => {
+        assert.equal(accessToken, "tok-acc2");
+        return {
+          id: "rt-m2",
+          endpoint: "ep-m2",
+          baseUrl: "https://8080-rt-m2.colab.dev",
+          token: "ptok-2",
+          tokenExpiry: "2026-11-09T22:00:00Z",
+        };
+      },
+      queryGpuTtyFn: async () => ({
+        name: "Tesla T4",
+        memoryTotalMiB: 15360,
+        driverVersion: "550.54.15",
+      }),
+    });
+    assert.equal(up2Code, 0);
+    assert.equal(JSON.parse(up2Io.stdoutText).account, "acc2@example.com");
+
+    // Switch default account via CLI
+    const swIo = makeBuffers();
+    const swCode = await runAuth(["switch", "acc2@example.com"], {
+      json: true,
+      stdout: swIo.stdout,
+      stderr: swIo.stderr,
+      homeDir,
+    });
+    assert.equal(swCode, 0);
+    assert.equal(JSON.parse(swIo.stdoutText).defaultAccount, "acc2@example.com");
+  } finally {
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+});

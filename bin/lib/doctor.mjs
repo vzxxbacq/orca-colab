@@ -7,7 +7,7 @@ import {
   resolveAccount,
   resolveAgentPolicy,
 } from "./colab-home.mjs";
-import { readOAuthAccountStatus } from "./colab-oauth.mjs";
+import { listOAuthAccounts, readOAuthAccountStatus } from "./colab-oauth.mjs";
 import {
   findExecutableOnPath,
   getTailscaleStatus,
@@ -171,15 +171,24 @@ export function runDoctor({
   const defaultAcc = config ? resolveAccount(config) : null;
   const notebookUrlConfigured = Boolean(defaultAcc?.notebookUrl);
 
-  const oauthStatus = readOAuthAccountStatus(
+  const allOAuthAccounts = listOAuthAccounts(homeDir);
+  const primaryOAuthStatus = readOAuthAccountStatus(
     defaultAcc?.label || "default",
     homeDir,
   );
+  const oauthStatus = primaryOAuthStatus?.authenticated
+    ? primaryOAuthStatus
+    : allOAuthAccounts[0] || primaryOAuthStatus;
   const oauthOk = Boolean(oauthStatus?.authenticated);
   const oauthCheck = {
     ok: oauthOk,
     account: oauthStatus?.account || defaultAcc?.label || "default",
     email: oauthStatus?.email || null,
+    accountsCount: allOAuthAccounts.length,
+    accounts: allOAuthAccounts.map((a) => ({
+      account: a.account,
+      email: a.email,
+    })),
   };
 
   let authKeyAgeDays = null;

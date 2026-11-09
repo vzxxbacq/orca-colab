@@ -17,15 +17,19 @@ import { locateOrcaBinary } from "../bin/lib/colab-browser-automation.mjs";
 import {
   ensureColabHome,
   getColabPaths,
+  listKnownAccountLabels,
   readConfig,
   resolveAccount,
   resolveAgentPolicy,
+  setDefaultAccount,
   writeConfig,
 } from "../bin/lib/colab-home.mjs";
 import {
   getValidAccessToken,
+  listOAuthAccounts,
   readOAuthAccountStatus,
   removeOAuthCredentials,
+  resolveOAuthAccountKey,
   runLoopbackOAuthFlow,
 } from "../bin/lib/colab-oauth.mjs";
 import {
@@ -213,11 +217,14 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
 
   const buildDashboardSnapshot = async ({ includeLiveMetrics = false } = {}) => {
     const config = readConfig(homeDir);
-    const defaultAccount = resolveAccount(config).label;
-    const accounts =
-      Array.isArray(config?.accounts) && config.accounts.length > 0
-        ? config.accounts.map((a) => a.label)
-        : ["default"];
+    const configuredDefault = resolveAccount(config).label;
+    const accounts = listKnownAccountLabels(homeDir, config);
+    const oauthAccounts = listOAuthAccounts(homeDir);
+    const defaultAccount =
+      oauthAccounts.some((a) => a.account === configuredDefault) ||
+      oauthAccounts.length === 0
+        ? configuredDefault
+        : oauthAccounts[0].account;
 
     const sessions = listSessions(homeDir);
     const tasks = listTasks(homeDir);
@@ -392,6 +399,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
     return {
       defaultAccount,
       accounts,
+      oauthAccounts,
       doctor,
       policy: resolveAgentPolicy(config),
       skillSync,
@@ -749,22 +757,34 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
 
   orca.panels.handle("colab.authLogin", async (input = {}) => {
     const config = readConfig(homeDir);
-    const account = resolveAccount(config, input?.account).label;
+    const addAccount = Boolean(input?.addAccount);
+    const requested = input?.account
+      ? String(input.account).trim()
+      : addAccount
+        ? "auto"
+        : resolveAccount(config).label;
     const status = await runLoopbackOAuthFlow({
-      account,
+      account: requested,
+      addAccount,
       homeDir,
       onAuthUrl: (authUrl) => {
         orca.panels.post("colab.oauthUrl", { authUrl });
       },
     });
+    const savedAccount = status.account || requested;
+    setDefaultAccount(savedAccount, homeDir);
+    cachedDoctor = null;
     try {
-      const accessToken = await getValidAccessToken({ account, homeDir });
+      const accessToken = await getValidAccessToken({
+        account: savedAccount,
+        homeDir,
+      });
       if (accessToken) {
         const ccu = await getConsumptionUserInfo({ accessToken });
         if (typeof ccu.paidComputeUnitsBalance === "number") {
           recordCalibrateEvent(
             {
-              account,
+              account: savedAccount,
               balanceCu: ccu.paidComputeUnitsBalance,
               source: "colab-api",
             },
@@ -781,10 +801,32 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
     return { ok: true, status, dashboard: snap };
   });
 
+  orca.panels.handle("colab.authSwitch", async (input = {}) => {
+    const raw = String(input?.account || "").trim();
+    if (!raw) {
+      throw new Error("Account is required.");
+    }
+    const targetKey = resolveOAuthAccountKey(raw, null, homeDir);
+    setDefaultAccount(targetKey, homeDir);
+    cachedDoctor = null;
+    await refreshStatusBar();
+    const snap = await buildDashboardSnapshot();
+    orca.panels.post("colab.stateChanged", snap);
+    return { ok: true, defaultAccount: targetKey, dashboard: snap };
+  });
+
   orca.panels.handle("colab.authLogout", async (input = {}) => {
     const config = readConfig(homeDir);
-    const account = resolveAccount(config, input?.account).label;
-    removeOAuthCredentials(account, homeDir);
+    const target = input?.account
+      ? resolveOAuthAccountKey(input.account, null, homeDir)
+      : resolveAccount(config).label;
+    removeOAuthCredentials(target, homeDir);
+    const remaining = listOAuthAccounts(homeDir);
+    if (remaining.length > 0 && resolveAccount(config).label === target) {
+      setDefaultAccount(remaining[0].account, homeDir);
+    }
+    cachedDoctor = null;
+    await refreshStatusBar();
     const snap = await buildDashboardSnapshot();
     orca.panels.post("colab.stateChanged", snap);
     return { ok: true, dashboard: snap };

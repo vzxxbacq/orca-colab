@@ -66,7 +66,7 @@ export function buildGoogleAuthUrl({
   scopes = COLAB_OAUTH_CONFIG.scopes,
   clientId = resolveOAuthClientConfig().clientId,
   loginHint,
-  prompt = "consent",
+  prompt = "select_account consent",
 }) {
   const url = new URL(COLAB_OAUTH_CONFIG.authEndpoint);
   url.searchParams.set("client_id", clientId);
@@ -111,9 +111,29 @@ export function writeOAuthStore(store, homeDir = os.homedir()) {
   return normalized;
 }
 
+export function resolveOAuthAccountKey(account = "default", store = null, homeDir = os.homedir()) {
+  const s = store || readOAuthStore(homeDir);
+  const accounts = s?.accounts || {};
+  const requested = String(account || "default").trim();
+  if (accounts[requested]) {
+    return requested;
+  }
+  const lower = requested.toLowerCase();
+  for (const [key, entry] of Object.entries(accounts)) {
+    if (
+      key.toLowerCase() === lower ||
+      (typeof entry?.email === "string" && entry.email.toLowerCase() === lower)
+    ) {
+      return key;
+    }
+  }
+  return requested;
+}
+
 export function getStoredOAuthCredentials(account = "default", homeDir = os.homedir()) {
   const store = readOAuthStore(homeDir);
-  const entry = store.accounts?.[account];
+  const key = resolveOAuthAccountKey(account, store, homeDir);
+  const entry = store.accounts?.[key];
   if (!entry || typeof entry.refreshToken !== "string" || !entry.refreshToken) {
     return null;
   }
@@ -122,7 +142,8 @@ export function getStoredOAuthCredentials(account = "default", homeDir = os.home
 
 export function saveOAuthCredentials(account, credentials, homeDir = os.homedir()) {
   const store = readOAuthStore(homeDir);
-  store.accounts[account] = {
+  const key = String(account || "default").trim();
+  store.accounts[key] = {
     refreshToken: credentials.refreshToken,
     accessToken: credentials.accessToken,
     expiryDate: credentials.expiryDate,
@@ -132,24 +153,27 @@ export function saveOAuthCredentials(account, credentials, homeDir = os.homedir(
     updatedAt: new Date().toISOString(),
   };
   writeOAuthStore(store, homeDir);
-  return readOAuthAccountStatus(account, homeDir);
+  return readOAuthAccountStatus(key, homeDir);
 }
 
 export function removeOAuthCredentials(account = "default", homeDir = os.homedir()) {
   const store = readOAuthStore(homeDir);
-  const existed = Boolean(store.accounts?.[account]);
+  const key = resolveOAuthAccountKey(account, store, homeDir);
+  const existed = Boolean(store.accounts?.[key]);
   if (existed) {
-    delete store.accounts[account];
+    delete store.accounts[key];
     writeOAuthStore(store, homeDir);
   }
   return existed;
 }
 
 export function readOAuthAccountStatus(account = "default", homeDir = os.homedir()) {
-  const entry = getStoredOAuthCredentials(account, homeDir);
-  if (!entry) {
+  const store = readOAuthStore(homeDir);
+  const key = resolveOAuthAccountKey(account, store, homeDir);
+  const entry = store.accounts?.[key];
+  if (!entry || typeof entry.refreshToken !== "string" || !entry.refreshToken) {
     return {
-      account,
+      account: key,
       authenticated: false,
       email: null,
       name: null,
@@ -157,12 +181,20 @@ export function readOAuthAccountStatus(account = "default", homeDir = os.homedir
     };
   }
   return {
-    account,
+    account: key,
     authenticated: true,
     email: entry.email || null,
     name: entry.name || null,
     updatedAt: entry.updatedAt || null,
   };
+}
+
+export function listOAuthAccounts(homeDir = os.homedir()) {
+  const store = readOAuthStore(homeDir);
+  const keys = Object.keys(store.accounts || {});
+  return keys
+    .map((key) => readOAuthAccountStatus(key, homeDir))
+    .filter((entry) => entry.authenticated);
 }
 
 export async function exchangeAuthorizationCode({
@@ -276,8 +308,10 @@ export async function getValidAccessToken({
   homeDir = os.homedir(),
   fetchImpl = fetch,
 } = {}) {
-  const stored = getStoredOAuthCredentials(account, homeDir);
-  if (!stored) {
+  const store = readOAuthStore(homeDir);
+  const resolvedKey = resolveOAuthAccountKey(account, store, homeDir);
+  const stored = store.accounts?.[resolvedKey];
+  if (!stored || typeof stored.refreshToken !== "string" || !stored.refreshToken) {
     return null;
   }
 
@@ -297,7 +331,7 @@ export async function getValidAccessToken({
   });
 
   saveOAuthCredentials(
-    account,
+    resolvedKey,
     {
       ...stored,
       accessToken: refreshed.accessToken,
@@ -312,6 +346,7 @@ export async function getValidAccessToken({
 
 export async function runLoopbackOAuthFlow({
   account = "default",
+  addAccount = false,
   homeDir = os.homedir(),
   timeoutMs = 180_000,
   openBrowser = openUrlInSystemBrowser,
@@ -429,8 +464,28 @@ export async function runLoopbackOAuthFlow({
       fetchImpl,
     });
     const profile = await fetchGoogleUserProfile(tokens.accessToken, { fetchImpl });
+    const store = readOAuthStore(homeDir);
+    let targetAccount = account || "default";
+    if (profile.email) {
+      const existingMatch = Object.entries(store.accounts || {}).find(
+        ([, entry]) =>
+          typeof entry?.email === "string" &&
+          entry.email.toLowerCase() === profile.email.toLowerCase(),
+      );
+      if (existingMatch && (targetAccount === "default" || targetAccount === "auto" || addAccount)) {
+        targetAccount = existingMatch[0];
+      } else if (
+        addAccount ||
+        targetAccount === "auto" ||
+        (targetAccount === "default" &&
+          store.accounts?.default?.email &&
+          store.accounts.default.email.toLowerCase() !== profile.email.toLowerCase())
+      ) {
+        targetAccount = profile.email;
+      }
+    }
     return saveOAuthCredentials(
-      account,
+      targetAccount,
       {
         ...tokens,
         email: profile.email,

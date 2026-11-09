@@ -1,45 +1,49 @@
 # orca-colab
 
-Use a Google Colab GPU from your local [Orca](https://github.com/stablyai/orca) workspace. A skill teaches
-your coding agent to set it up with you and use it; a zero-dependency CLI does the work; a thin Orca plugin
-shows the sessions. Your agent, code and credentials stay on your machine. Colab is a disposable GPU box
-reached over your Tailscale tailnet.
+[**English**](./README.md) | [**简体中文**](./README.zh-CN.md)
 
-Status: Milestone 1 & 2 (`v0.1.0`) — Skill + CLI + Colab VS Code Direct API + Task Manager + Orca Plugin. See `docs/DESIGN.md` and `docs/TODO.md`.
+Use Google Colab GPUs as an autonomous compute backend for local coding agents in [Orca](https://github.com/stablyai/orca).
 
-## Quick start
+- **Humans set guardrails**: Sign in with Google, pick allowed GPU tiers, and cap concurrent runtimes & monthly Compute Units.
+- **Agents manage compute**: Agents autonomously check policy, provision or scale parallel runtimes, install dependencies, stream task logs, and release idle GPUs.
+- **Direct API connection**: Connects directly to Google Colab without Tailscale or manual browser steps (optional Tailscale SSH also supported).
 
-One-time setup (about 5 minutes, guided by your coding agent):
+## Quick Start
 
-```sh
-npx skills add vzxxbacq/orca-colab                      # install the colab-gpu agent skill
-npx -y github:vzxxbacq/orca-colab#v0.1.0 doctor --json  # check local prerequisites
-npx -y github:vzxxbacq/orca-colab#v0.1.0 setup          # save Tailscale auth key (0600) & generate SSH keypair
-npx -y github:vzxxbacq/orca-colab#v0.1.0 auth login     # sign in once in default browser (Passkey supported) for headless API provisioning
-```
-
-Per session (browserless with `auth login`, or notebook fallback):
-
-1. Run `orca-colab up --gpu T4 --json`. When signed in via `auth login`, it assigns the Colab runtime directly via `colaboratory.googleapis.com/v1beta/runtimes` and bootstraps Tailscale + `sshd` over `/colab/tty` with **zero browser tabs**.
-2. Submit and manage GPU compute tasks with `job submit`, `job ls`, `job logs`, and `job stop` (or view live streaming task output in the Orca **Colab GPU** panel).
+### 1. Install
 
 ```sh
-npx -y github:vzxxbacq/orca-colab#v0.1.0 up --gpu T4 --json
-npx -y github:vzxxbacq/orca-colab#v0.1.0 sync --json
-npx -y github:vzxxbacq/orca-colab#v0.1.0 job submit --name "Train ResMLP" --wait --json -- python3 train.py
-npx -y github:vzxxbacq/orca-colab#v0.1.0 job logs <task-id>
-npx -y github:vzxxbacq/orca-colab#v0.1.0 pull /content/orca/out ./out --json
-npx -y github:vzxxbacq/orca-colab#v0.1.0 credits calibrate --json
-npx -y github:vzxxbacq/orca-colab#v0.1.0 down --json
+orca plugin install github:vzxxbacq/orca-colab
 ```
 
-Requirements on your machine: Node ≥ 20, Tailscale signed in, OpenSSH, `rsync` (recommended), `git`.
-
-## Development
+For local development or standalone skill installation:
 
 ```sh
-node --test
-node bin/orca-colab.mjs doctor
+orca plugin dev load .
+npx skills add vzxxbacq/orca-colab
 ```
 
-License: MIT.
+### 2. Configure
+
+1. Open the **Colab GPU** panel in Orca and click **Sign in with Google**.
+2. Set allowed GPU tiers and concurrency limits under **Guardrails & CU**.
+3. Ask your agent to run any GPU task.
+
+## CLI
+
+Full reference: [`skills/colab-gpu/references/cli.md`](./skills/colab-gpu/references/cli.md)
+
+```sh
+orca-colab auth [login --add | list | switch <account>] --json
+orca-colab doctor --json
+orca-colab up [--new] [--account <account>] --json
+orca-colab job submit --name "Train" --wait --json -- <cmd>
+orca-colab run --json -- <cmd>
+orca-colab sync [path] --json
+orca-colab pull <remote> <local> --json
+orca-colab down [--all] --json
+```
+
+## License
+
+MIT

@@ -871,15 +871,13 @@
         <div class="card" style="border-color: var(--accent-border)">
           <div class="card-header">
             <div class="card-title" style="font-size: 13px">
-              Step 1 · Connect Google Colab Account
+              Step 1 · Google Colab Accounts
             </div>
             <span id="step3Badge" class="badge warn">Required</span>
           </div>
           <div class="card-subtitle">
-            Sign in once in your default browser (Passkey supported). Orca uses
-            the official Colab VS Code extension API to assign GPUs, sync your
-            workspace, and stream task logs directly over HTTPS/WebSocket
-            (<span class="mono">/colab/tty</span>)—zero Tailscale setup needed.
+            Sign in with one or more Google accounts (Passkey supported). Agents
+            can provision and scale GPU runtimes across your connected accounts.
           </div>
           <div
             style="
@@ -893,6 +891,10 @@
             <div id="wizardOAuthText" style="font-weight: 600; font-size: 11.5px">
               Not signed in yet — click below to sign in with your browser
             </div>
+            <div
+              id="wizardAccountsList"
+              style="display: flex; flex-direction: column; gap: 6px; margin-top: 8px"
+            ></div>
           </div>
           <div class="row">
             <button id="wizardLoginBtn" class="primary cta-large">
@@ -1362,14 +1364,26 @@
 
           <div class="card">
             <div class="card-header">
-              <div class="card-title">Connection &amp; Account Settings</div>
+              <div>
+                <div class="card-title">Google Colab Accounts</div>
+                <div class="card-subtitle" style="margin-bottom: 0; margin-top: 2px">
+                  Connect multiple Google accounts to pool Compute Units and scale concurrent GPU runtimes across accounts.
+                </div>
+              </div>
+              <button
+                id="settingsAddAccountBtn"
+                class="primary"
+                style="flex-shrink: 0"
+              >
+                + Add Account
+              </button>
             </div>
-            <div class="card-subtitle">
-              Re-open the Setup Helper to rotate your Tailscale auth key, update
-              your Headscale login server, or switch Google accounts.
-            </div>
-            <button id="openWizardFromSettingsBtn" style="width: 100%">
-              ⚙ Open Setup &amp; Auth Helper
+            <div
+              id="settingsAccountsList"
+              style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px"
+            ></div>
+            <button id="openWizardFromSettingsBtn" class="ghost" style="width: 100%">
+              ⚙ Open Setup &amp; Tailscale Helper
             </button>
           </div>
         </div>
@@ -1725,18 +1739,72 @@
           loginSrvInput.value = checks.config.loginServer;
         }
 
+        const oauthAccounts = Array.isArray(snap.oauthAccounts)
+          ? snap.oauthAccounts
+          : oauthOk && snap.auth
+            ? [snap.auth]
+            : [];
+        const renderAccountsRows = () => {
+          if (oauthAccounts.length === 0) {
+            return `<div class="muted" style="font-size:11px">No Google accounts connected yet.</div>`;
+          }
+          return oauthAccounts
+            .map((acc) => {
+              const isDef = acc.account === snap.defaultAccount;
+              const accCredits = snap.creditsByAccount?.[acc.account] || {};
+              const cuTxt =
+                accCredits.estimatedBalanceCu !== null &&
+                accCredits.estimatedBalanceCu !== undefined
+                  ? `≈ ${accCredits.estimatedBalanceCu} CU`
+                  : "CU uncalibrated";
+              const accRuntimes = activeSessions.filter(
+                (s) => (s.account || "default") === acc.account,
+              ).length;
+              const displayLabel = acc.email || acc.account;
+              return `
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;background:var(--surface);border:1px solid ${isDef ? "var(--accent-border)" : "var(--border)"};border-radius:var(--radius-sm)">
+                  <div style="min-width:0">
+                    <div class="row" style="gap:5px">
+                      <span class="status-dot ok"></span>
+                      <strong style="font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(displayLabel)}</strong>
+                      ${isDef ? `<span class="badge info" style="font-size:9px;padding:1px 5px">DEFAULT</span>` : ""}
+                    </div>
+                    <div class="muted" style="font-size:10px;margin-top:2px">
+                      ${esc(cuTxt)} · ${accRuntimes} active runtime${accRuntimes === 1 ? "" : "s"}
+                    </div>
+                  </div>
+                  <div class="row" style="gap:4px;flex-shrink:0">
+                    ${
+                      !isDef
+                        ? `<button class="ghost" style="padding:2px 7px;font-size:10px" onclick="window.__switchAccount('${esc(acc.account)}')">Use</button>`
+                        : ""
+                    }
+                    <button class="ghost" style="padding:2px 7px;font-size:10px" onclick="window.__logoutAccount('${esc(acc.account)}')">Sign out</button>
+                  </div>
+                </div>
+              `;
+            })
+            .join("");
+        };
+
         const step3Badge = document.getElementById("step3Badge");
         step3Badge.className = `badge ${oauthOk ? "ok" : "warn"}`;
-        step3Badge.textContent = oauthOk ? "Connected" : "Required";
+        step3Badge.textContent = oauthOk
+          ? `${oauthAccounts.length} Connected`
+          : "Required";
 
         document.getElementById("wizardOAuthText").textContent = oauthOk
-          ? "✓ Signed in to Google Colab API (Direct GPU mode ready)"
+          ? `✓ ${oauthAccounts.length} Google Colab account${oauthAccounts.length > 1 ? "s" : ""} connected`
           : "Not signed in yet — click below to sign in with your system browser";
+        const wizAccListEl = document.getElementById("wizardAccountsList");
+        if (wizAccListEl) {
+          wizAccListEl.innerHTML = oauthAccounts.length > 0 ? renderAccountsRows() : "";
+        }
         document
           .getElementById("wizardLogoutBtn")
-          .classList.toggle("hidden", !oauthOk);
+          .classList.add("hidden");
         document.getElementById("wizardLoginBtn").textContent = oauthOk
-          ? "Switch Google Account"
+          ? "+ Add Another Google Account"
           : "🔑 Sign in with Google (Default Browser)";
 
         // Stepper pills
@@ -1938,6 +2006,11 @@
                   const activeRunOnSess = (snap.tasks || []).find(
                     (t) => t.sessionName === s.name && t.status === "running",
                   );
+                  const sessAccEmail =
+                    snap.authByAccount?.[s.account || "default"]?.email ||
+                    s.account ||
+                    "default";
+                  const shortAcc = String(sessAccEmail).split("@")[0];
                   return `
                     <div class="runtime-mini-card ${isFiltered ? "active-filter" : ""}" onclick="window.__toggleRuntimeFilter('${esc(s.name)}')">
                       <div class="row-between">
@@ -1945,6 +2018,7 @@
                           <span class="status-dot ok"></span>
                           <strong style="font-size:11.5px">${esc(s.gpu?.name || s.rateKey || "GPU")}</strong>
                           <span class="badge neutral mono" style="font-size:9.5px;padding:1px 5px">${esc(shortId)}</span>
+                          ${oauthAccounts.length > 1 ? `<span class="badge neutral" style="font-size:9px;padding:1px 5px" title="${esc(sessAccEmail)}">@${esc(shortAcc)}</span>` : ""}
                           ${vramTotal ? `<span class="muted" style="font-size:10.5px">${vramUsed ? `${vramUsed}/` : ""}${vramTotal}G</span>` : ""}
                           ${activeRunOnSess ? `<span class="badge info" style="font-size:9px;padding:1px 5px">⚡ RUNNING</span>` : ""}
                           ${s.keep ? `<span class="badge info" style="font-size:9px;padding:1px 5px">KEEP</span>` : ""}
@@ -2201,6 +2275,11 @@
             ? `Calibrated ${calAgeHours ?? 0}h ago · Monthly used: ≈ ${c.estimatedMonthlyUsedCu ?? 0} CU`
             : "Click 'Sync from Colab API' to fetch your live Google Colab Compute Units balance.";
 
+        const settingsAccListEl = document.getElementById("settingsAccountsList");
+        if (settingsAccListEl) {
+          settingsAccListEl.innerHTML = renderAccountsRows();
+        }
+
         const budgetSec = document.getElementById("budgetSection");
         if (c.budgetCu && c.budgetCu > 0) {
           budgetSec.classList.remove("hidden");
@@ -2314,22 +2393,28 @@
           }
         });
 
-      // Step 3: Google OAuth Sign-In
-      async function handleGoogleSignIn(btnEl) {
+      // Step 3: Google OAuth Sign-In (supports adding multiple accounts)
+      async function handleGoogleSignIn(btnEl, { addAccount = false } = {}) {
         const origText = btnEl.textContent;
         btnEl.disabled = true;
         btnEl.textContent = "Waiting for browser login...";
         showNotice(
-          "Opened your default browser for Google Sign-In (Passkey supported). Complete sign-in to return here automatically.",
+          "Opened your default browser for Google Sign-In (select any Google account). Complete sign-in to return here automatically.",
           "info",
         );
         try {
           const res = await callWorker(
             "colab.authLogin",
-            {},
+            { addAccount },
             { timeoutMs: 310000 },
           );
-          showNotice("Google Colab account connected!", "ok");
+          const signedEmail = res?.status?.email || res?.status?.account || "";
+          showNotice(
+            signedEmail
+              ? `Connected Google Colab account: ${signedEmail}`
+              : "Google Colab account connected!",
+            "ok",
+          );
           renderAll(res.dashboard);
         } catch (err) {
           showNotice(err?.message || String(err), "error");
@@ -2341,10 +2426,43 @@
 
       document
         .getElementById("wizardLoginBtn")
-        .addEventListener("click", (e) => handleGoogleSignIn(e.currentTarget));
+        .addEventListener("click", (e) =>
+          handleGoogleSignIn(e.currentTarget, {
+            addAccount: Boolean(dashboardState?.auth?.authenticated),
+          }),
+        );
       document
         .getElementById("launcherLoginBtn")
         .addEventListener("click", (e) => handleGoogleSignIn(e.currentTarget));
+      document
+        .getElementById("settingsAddAccountBtn")
+        .addEventListener("click", (e) =>
+          handleGoogleSignIn(e.currentTarget, { addAccount: true }),
+        );
+
+      window.__switchAccount = async (accountKey) => {
+        try {
+          const res = await callWorker("colab.authSwitch", {
+            account: accountKey,
+          });
+          showNotice(`Switched default account to ${accountKey}.`, "ok");
+          renderAll(res.dashboard);
+        } catch (err) {
+          showNotice(err?.message || String(err), "error");
+        }
+      };
+
+      window.__logoutAccount = async (accountKey) => {
+        try {
+          const res = await callWorker("colab.authLogout", {
+            account: accountKey,
+          });
+          showNotice(`Signed out ${accountKey}.`, "info");
+          renderAll(res.dashboard);
+        } catch (err) {
+          showNotice(err?.message || String(err), "error");
+        }
+      };
 
       document
         .getElementById("wizardLogoutBtn")
