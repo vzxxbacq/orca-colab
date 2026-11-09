@@ -264,8 +264,13 @@ No outputs committed. No pip packages.
   through the same client↔server connection, switching the bridge to the CLI transport when the host API
   does not know the handle; only when all of that fails does the panel show the exact command to run by
   hand. The bridge terminal runs `<remoteCliCommand> watch --auto-stop-idle-minutes N`; `watch` also
-  carries the token refresh and the idle watchdog for that server. Settings: `remoteCliCommand` (empty →
-  `cliCommand`). Capability `terminal:read` added.
+  carries the token refresh and the idle watchdog for that server. One bridge terminal per server, opened
+  in the first project that needs it and shared by every other project on that server; `autoBridge: false`
+  stops the plugin from opening it and the panel shows the `watch` command to run by hand. Settings:
+  `remoteCliCommand` (empty → `cliCommand`), `autoBridge` (default true). Capability `terminal:read` added.
+  A fully hidden bridge is not possible today: terminals are the only channel Orca gives a plugin to a
+  remote host, and `terminal.create` has no hidden mode; anything else (an extra port, SSH) would not work
+  for every Orca server a store user may have.
 - Install identity `vzxxbacq.colab` (publisher derived from the repo owner).
 
 ## Optional remote-workspace mode (not scheduled)
