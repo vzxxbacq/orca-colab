@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { parseArgs } from "node:util";
 import {
   CliError,
@@ -188,111 +189,172 @@ export async function run(
   // Fast path: Direct Colab API without Tailscale (when Google OAuth is active and Tailscale is not configured)
   if (accessToken && !tailscaleConfigured) {
     const gpuLabel = selectedGpu;
-    const excludeRuntimeIds = opts.new
-      ? listSessions(homeDir)
-          .filter((s) => s?.state !== "zombie" && s?.colabRuntime?.id)
-          .map((s) => s.colabRuntime.id)
-      : [];
-    log(
-      `Assigning Colab ${gpuLabel} runtime via Direct API for account '${account.label}' (Tailscale-free mode)...`,
-      stderr,
-    );
-    const colabRuntime = await assignRuntimeFn({
-      accessToken,
-      gpu: gpuLabel,
-      highRam: Boolean(opts["high-ram"]),
-      reuseExisting: !opts.new,
-      excludeRuntimeIds,
-      onProgress: (msg) => log(msg, stderr),
-      fetchImpl,
-      signal,
-    });
-    log(
-      `Assigned runtime ${colabRuntime.id}; querying GPU over /colab/tty...`,
-      stderr,
-    );
-    const gpu = await queryGpuTtyFn({
-      baseUrl: colabRuntime.baseUrl,
-      proxyToken: colabRuntime.token,
-      WebSocketImpl,
-      signal,
-    });
-    const effectiveGpu =
-      gpu?.name && gpu.name !== "Colab Runtime"
-        ? gpu
-        : {
-            name: gpuLabel === "CPU" ? "Colab CPU" : `NVIDIA ${gpuLabel}`,
-            memoryTotalMiB:
-              gpuLabel === "T4"
-                ? 15360
-                : gpuLabel === "L4"
-                  ? 23034
-                  : gpuLabel === "A100"
-                    ? 40960
-                    : null,
-            driverVersion: null,
-          };
-    const { rateKey, cuPerHour } = resolveGpuRate(effectiveGpu.name, homeDir);
-    const createdAt = nowIso();
-    const rawSuffix =
-      opts.name ||
-      String(colabRuntime.id || "")
-        .replace(/[^a-z0-9]/gi, "")
-        .slice(-6)
-        .toLowerCase() ||
-      "direct";
-    const sessionName = rawSuffix.startsWith("orca-colab-")
-      ? rawSuffix
-      : `orca-colab-${rawSuffix}`;
-
-    const sessionRecord = {
-      name: sessionName,
-      account: account.label,
-      hostname: sessionName,
-      ip: null,
-      transport: "colab-tty",
-      gpu: effectiveGpu,
-      rateKey,
-      cuPerHour,
-      createdAt,
-      lastActivityAt: createdAt,
-      activePids: [],
-      keep: Boolean(opts.keep),
-      state: "active",
-      remoteRoot: null,
-      forwards: [],
-      colabRuntime: {
-        id: colabRuntime.id,
-        endpoint: colabRuntime.endpoint,
-        baseUrl: colabRuntime.baseUrl,
-        token: colabRuntime.token,
-        tokenExpiry: colabRuntime.tokenExpiry,
-      },
-    };
-
-    const session = writeSession(sessionRecord, homeDir);
-    if (onSessionStart) {
-      await onSessionStart(session, homeDir);
-    }
-
-    log(
-      `Session ${session.name} ready via Direct API (${session.gpu.name}, ~${session.cuPerHour} CU/h).`,
-      stderr,
-    );
-
-    if (json) {
-      const publicSession = {
-        ...session,
-        estimatedCuPerHour: session.cuPerHour,
-      };
-      if (publicSession.colabRuntime) {
-        const { token: _omitToken, ...safeRuntime } = publicSession.colabRuntime;
-        publicSession.colabRuntime = safeRuntime;
+    const lockPath = path.join(paths.baseDir, "assign.lock");
+    mkdirSync(paths.baseDir, { recursive: true, mode: 0o700 });
+    const lockDeadline = Date.now() + 90_000;
+    while (existsSync(lockPath) && Date.now() < lockDeadline) {
+      try {
+        const lockObj = JSON.parse(readFileSync(lockPath, "utf8"));
+        const ageMs = Date.now() - (lockObj.ts || 0);
+        let alive = false;
+        try {
+          process.kill(lockObj.pid, 0);
+          alive = true;
+        } catch {
+          alive = false;
+        }
+        if (!alive || ageMs > 90_000) {
+          rmSync(lockPath, { force: true });
+          break;
+        }
+      } catch {
+        rmSync(lockPath, { force: true });
+        break;
       }
-      writeJson(publicSession, stdout);
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    try {
+      writeFileSync(
+        lockPath,
+        JSON.stringify({ pid: process.pid, ts: Date.now() }),
+        { mode: 0o600 },
+      );
+    } catch {
+      // Proceed if lock write fails.
     }
 
-    return EXIT_OK;
+    try {
+      const currentActiveSessions = listSessions(homeDir).filter(
+        (s) => s?.state !== "zombie" && (s?.account || "default") === account.label,
+      );
+      if (
+        opts.new &&
+        currentActiveSessions.length >= policy.maxConcurrentSessions
+      ) {
+        const errMsg = `Max concurrent sessions (${policy.maxConcurrentSessions}) reached by user policy.`;
+        throw new CliError(errMsg, {
+          exitCode: EXIT_ERROR,
+          payload: {
+            ok: false,
+            error: errMsg,
+            maxConcurrentSessions: policy.maxConcurrentSessions,
+            step: "policy",
+          },
+        });
+      }
+
+      const excludeRuntimeIds = opts.new
+        ? currentActiveSessions
+            .filter((s) => s?.colabRuntime?.id)
+            .map((s) => s.colabRuntime.id)
+        : [];
+      log(
+        `Assigning Colab ${gpuLabel} runtime via Direct API for account '${account.label}' (Tailscale-free mode)...`,
+        stderr,
+      );
+      const colabRuntime = await assignRuntimeFn({
+        accessToken,
+        gpu: gpuLabel,
+        highRam: Boolean(opts["high-ram"]),
+        reuseExisting: true,
+        excludeRuntimeIds,
+        onProgress: (msg) => log(msg, stderr),
+        fetchImpl,
+        signal,
+      });
+      log(
+        `Assigned runtime ${colabRuntime.id}; querying GPU over /colab/tty...`,
+        stderr,
+      );
+      const gpu = await queryGpuTtyFn({
+        baseUrl: colabRuntime.baseUrl,
+        proxyToken: colabRuntime.token,
+        WebSocketImpl,
+        signal,
+      });
+      const effectiveGpu =
+        gpu?.name && gpu.name !== "Colab Runtime"
+          ? gpu
+          : {
+              name: gpuLabel === "CPU" ? "Colab CPU" : `NVIDIA ${gpuLabel}`,
+              memoryTotalMiB:
+                gpuLabel === "T4"
+                  ? 15360
+                  : gpuLabel === "L4"
+                    ? 23034
+                    : gpuLabel === "A100"
+                      ? 40960
+                      : null,
+              driverVersion: null,
+            };
+      const { rateKey, cuPerHour } = resolveGpuRate(effectiveGpu.name, homeDir);
+      const createdAt = nowIso();
+      const rawSuffix =
+        opts.name ||
+        String(colabRuntime.id || "")
+          .replace(/[^a-z0-9]/gi, "")
+          .slice(-6)
+          .toLowerCase() ||
+        "direct";
+      const sessionName = rawSuffix.startsWith("orca-colab-")
+        ? rawSuffix
+        : `orca-colab-${rawSuffix}`;
+
+      const sessionRecord = {
+        name: sessionName,
+        account: account.label,
+        hostname: sessionName,
+        ip: null,
+        transport: "colab-tty",
+        gpu: effectiveGpu,
+        rateKey,
+        cuPerHour,
+        createdAt,
+        lastActivityAt: createdAt,
+        activePids: [],
+        keep: Boolean(opts.keep),
+        state: "active",
+        remoteRoot: null,
+        forwards: [],
+        colabRuntime: {
+          id: colabRuntime.id,
+          endpoint: colabRuntime.endpoint,
+          baseUrl: colabRuntime.baseUrl,
+          token: colabRuntime.token,
+          tokenExpiry: colabRuntime.tokenExpiry,
+        },
+      };
+
+      const session = writeSession(sessionRecord, homeDir);
+      if (onSessionStart) {
+        await onSessionStart(session, homeDir);
+      }
+
+      log(
+        `Session ${session.name} ready via Direct API (${session.gpu.name}, ~${session.cuPerHour} CU/h).`,
+        stderr,
+      );
+
+      if (json) {
+        const publicSession = {
+          ...session,
+          estimatedCuPerHour: session.cuPerHour,
+        };
+        if (publicSession.colabRuntime) {
+          const { token: _omitToken, ...safeRuntime } = publicSession.colabRuntime;
+          publicSession.colabRuntime = safeRuntime;
+        }
+        writeJson(publicSession, stdout);
+      }
+
+      return EXIT_OK;
+    } finally {
+      try {
+        rmSync(lockPath, { force: true });
+      } catch {
+        // Ignore lock cleanup error.
+      }
+    }
   }
 
   const getStatus =

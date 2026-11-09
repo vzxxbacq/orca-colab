@@ -221,14 +221,14 @@ export async function assignRuntime({
 
     const opName = operation.name;
     let pollCount = 0;
-    while (!operation.done && opName && pollCount < 10) {
+    while (!operation.done && opName && pollCount < 14) {
       pollCount += 1;
       const opId = stripResourcePrefix(opName, "operations/");
       const waitUrl = new URL(
         `/v1/operations/${encodeURIComponent(opId)}:wait`,
         publicApiDomain,
       );
-      waitUrl.searchParams.set("timeout", "200s");
+      waitUrl.searchParams.set("timeout", "15s");
       operation = await colabJsonRequest(waitUrl, {
         method: "GET",
         accessToken,
