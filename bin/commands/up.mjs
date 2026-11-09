@@ -14,7 +14,9 @@ import {
   readConfig,
   resolveAccount,
 } from "../lib/colab-home.mjs";
+import { recordSessionStartEvent } from "../lib/credit-ledger.mjs";
 import { BOOTSTRAP_NOTEBOOK_COLAB_URL, openUrl } from "../lib/open-url.mjs";
+import { resolveGpuRate as resolveRateFromTable } from "../lib/rate-table.mjs";
 import { writeSession } from "../lib/session-store.mjs";
 import { waitForSshBanner } from "../lib/ssh-banner-probe.mjs";
 import { queryRemoteGpu } from "../lib/ssh-exec.mjs";
@@ -23,35 +25,6 @@ import {
   snapshotOnlinePeers,
   waitForColabPeer,
 } from "../lib/tailscale-peer-wait.mjs";
-
-const DEFAULT_RATES = {
-  T4: 1.96,
-  L4: 4.82,
-  A100: 11.77,
-  "TPU v2-8": 1.76,
-  CPU: 0.08,
-  unknown: 2,
-};
-
-function resolveDefaultRate(gpuName) {
-  const upper = String(gpuName ?? "").toUpperCase();
-  if (!upper || upper === "CPU") {
-    return { rateKey: "CPU", cuPerHour: DEFAULT_RATES.CPU };
-  }
-  if (upper.includes("T4")) {
-    return { rateKey: "T4", cuPerHour: DEFAULT_RATES.T4 };
-  }
-  if (upper.includes("L4")) {
-    return { rateKey: "L4", cuPerHour: DEFAULT_RATES.L4 };
-  }
-  if (upper.includes("A100")) {
-    return { rateKey: "A100", cuPerHour: DEFAULT_RATES.A100 };
-  }
-  if (upper.includes("TPU")) {
-    return { rateKey: "TPU v2-8", cuPerHour: DEFAULT_RATES["TPU v2-8"] };
-  }
-  return { rateKey: "unknown", cuPerHour: DEFAULT_RATES.unknown };
-}
 
 export async function run(
   argv,
@@ -67,8 +40,8 @@ export async function run(
     runSsh = null,
     openBrowser = openUrl,
     copyClipboard = copyToClipboard,
-    resolveGpuRate = resolveDefaultRate,
-    onSessionStart = null,
+    resolveGpuRate = resolveRateFromTable,
+    onSessionStart = recordSessionStartEvent,
     nowMs = () => Date.now(),
     nowIso = () => new Date().toISOString(),
     sleep = undefined,

@@ -34,11 +34,11 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
       kills forwards, touches `/root/.orca-colab/unassign` over SSH, waits ≤30 s for port 22 to close,
       deletes the session or marks it `zombie` (exit 4) with instructions (D10). Activity stamping
       (`lastActivityAt` start/60 s/exit, `activePids`) added to the shared command runner here. — Done: `forward`, `down` with D10 unassign sentinel/zombie handling, and `session-activity` stamping (`test/forward-and-down.test.mjs`).
-- [ ] **M1.9b Credits (ledger + rates + manual calibration).** `bin/lib/rate-table.mjs` (defaults,
+- [x] **M1.9b Credits (ledger + rates + manual calibration).** `bin/lib/rate-table.mjs` (defaults,
       `nvidia-smi` name → key mapping, user overrides), `bin/lib/credit-ledger.mjs` (append-only JSONL,
       balance projection from last calibration), `credits`, `credits set`, `credits budget`, `ledger`,
       `rates` commands; `up` records `rateKey`/`cuPerHour` and returns `estimatedCuPerHour`; `down` writes
-      `session.end`. Tests: projection math with hardcoded events; GPU name mapping.
+      `session.end`. Tests: projection math with hardcoded events; GPU name mapping. — Done: rate table, append-only credit ledger, projection math and `credits`/`ledger`/`rates` commands (`test/credits.test.mjs`).
 - [ ] **M1.10 Bootstrap notebook.** Per DESIGN. Validate inputs, sshd, tailscaled userspace, `tailscale up`
       with auth key and optional login server, in-kernel unassign watcher thread (D10), GPU/IP report,
       separate keepalive cell. No outputs. Verify in M1.13 that touching the sentinel over SSH really

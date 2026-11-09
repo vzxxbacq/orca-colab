@@ -6,6 +6,7 @@ import {
   log,
   writeJson,
 } from "../lib/cli-output.mjs";
+import { recordSessionEndEvent } from "../lib/credit-ledger.mjs";
 import {
   deleteSession,
   listSessions,
@@ -36,7 +37,7 @@ export async function run(
     runSsh = null,
     waitPortClosed = waitForSshPortClosed,
     killPid = defaultKillPid,
-    onSessionEnd = null,
+    onSessionEnd = recordSessionEndEvent,
     waitTimeoutMs = 30_000,
     nowIso = () => new Date().toISOString(),
   },
