@@ -55,6 +55,10 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
       over SSH, notify → 5-min grace → `down`; `up --keep` exemption; `settings.autoStopIdleMinutes`.
 - [ ] Budget alerts: `monthlyBudgetCu` in config, status bar tone at 80 % / 100 %, notification once per
       threshold per month, skill rule to confirm before `up` when over budget.
+- [ ] Orca browser research (D16): confirm Google sign-in and Colab cell execution work inside Orca's
+      embedded browser (`orca browser open`), note any UA or popup issues, and record how `up` should
+      detect "running inside Orca". Then switch `up` to open the notebook there (`--system-browser` to
+      override).
 - [ ] Browser calibration, step 1 (research): open Colab in Orca's browser with DevTools network
       capture, open the Resources pane, record the request that returns compute units (URL, method,
       headers, response shape). Write it to `docs/colab-internal-endpoints.md` with the capture date.

@@ -36,6 +36,7 @@ Three deliverables, one repo:
 | D13 | **Calibration can be automated through Orca's embedded browser** (`orca browser`, the user's own persistent Google session): a same-origin `fetch` in page context against the internal endpoint the Resources pane itself calls, falling back to the pane's text, falling back to "enter it manually". Optional, M2; manual entry stays the source of truth. No headless browser, no Google OAuth token: Google blocks sign-in from automated browsers, and a headless stack would add a heavy dependency for a session the user already has in Orca. | Real Chromium with a login the user did once; we store no credential. Structured JSON from the internal endpoint is far more stable than UI copy, but it is still undocumented, so every failure degrades to manual. Precise, API-backed numbers exist only on Colab Enterprise via GCP Billing (M4). |
 | D14 | **Idle watchdog in the worker.** When a session shows no CLI activity (`run`/`sync`/`pull`/`forward` traffic) and GPU utilisation under 5 % for `autoStopIdleMinutes` (default 20), the worker notifies, then runs `down` after a 5-minute grace unless the user cancels. Sessions started with `up --keep` are exempt. | Forgotten runtimes are where Colab credits actually go. Paid GPUs burn units even when idle. |
 | D15 | **Several Google accounts = several credit pools.** Config holds `accounts: [{ label, notebookUrl, balance, calibratedAt }]`; `up --account` picks one; the panel shows each pool. | Users with Pro on one account and pay-as-you-go on another need to choose where a session's cost lands. |
+| D16 | **One Google login, inside Orca's embedded browser.** When the CLI runs inside an Orca terminal (`ORCA_*` env present and `orca browser` available), `up` opens the notebook in Orca's browser and credit calibration uses the same session; outside Orca it falls back to the system browser. The plugin never stores, reads or exports cookies; Google's session lives only in the browser profile's encrypted cookie store. Reading the system browser's cookie database, CDP-attaching to the user's Chrome, and pasted cookies are rejected. | Logging in once in a browser tab is what users already understand, and it keeps the credential where the browser protects it. Cookie extraction is malware behaviour (keychain prompts on macOS, App-Bound Encryption on Windows) and breaks user expectations of a GPU plugin. |
 
 ## The user's experience
 
@@ -50,7 +51,7 @@ One-time (about 5 minutes, agent-guided):
 Per session (about 2 minutes, mostly waiting on Colab):
 
 1. Agent runs `orca-colab up --json` (or the user presses "Start Colab session" in the Orca panel).
-   The Colab tab opens on the user's notebook copy.
+   The notebook copy opens in Orca's embedded browser (system browser outside Orca).
 2. User picks a GPU runtime if not already set, presses Run. Tailscale auth and `sshd` take ~60 s.
 3. `up` sees the peer, probes SSH, runs `nvidia-smi --query-gpu=name,memory.total --format=csv`, prints
    the session JSON and exits. Agent continues on its own: `sync`, `run`, `pull`, `forward`.
