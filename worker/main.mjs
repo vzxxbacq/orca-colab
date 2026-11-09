@@ -678,8 +678,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
 
   const refreshStatusBar = async (snapInput = null) => {
     try {
-      const bridge = await resolveBridge();
-      const snap = snapInput || (await bridge.snapshot());
+      const snap = snapInput || (await (await resolveBridge()).snapshot());
       const activeSessions = (snap.sessions || []).filter((s) => s.state !== "zombie");
       const runningTasks = (snap.tasks || []).filter((t) => t.status === "running");
       const primaryCredits = snap.credits;
@@ -938,7 +937,11 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
     remoteBridges.clear();
   });
 
-  await refreshStatusBar();
+  // Workspace lookups before activate() returns stall the worker's readiness handshake, so the first
+  // one runs on the next tick; the status bar is seeded from local state right away.
+  await refreshStatusBar(await localBridge.snapshot());
+  const kickoff = setTimeout(() => void resolveBridge({ force: true }).then(() => refreshStatusBar()), 0);
+  cleanupFns.push(() => clearTimeout(kickoff));
 }
 
 export function deactivate() {
