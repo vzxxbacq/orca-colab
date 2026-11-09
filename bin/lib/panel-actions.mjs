@@ -15,9 +15,12 @@ import {
 import {
   getValidAccessToken,
   listOAuthAccounts,
+  readOAuthStore,
   removeOAuthCredentials,
   resolveOAuthAccountKey,
+  resolveTargetAccount,
   runLoopbackOAuthFlow,
+  saveOAuthCredentials,
 } from "./colab-oauth.mjs";
 import { recordBudgetSetEvent, recordCalibrateEvent } from "./credit-ledger.mjs";
 import { listSessions, readSession, writeSession } from "./session-store.mjs";
@@ -74,6 +77,38 @@ export function createPanelActions({
         }
       } catch {
         // Balance sync right after login is best effort.
+      }
+      return { status };
+    },
+
+    // Stores credentials obtained by a sign-in that ran elsewhere (the desktop client), then syncs the
+    // balance like a local sign-in would.
+    async authImport(input = {}) {
+      const credentials = input?.credentials;
+      if (!credentials?.refreshToken && !credentials?.accessToken) {
+        throw new Error("authImport needs credentials with a refresh or access token.");
+      }
+      const targetAccount = resolveTargetAccount({
+        store: readOAuthStore(homeDir),
+        account: input?.account || "default",
+        addAccount: Boolean(input?.addAccount),
+        email: credentials.email || null,
+      });
+      const status = saveOAuthCredentials(targetAccount, credentials, homeDir);
+      setDefaultAccount(targetAccount, homeDir);
+      try {
+        const accessToken = await getValidAccessToken({ account: targetAccount, homeDir });
+        if (accessToken) {
+          const ccu = await getConsumptionUserInfo({ accessToken });
+          if (typeof ccu.paidComputeUnitsBalance === "number") {
+            recordCalibrateEvent(
+              { account: targetAccount, balanceCu: ccu.paidComputeUnitsBalance, source: "colab-api" },
+              homeDir,
+            );
+          }
+        }
+      } catch {
+        // Balance sync is best effort.
       }
       return { status };
     },
@@ -278,6 +313,7 @@ export function createPanelActions({
 
 export const PANEL_ACTION_NAMES = Object.freeze([
   "authLogin",
+  "authImport",
   "oauthReplay",
   "authSwitch",
   "authLogout",

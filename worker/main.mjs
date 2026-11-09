@@ -4,10 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { FrameAssembler } from "../bin/lib/bridge-frames.mjs";
+import { sealForRecipient } from "../bin/lib/credential-envelope.mjs";
 import { getRuntime } from "../bin/lib/colab-api-client.mjs";
 import { locateOrcaBinary } from "../bin/lib/colab-browser-automation.mjs";
 import { ensureColabHome } from "../bin/lib/colab-home.mjs";
-import { getValidAccessToken, readOAuthAccountStatus } from "../bin/lib/colab-oauth.mjs";
+import { getValidAccessToken, readOAuthAccountStatus, runLoopbackOAuthFlow } from "../bin/lib/colab-oauth.mjs";
 import { DashboardSnapshotBuilder, pickActiveTask } from "../bin/lib/dashboard-snapshot.mjs";
 import {
   DEFAULT_AUTO_STOP_IDLE_MINUTES,
@@ -1614,7 +1615,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
   });
 
   const simpleActions = PANEL_ACTION_NAMES.filter(
-    (n) => !["authLogin", "startSession", "submitTask", "getTaskLogs", "oauthReplay"].includes(n),
+    (n) => !["authLogin", "authImport", "startSession", "submitTask", "getTaskLogs", "oauthReplay"].includes(n),
   );
   for (const name of simpleActions) {
     orca.panels.handle(`colab.${name}`, async (input = {}) => {
@@ -1628,8 +1629,30 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
     });
   }
 
+  // Sign-in always happens here, in the user's own browser. For a remote workspace the tokens are
+  // then sealed to the server's watch process and imported there; the paste-the-URL path remains only
+  // for a watch too old to publish a seal key.
   orca.panels.handle("colab.authLogin", async (input = {}) => {
     const bridge = await resolveBridge({ force: true });
+    const sealKey = bridge.kind === "remote" ? bridge.latestSnap?.origin?.sealKey : null;
+    if (bridge.kind === "remote" && sealKey) {
+      const signedIn = await runLoopbackOAuthFlow({
+        account: input?.account ? String(input.account) : input?.addAccount ? "auto" : "default",
+        addAccount: Boolean(input?.addAccount),
+        homeDir,
+        persist: false,
+        timeoutMs: 300_000,
+        onAuthUrl: (authUrl, redirectUri) =>
+          orca.panels.post("colab.oauthUrl", { authUrl, redirectUri, manual: false, origin: "local" }),
+      });
+      const envelope = sealForRecipient(sealKey, signedIn.credentials);
+      const result = await bridge.call(
+        "authImport",
+        { account: signedIn.account, addAccount: signedIn.addAccount, envelope },
+        { timeoutMs: 60_000 },
+      );
+      return finish(bridge, { ...result, status: { ...(result.status || {}), email: signedIn.email } });
+    }
     const result = await bridge.call(
       "authLogin",
       { ...input, noBrowser: bridge.kind === "remote" || Boolean(input?.noBrowser) },

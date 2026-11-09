@@ -3,6 +3,7 @@ import { createInterface } from "node:readline";
 import os from "node:os";
 import { parseArgs } from "node:util";
 import { encodeFrame } from "../lib/bridge-frames.mjs";
+import { createEnvelopeKeyPair, openEnvelope } from "../lib/credential-envelope.mjs";
 import { getRuntime } from "../lib/colab-api-client.mjs";
 import { getColabPaths } from "../lib/colab-home.mjs";
 import { getValidAccessToken } from "../lib/colab-oauth.mjs";
@@ -156,10 +157,18 @@ export async function run(
     `[colab] Orca Colab bridge for ${hostLabel} (${getColabPaths(homeDir).baseDir}). The Orca Colab panel on your desktop reads this terminal; leave it open.\n`,
   );
 
+  // Fresh per process: clients seal credentials to this key so the terminal only ever shows ciphertext.
+  const sealKeys = createEnvelopeKeyPair();
   const builder = new DashboardSnapshotBuilder({
     homeDir,
     env,
-    origin: { kind: "remote", host: hostLabel, platform: process.platform, protocol: WATCH_PROTOCOL },
+    origin: {
+      kind: "remote",
+      host: hostLabel,
+      platform: process.platform,
+      protocol: WATCH_PROTOCOL,
+      sealKey: sealKeys.publicKeyB64,
+    },
   });
   const actions = createPanelActions({ homeDir, env, defaultLocalCwd: () => cwd });
 
@@ -201,10 +210,18 @@ export async function run(
   };
 
   // Runs one panel action and returns { ok, result | error } without emitting anything.
-  const runAction = async (action, input) => {
+  const runAction = async (action, inputRaw) => {
     const fn = actions[action];
     if (typeof fn !== "function") {
       return { ok: false, error: `unknown action: ${action}` };
+    }
+    let input = inputRaw;
+    if (action === "authImport" && input?.envelope) {
+      try {
+        input = { ...input, envelope: undefined, credentials: openEnvelope(sealKeys.privateKey, input.envelope) };
+      } catch (err) {
+        return { ok: false, error: `could not open credential envelope: ${err?.message || err}` };
+      }
     }
     if (action === "startSession") {
       provisioningState = {
@@ -219,7 +236,7 @@ export async function run(
       if (action === "startSession") {
         provisioningState = { active: false, message: null, error: null };
       }
-      if (action === "authLogin" || action === "authSwitch" || action === "authLogout") {
+      if (["authLogin", "authImport", "authSwitch", "authLogout"].includes(action)) {
         builder.invalidateDoctor();
       }
       if (action === "submitTask" && result?.task?.id) {

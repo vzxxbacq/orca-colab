@@ -7,6 +7,8 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { FrameAssembler } from "../bin/lib/bridge-frames.mjs";
 import { readLedgerEvents } from "../bin/lib/credit-ledger.mjs";
+import { sealForRecipient } from "../bin/lib/credential-envelope.mjs";
+import { readOAuthStore } from "../bin/lib/colab-oauth.mjs";
 import { parseControlLine, parseControlLines, snapshotFingerprint } from "../bin/commands/watch.mjs";
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "bin", "orca-colab.mjs");
@@ -106,6 +108,32 @@ test("watch answers a call over stdin with a res frame and emits snap frames", a
   const partials = frames.filter((x) => x.kind === "res" && x.payload.reqId === "b1" && x.payload.partial);
   assert.equal(partials.length, 2, "one partial frame per op");
   assert.equal(readLedgerEvents(tmpHome).filter((e) => e.type === "budget.set").at(-1).budgetCu, 43);
+
+  // Credentials sealed to the key the snapshot advertises land in the server's store as plaintext.
+  const snapFrame = frames.find((f) => f.kind === "snap" && f.payload.origin?.sealKey);
+  assert.ok(snapFrame, "snapshot advertises a seal key");
+  const envelope = sealForRecipient(snapFrame.payload.origin.sealKey, {
+    refreshToken: "1//0test-refresh",
+    accessToken: "ya29.test",
+    expiryDate: Date.now() + 3600_000,
+    email: "pytest@example.com",
+    name: "Py Test",
+  });
+  const importB64 = Buffer.from(JSON.stringify({ account: "default", addAccount: false, envelope })).toString("base64");
+  const importRes = new Promise((r) => {
+    child.stdout.on("data", () => {
+      const f = frames.find((x) => x.kind === "res" && x.payload.reqId === "imp1");
+      if (f) r(f);
+    });
+  });
+  child.stdin.write(`call imp1 authImport ${importB64} ;;\n`);
+  const imported = await Promise.race([
+    importRes,
+    new Promise((_, rej) => setTimeout(() => rej(new Error("no authImport res within 10s")), 10_000)),
+  ]);
+  assert.equal(imported.payload.ok, true, JSON.stringify(imported.payload));
+  assert.equal(readOAuthStore(tmpHome).accounts.default.refreshToken, "1//0test-refresh");
+  assert.equal(readOAuthStore(tmpHome).accounts.default.email, "pytest@example.com");
 
   child.stdin.write("call req2 nope e30=\n");
   const bad = await Promise.race([
