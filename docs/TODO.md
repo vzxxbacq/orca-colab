@@ -39,11 +39,11 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
       balance projection from last calibration), `credits`, `credits set`, `credits budget`, `ledger`,
       `rates` commands; `up` records `rateKey`/`cuPerHour` and returns `estimatedCuPerHour`; `down` writes
       `session.end`. Tests: projection math with hardcoded events; GPU name mapping. — Done: rate table, append-only credit ledger, projection math and `credits`/`ledger`/`rates` commands (`test/credits.test.mjs`).
-- [ ] **M1.10 Bootstrap notebook.** Per DESIGN. Validate inputs, sshd, tailscaled userspace, `tailscale up`
+- [x] **M1.10 Bootstrap notebook.** Per DESIGN. Validate inputs, sshd, tailscaled userspace, `tailscale up`
       with auth key and optional login server, in-kernel unassign watcher thread (D10), GPU/IP report,
       separate keepalive cell. No outputs. Verify in M1.13 that touching the sentinel over SSH really
       releases the runtime (watch Colab's UI); if `runtime.unassign()` needs the frontend connected,
-      document that the tab must be open for `down` to work.
+      document that the tab must be open for `down` to work. — Done: `notebooks/orca-colab-bootstrap.ipynb` with input validation, sshd, tailscaled userspace, D10 unassign watcher and keepalive cell (`test/bootstrap-notebook.test.mjs`).
 - [ ] **M1.11 SKILL.md.** Writes the pinned command `npx -y github:vzxxbacq/orca-colab#v0.1.0`; it cannot
       run until M1.12 tags, so this item verifies only the skill install, and M1.12 verifies the command.
        `skills/colab-gpu/SKILL.md` per DESIGN § Skill, plus `skills/colab-gpu/
