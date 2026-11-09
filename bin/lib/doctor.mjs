@@ -90,6 +90,7 @@ export function runDoctor({
     tailnetName: ts.tailnetName ?? null,
     selfHostName: ts.self?.hostName ?? null,
     selfIp: ts.self?.ipv4 ?? null,
+    detectedLoginServer: ts.detectedLoginServer ?? null,
   };
   if (!ts.found) {
     tailscaleCheck.action =
@@ -197,6 +198,7 @@ export function runDoctor({
     sshKeyPresent,
     notebookUrlConfigured,
     authKeyAgeDays,
+    loginServer: effectiveLoginServer,
   };
   if (configWarning) {
     configCheck.warning = configWarning;

@@ -48,6 +48,15 @@ test("worker/main.mjs activates and registers commands and panel handlers cleanl
     assert.equal(registeredPanels.has("colab.submitTask"), true);
     assert.equal(registeredPanels.has("colab.getTaskLogs"), true);
     assert.equal(statusBarState?.id, "colab-sessions");
+
+    const snap = await registeredPanels.get("colab.dashboard")({});
+    assert.equal(typeof snap.doctor?.ok, "boolean");
+
+    const taskRes = await registeredPanels.get("colab.submitTask")({
+      command: "nvidia-smi",
+    });
+    assert.equal(taskRes.ok, false);
+    assert.equal(taskRes.code, "NO_ACTIVE_SESSION");
   } finally {
     deactivateWorker();
   }

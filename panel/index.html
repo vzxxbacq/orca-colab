@@ -1,1165 +1,2192 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Google Colab GPU</title>
-  <style>
-    :root {
-      --bg: var(--orca-background, #0b0f17);
-      --fg: var(--orca-foreground, #e2e8f0);
-      --muted: var(--orca-muted-foreground, #94a3b8);
-      --border: var(--orca-border, #1e293b);
-      --card: var(--orca-secondary, #111827);
-      --primary: var(--orca-primary, #38bdf8);
-      --success: #22c55e;
-      --warning: #f59e0b;
-      --danger: #ef4444;
-      --terminal-bg: #070a10;
-    }
-
-    * {
-      box-sizing: border-box;
-    }
-
-    body {
-      margin: 0;
-      padding: 12px;
-      background: var(--bg);
-      color: var(--fg);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      font-size: 12.5px;
-      line-height: 1.45;
-    }
-
-    .header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      margin-bottom: 10px;
-      padding-bottom: 8px;
-      border-bottom: 1px solid var(--border);
-    }
-
-    .title-group {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .title-group h1 {
-      margin: 0;
-      font-size: 14px;
-      font-weight: 600;
-      letter-spacing: -0.01em;
-    }
-
-    .badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-      padding: 2px 7px;
-      border-radius: 999px;
-      font-size: 10.5px;
-      font-weight: 600;
-      border: 1px solid var(--border);
-      background: rgba(148, 163, 184, 0.1);
-      color: var(--muted);
-    }
-
-    .badge.ok {
-      background: rgba(34, 197, 94, 0.14);
-      color: #4ade80;
-      border-color: rgba(34, 197, 94, 0.3);
-    }
-
-    .badge.warn {
-      background: rgba(245, 158, 11, 0.14);
-      color: #fbbf24;
-      border-color: rgba(245, 158, 11, 0.3);
-    }
-
-    .badge.err {
-      background: rgba(239, 68, 68, 0.15);
-      color: #f87171;
-      border-color: rgba(239, 68, 68, 0.3);
-    }
-
-    .badge.running {
-      background: rgba(56, 189, 248, 0.15);
-      color: #38bdf8;
-      border-color: rgba(56, 189, 248, 0.35);
-    }
-
-    .pulse-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: currentColor;
-      animation: pulse 1.4s infinite ease-in-out;
-    }
-
-    @keyframes pulse {
-      0%, 100% { opacity: 1; transform: scale(1); }
-      50% { opacity: 0.35; transform: scale(0.85); }
-    }
-
-    .section {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px 12px;
-      margin-bottom: 10px;
-    }
-
-    .section-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      margin-bottom: 8px;
-    }
-
-    .section-title {
-      font-size: 11.5px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      color: var(--muted);
-      margin: 0;
-    }
-
-    .row {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      flex-wrap: wrap;
-    }
-
-    .between {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-    }
-
-    button, select, input[type="text"], input[type="number"] {
-      font-family: inherit;
-      font-size: 12px;
-      color: var(--fg);
-      background: var(--bg);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 5px 9px;
-      outline: none;
-    }
-
-    input[type="text"]:focus, input[type="number"]:focus, select:focus {
-      border-color: var(--primary);
-    }
-
-    button {
-      cursor: pointer;
-      font-weight: 500;
-      transition: opacity 0.15s, border-color 0.15s, background 0.15s;
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-    }
-
-    button:hover:not(:disabled) {
-      border-color: var(--primary);
-    }
-
-    button:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-    }
-
-    button.primary {
-      background: var(--primary);
-      color: #06131f;
-      border-color: transparent;
-      font-weight: 600;
-    }
-
-    button.danger {
-      background: rgba(239, 68, 68, 0.14);
-      color: #f87171;
-      border-color: rgba(239, 68, 68, 0.35);
-    }
-
-    button.sm {
-      padding: 3px 7px;
-      font-size: 11px;
-    }
-
-    .prereq-bar {
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-      margin-top: 6px;
-    }
-
-    .session-card {
-      border: 1px solid var(--border);
-      background: rgba(15, 23, 42, 0.45);
-      border-radius: 7px;
-      padding: 9px 10px;
-      margin-top: 8px;
-    }
-
-    .session-meta {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-      gap: 6px;
-      margin: 7px 0;
-      font-size: 11.5px;
-    }
-
-    .meta-item {
-      background: rgba(255, 255, 255, 0.02);
-      border: 1px solid rgba(148, 163, 184, 0.1);
-      border-radius: 5px;
-      padding: 4px 7px;
-    }
-
-    .meta-label {
-      font-size: 10px;
-      color: var(--muted);
-      display: block;
-    }
-
-    .meta-value {
-      font-weight: 600;
-      font-variant-numeric: tabular-nums;
-    }
-
-    .progress-track {
-      width: 100%;
-      height: 6px;
-      background: rgba(148, 163, 184, 0.15);
-      border-radius: 999px;
-      overflow: hidden;
-      margin-top: 4px;
-    }
-
-    .progress-fill {
-      height: 100%;
-      background: var(--primary);
-      border-radius: 999px;
-      transition: width 0.25s ease;
-    }
-
-    .progress-fill.warn { background: var(--warning); }
-    .progress-fill.danger { background: var(--danger); }
-
-    .task-form {
-      display: flex;
-      flex-direction: column;
-      gap: 7px;
-      margin-bottom: 9px;
-      padding-bottom: 9px;
-      border-bottom: 1px solid var(--border);
-    }
-
-    .preset-chips {
-      display: flex;
-      gap: 5px;
-      flex-wrap: wrap;
-    }
-
-    .chip {
-      font-size: 10.5px;
-      padding: 2px 7px;
-      border-radius: 999px;
-      background: rgba(56, 189, 248, 0.08);
-      border: 1px solid rgba(56, 189, 248, 0.22);
-      color: var(--fg);
-      cursor: pointer;
-    }
-
-    .chip:hover {
-      background: rgba(56, 189, 248, 0.18);
-    }
-
-    .task-list {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      max-height: 195px;
-      overflow-y: auto;
-    }
-
-    .task-item {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      padding: 7px 9px;
-      border-radius: 6px;
-      border: 1px solid var(--border);
-      background: rgba(15, 23, 42, 0.4);
-      cursor: pointer;
-    }
-
-    .task-item.selected {
-      border-color: var(--primary);
-      background: rgba(56, 189, 248, 0.08);
-    }
-
-    .task-info {
-      min-width: 0;
-      flex: 1;
-    }
-
-    .task-title {
-      font-weight: 600;
-      font-size: 12px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .task-sub {
-      font-size: 11px;
-      color: var(--muted);
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .console-box {
-      background: var(--terminal-bg);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 8px 10px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 11.5px;
-      line-height: 1.45;
-      color: #cbd5e1;
-      height: 220px;
-      overflow-y: auto;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-
-    .console-empty {
-      color: var(--muted);
-      font-style: italic;
-    }
-
-    .muted {
-      color: var(--muted);
-    }
-
-    .mono {
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    }
-
-    .banner {
-      padding: 7px 10px;
-      border-radius: 6px;
-      margin-bottom: 8px;
-      font-size: 11.5px;
-      border: 1px solid rgba(56, 189, 248, 0.35);
-      background: rgba(56, 189, 248, 0.1);
-      color: #e0f2fe;
-    }
-
-    .banner.error {
-      border-color: rgba(239, 68, 68, 0.4);
-      background: rgba(239, 68, 68, 0.12);
-      color: #fecaca;
-    }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <div class="title-group">
-      <h1>⚡ Google Colab GPU</h1>
-      <span id="auth-badge" class="badge">Checking...</span>
-    </div>
-    <div class="row">
-      <button id="btn-toggle-setup" class="sm" title="Configure Tailscale Auth Key & Login Server">⚙ Setup</button>
-      <button id="btn-auth" class="sm">Sign in with Google</button>
-      <button id="btn-refresh" class="sm" title="Refresh status">↻</button>
-    </div>
-  </div>
-
-  <div id="status-banner" class="banner" style="display:none"></div>
-
-  <!-- 0. Initial Setup (auto-shown when unconfigured) -->
-  <div id="setup-section" class="section" style="display:none">
-    <div class="section-header">
-      <h2 class="section-title">1-Time Setup (Tailscale Auth Key & SSH Key)</h2>
-      <span class="badge warn">Required once</span>
-    </div>
-    <div class="task-form" style="border-bottom:none;margin-bottom:0;padding-bottom:0">
-      <div class="row">
-        <input
-          type="text"
-          id="setup-authkey-input"
-          class="mono"
-          placeholder="Tailscale Pre-Auth Key (tskey-auth-... or Headscale key)"
-          style="flex: 1"
-        />
-      </div>
-      <div class="row">
-        <input
-          type="text"
-          id="setup-loginserver-input"
-          class="mono"
-          placeholder="Login server (optional, e.g. https://hs.feihao.xyz for Headscale)"
-          style="flex: 1"
-        />
-        <button id="btn-save-setup" class="primary">Save & Generate SSH Key</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- 1. GPU Runtime & Resource Monitor -->
-  <div class="section">
-    <div class="section-header">
-      <h2 class="section-title">GPU Runtime (Colab VS Code Direct API)</h2>
-      <span id="session-count-badge" class="badge">0 active</span>
-    </div>
-
-    <div class="row">
-      <select id="gpu-select" title="Select Colab Accelerator">
-        <option value="T4">NVIDIA T4 (≈1.96 CU/h)</option>
-        <option value="L4">NVIDIA L4 (≈4.82 CU/h)</option>
-        <option value="A100">NVIDIA A100 (≈11.77 CU/h)</option>
-        <option value="CPU">Colab CPU (≈0.08 CU/h)</option>
-      </select>
-      <label class="row muted" style="font-size:11.5px;cursor:pointer">
-        <input type="checkbox" id="chk-keep" /> Keep alive
-      </label>
-      <button id="btn-start-gpu" class="primary">Start GPU</button>
-      <button id="btn-open-term" class="sm">SSH Terminal</button>
-    </div>
-
-    <div id="prereq-bar" class="prereq-bar"></div>
-    <div id="sessions-container"></div>
-  </div>
-
-  <!-- 2. Algorithm Task Manager -->
-  <div class="section">
-    <div class="section-header">
-      <h2 class="section-title">Algorithm Task Manager</h2>
-      <span id="tasks-summary-badge" class="badge">0 running</span>
-    </div>
-
-    <div class="task-form">
-      <div class="row">
-        <input
-          type="text"
-          id="task-name-input"
-          placeholder="Task title (optional, e.g. Train ResMLP)"
-          style="flex: 1; min-width: 140px"
-        />
-        <label class="row muted" style="font-size:11.5px;cursor:pointer">
-          <input type="checkbox" id="chk-sync-workspace" checked /> Sync workspace
-        </label>
-      </div>
-      <div class="row">
-        <input
-          type="text"
-          id="task-cmd-input"
-          class="mono"
-          placeholder="python3 train.py --epochs 20 --fp16"
-          style="flex: 1"
-        />
-        <button id="btn-submit-task" class="primary">Run Task</button>
-      </div>
-      <div class="preset-chips">
-        <span class="chip" data-cmd="nvidia-smi">nvidia-smi</span>
-        <span class="chip" data-cmd="python3 -c &quot;import torch; print('CUDA:', torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')&quot;">PyTorch GPU Check</span>
-        <span class="chip" data-cmd="pip install -q -r requirements.txt">pip install requirements</span>
-      </div>
-    </div>
-
-    <div id="task-list" class="task-list">
-      <div class="muted" style="font-size:11.5px">No tasks submitted yet.</div>
-    </div>
-  </div>
-
-  <!-- 3. Current Task Live Output Console -->
-  <div class="section">
-    <div class="section-header">
-      <div class="row">
-        <h2 class="section-title">Current Task Output</h2>
-        <span id="console-task-badge" class="badge">None selected</span>
-      </div>
-      <div class="row">
-        <label class="row muted" style="font-size:11px;cursor:pointer">
-          <input type="checkbox" id="chk-autoscroll" checked /> Follow
-        </label>
-        <button id="btn-copy-logs" class="sm">Copy</button>
-        <button id="btn-refresh-logs" class="sm">↻</button>
-      </div>
-    </div>
-    <div id="console-output" class="console-box console-empty">Select or submit a task above to stream live stdout/stderr from the Colab GPU...</div>
-  </div>
-
-  <!-- 4. Compute Units (CCU) & Budget Stewardship -->
-  <div class="section">
-    <div class="section-header">
-      <h2 class="section-title">Compute Units (Approximate)</h2>
-      <div class="row">
-        <button id="btn-sync-ccu" class="sm">Sync CCU</button>
-      </div>
-    </div>
-
-    <div id="credits-summary" class="session-meta"></div>
-    <div id="budget-bar-wrap" style="display:none;margin-bottom:8px">
-      <div class="between" style="font-size:11px">
-        <span id="budget-label" class="muted">Monthly budget</span>
-        <span id="budget-pct" class="mono">0%</span>
-      </div>
-      <div class="progress-track">
-        <div id="budget-fill" class="progress-fill" style="width:0%"></div>
-      </div>
-    </div>
-
-    <div class="row" style="margin-top:6px">
-      <input type="number" id="input-balance" placeholder="Balance CU" step="0.1" min="0" style="width:95px" />
-      <button id="btn-set-balance" class="sm">Set Balance</button>
-      <input type="number" id="input-budget" placeholder="Budget CU/mo" step="1" min="0" style="width:105px" />
-      <button id="btn-set-budget" class="sm">Set Budget</button>
-    </div>
-
-    <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:11px" class="between">
-      <span class="muted">Agent Skill: <code class="mono">npx skills add vzxxbacq/orca-colab</code></span>
-      <button id="btn-copy-skill" class="sm">Copy</button>
-    </div>
-  </div>
-
-  <script>
-    const orcaApi = window.orca || {
-      plugin: {
-        async request() { return {}; },
-        on() {},
-      },
-    };
-
-    let state = {
-      selectedTaskId: null,
-      dashboard: null,
-      doctor: null,
-      lastLogText: "",
-    };
-
-    function showBanner(msg, isError = false) {
-      const el = document.getElementById("status-banner");
-      if (!msg) {
-        el.style.display = "none";
-        el.textContent = "";
-        return;
-      }
-      el.style.display = "block";
-      el.className = isError ? "banner error" : "banner";
-      el.textContent = msg;
-    }
-
-    function formatDuration(sec) {
-      if (!Number.isFinite(sec) || sec < 0) return "0s";
-      if (sec < 60) return `${Math.round(sec)}s`;
-      const m = Math.floor(sec / 60);
-      const s = Math.round(sec % 60);
-      if (m < 60) return `${m}m ${s}s`;
-      const h = Math.floor(m / 60);
-      return `${h}h ${m % 60}m`;
-    }
-
-    function formatTaskElapsed(task) {
-      const start = Date.parse(task.startedAt || task.createdAt);
-      const end = task.finishedAt ? Date.parse(task.finishedAt) : Date.now();
-      if (!Number.isFinite(start) || !Number.isFinite(end)) return "";
-      const sec = Math.max(0, (end - start) / 1000);
-      return sec < 60 ? `${sec.toFixed(1)}s` : formatDuration(sec);
-    }
-
-    function renderPrerequisites(doctor, auth) {
-      const bar = document.getElementById("prereq-bar");
-      const setupSec = document.getElementById("setup-section");
-      if (!doctor) {
-        bar.innerHTML = "";
-        return;
-      }
-      const c = doctor.checks || {};
-      const items = [
-        { label: "Tailscale", ok: Boolean(c.tailscale?.loggedIn) },
-        { label: "SSH Key", ok: Boolean(c.config?.sshKeyPresent) },
-        { label: "Auth Key", ok: Boolean(c.config?.hasAuthKey) },
-        { label: "Direct API OAuth", ok: Boolean(auth?.authenticated) },
-      ];
-      bar.innerHTML = items
-        .map(
-          (i) =>
-            `<span class="badge ${i.ok ? "ok" : "warn"}">${i.ok ? "✓" : "•"} ${i.label}</span>`,
-        )
-        .join("");
-
-      if (!c.config?.ok && !state.setupManuallyClosed) {
-        setupSec.style.display = "block";
-      }
-    }
-
-    function renderSessions(sessions = []) {
-      const container = document.getElementById("sessions-container");
-      const badge = document.getElementById("session-count-badge");
-      const active = sessions.filter((s) => s.state !== "zombie");
-      badge.textContent = `${active.length} active`;
-      badge.className = `badge ${active.length > 0 ? "ok" : ""}`;
-
-      if (sessions.length === 0) {
-        container.innerHTML = `<div class="muted" style="margin-top:8px;font-size:11.5px">No active GPU sessions. Choose an accelerator above and click <b>Start GPU</b>.</div>`;
-        return;
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Google Colab GPU</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b0e14;
+        --surface: #121721;
+        --surface-2: #181f2c;
+        --surface-3: #1f293a;
+        --border: rgba(255, 255, 255, 0.08);
+        --border-strong: rgba(255, 255, 255, 0.15);
+        --fg: #eef2f8;
+        --muted: #8b95a7;
+        --subtle: #5e6778;
+        --accent: #f9ab00;
+        --accent-hover: #ffbe33;
+        --accent-soft: rgba(249, 171, 0, 0.14);
+        --accent-border: rgba(249, 171, 0, 0.4);
+        --ok: #2ea043;
+        --ok-soft: rgba(46, 160, 67, 0.15);
+        --warn: #d29922;
+        --warn-soft: rgba(210, 153, 34, 0.16);
+        --danger: #f85149;
+        --danger-soft: rgba(248, 81, 73, 0.15);
+        --info: #58a6ff;
+        --info-soft: rgba(88, 166, 255, 0.15);
+        --radius: 10px;
+        --radius-sm: 7px;
       }
 
-      container.innerHTML = sessions
-        .map((s) => {
-          const gpuName = s.gpu?.name || s.rateKey || "GPU";
-          const vramTotal = s.liveMetrics?.vramTotalMiB || s.gpu?.memoryTotalMiB || null;
-          const vramUsed = s.liveMetrics?.vramUsedMiB ?? null;
-          const gpuUtil = s.liveMetrics?.gpuUtilizationPercent ?? null;
-          const modeLabel = s.colabRuntime?.id ? "Direct API" : "Notebook";
-          return `
-            <div class="session-card">
-              <div class="between">
-                <div class="row">
-                  <strong>${s.name}</strong>
-                  <span class="badge ${s.reachable ? "ok" : "err"}">${s.reachable ? "ONLINE" : s.state.toUpperCase()}</span>
-                  <span class="badge">${modeLabel}</span>
-                  ${s.keep ? '<span class="badge warn">KEEP</span>' : ""}
-                </div>
-                <div class="row">
-                  <button class="sm" data-action="toggle-keep" data-session="${s.name}">${s.keep ? "Unkeep" : "Keep"}</button>
-                  <button class="sm" data-action="ssh-session" data-session="${s.name}">Shell</button>
-                  <button class="sm danger" data-action="stop-session" data-session="${s.name}">Stop</button>
-                </div>
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI",
+          Roboto, sans-serif;
+        font-size: 12px;
+        line-height: 1.45;
+        color: var(--fg);
+        background: var(--bg);
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* Top App Bar */
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 12px;
+        background: rgba(18, 23, 33, 0.92);
+        border-bottom: 1px solid var(--border);
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        backdrop-filter: blur(8px);
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .brand-logo {
+        width: 24px;
+        height: 24px;
+        border-radius: 6px;
+        background: linear-gradient(135deg, #f9ab00 0%, #e37400 100%);
+        color: #0b0e14;
+        font-weight: 800;
+        font-size: 13px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        box-shadow: 0 2px 8px rgba(249, 171, 0, 0.25);
+      }
+
+      .brand-text {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+      }
+
+      .brand-title {
+        font-size: 12.5px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+        white-space: nowrap;
+      }
+
+      .brand-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 10.5px;
+        color: var(--muted);
+      }
+
+      .status-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--subtle);
+      }
+      .status-dot.ok {
+        background: #3fb950;
+        box-shadow: 0 0 6px rgba(63, 185, 80, 0.7);
+      }
+      .status-dot.warn {
+        background: var(--accent);
+      }
+
+      .topbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+
+      /* Container */
+      .viewport {
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        flex: 1;
+      }
+
+      .hidden {
+        display: none !important;
+      }
+
+      /* Buttons & Inputs */
+      button {
+        appearance: none;
+        border: 1px solid var(--border-strong);
+        background: var(--surface-2);
+        color: var(--fg);
+        border-radius: var(--radius-sm);
+        padding: 5px 10px;
+        font-size: 11.5px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: all 0.14s ease;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 5px;
+      }
+
+      button:hover:not(:disabled) {
+        background: var(--surface-3);
+        border-color: rgba(255, 255, 255, 0.24);
+      }
+
+      button:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+      }
+
+      button.primary {
+        background: var(--accent);
+        color: #0b0e14;
+        border-color: var(--accent);
+        font-weight: 600;
+      }
+
+      button.primary:hover:not(:disabled) {
+        background: var(--accent-hover);
+        border-color: var(--accent-hover);
+      }
+
+      button.danger {
+        background: var(--danger-soft);
+        color: #ff8e88;
+        border-color: rgba(248, 81, 73, 0.35);
+      }
+
+      button.danger:hover:not(:disabled) {
+        background: rgba(248, 81, 73, 0.25);
+      }
+
+      button.ghost {
+        background: transparent;
+        border-color: transparent;
+        color: var(--muted);
+        padding: 4px 7px;
+      }
+
+      button.ghost:hover:not(:disabled) {
+        background: var(--surface-2);
+        color: var(--fg);
+      }
+
+      button.ghost.active {
+        background: var(--surface-2);
+        color: var(--fg);
+        border-color: var(--border);
+      }
+
+      button.cta-large {
+        width: 100%;
+        padding: 9px 14px;
+        font-size: 12.5px;
+        font-weight: 700;
+        border-radius: 8px;
+        box-shadow: 0 4px 14px rgba(249, 171, 0, 0.2);
+      }
+
+      input[type="text"],
+      input[type="password"],
+      input[type="number"],
+      select {
+        background: #090c11;
+        color: var(--fg);
+        border: 1px solid var(--border-strong);
+        border-radius: var(--radius-sm);
+        padding: 6px 9px;
+        font-size: 11.5px;
+        width: 100%;
+        outline: none;
+        transition: border-color 0.14s ease;
+      }
+
+      input:focus,
+      select:focus {
+        border-color: var(--accent);
+      }
+
+      /* Notices & Banners */
+      .banner {
+        border-radius: var(--radius-sm);
+        padding: 8px 10px;
+        font-size: 11.5px;
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .banner.info {
+        background: var(--info-soft);
+        border: 1px solid rgba(88, 166, 255, 0.35);
+        color: #a5d6ff;
+      }
+
+      .banner.warn {
+        background: var(--warn-soft);
+        border: 1px solid rgba(210, 153, 34, 0.4);
+        color: #f2cc60;
+      }
+
+      .banner.error {
+        background: var(--danger-soft);
+        border: 1px solid rgba(248, 81, 73, 0.4);
+        color: #ffa198;
+      }
+
+      .banner.ok {
+        background: var(--ok-soft);
+        border: 1px solid rgba(46, 160, 67, 0.4);
+        color: #7ee787;
+      }
+
+      /* Cards */
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        padding: 12px;
+      }
+
+      .card-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .card-title {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--fg);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .card-subtitle {
+        font-size: 11px;
+        color: var(--muted);
+        margin-bottom: 10px;
+      }
+
+      /* Badges */
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 7px;
+        border-radius: 999px;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+      }
+
+      .badge.ok {
+        background: var(--ok-soft);
+        color: #56d364;
+      }
+
+      .badge.warn {
+        background: var(--warn-soft);
+        color: #e3b341;
+      }
+
+      .badge.danger {
+        background: var(--danger-soft);
+        color: #ff7b72;
+      }
+
+      .badge.info {
+        background: var(--info-soft);
+        color: #79c0ff;
+      }
+
+      .badge.neutral {
+        background: rgba(255, 255, 255, 0.07);
+        color: var(--muted);
+      }
+
+      /* Wizard Stepper */
+      .wizard-hero {
+        text-align: left;
+        padding: 4px 2px 2px 2px;
+      }
+
+      .wizard-hero h2 {
+        margin: 0 0 3px 0;
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      .wizard-hero p {
+        margin: 0;
+        font-size: 11.5px;
+        color: var(--muted);
+      }
+
+      .stepper {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 6px;
+      }
+
+      .step-pill {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 7px 8px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .step-pill.done {
+        border-color: rgba(46, 160, 67, 0.4);
+        background: rgba(46, 160, 67, 0.07);
+        color: var(--fg);
+      }
+
+      .step-pill.current {
+        border-color: var(--accent-border);
+        background: var(--accent-soft);
+        color: var(--fg);
+      }
+
+      .step-num {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        font-size: 10px;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--surface-3);
+        color: var(--muted);
+        flex-shrink: 0;
+      }
+
+      .step-pill.done .step-num {
+        background: var(--ok);
+        color: #fff;
+      }
+
+      .step-pill.current .step-num {
+        background: var(--accent);
+        color: #0b0e14;
+      }
+
+      /* Env Check Grid */
+      .env-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 6px;
+      }
+
+      .env-item {
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 7px 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      .env-item-label {
+        font-size: 10.5px;
+        color: var(--muted);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .env-item-val {
+        font-size: 11px;
+        font-weight: 600;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      /* GPU Selector Grid in Launcher */
+      .gpu-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 8px;
+        margin: 8px 0 12px 0;
+      }
+
+      .gpu-card {
+        background: var(--surface-2);
+        border: 1.5px solid var(--border);
+        border-radius: 8px;
+        padding: 10px;
+        cursor: pointer;
+        transition: all 0.14s ease;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        text-align: left;
+      }
+
+      .gpu-card:hover {
+        border-color: rgba(255, 255, 255, 0.22);
+        background: var(--surface-3);
+      }
+
+      .gpu-card.selected {
+        border-color: var(--accent);
+        background: linear-gradient(
+          180deg,
+          rgba(249, 171, 0, 0.14) 0%,
+          rgba(249, 171, 0, 0.04) 100%
+        );
+        box-shadow: 0 0 0 1px rgba(249, 171, 0, 0.25);
+      }
+
+      .gpu-card-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .gpu-name {
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--fg);
+      }
+
+      .gpu-rate {
+        font-size: 10.5px;
+        font-weight: 600;
+        color: var(--accent);
+      }
+
+      .gpu-spec {
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      .gpu-tag {
+        font-size: 9.5px;
+        color: var(--subtle);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        font-weight: 600;
+      }
+
+      /* Provisioning Box */
+      .provision-box {
+        background: rgba(249, 171, 0, 0.08);
+        border: 1px solid var(--accent-border);
+        border-radius: var(--radius);
+        padding: 12px;
+        margin-top: 10px;
+      }
+
+      .spinner {
+        width: 14px;
+        height: 14px;
+        border: 2px solid rgba(249, 171, 0, 0.3);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+        flex-shrink: 0;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      /* Active Runtime Pinned Header */
+      .runtime-banner {
+        background: linear-gradient(
+          180deg,
+          rgba(46, 160, 67, 0.12) 0%,
+          rgba(18, 23, 33, 0.95) 100%
+        );
+        border: 1px solid rgba(46, 160, 67, 0.35);
+        border-radius: var(--radius);
+        padding: 10px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .runtime-top {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .runtime-title {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        font-weight: 700;
+        font-size: 12.5px;
+      }
+
+      .runtime-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      /* Segmented Navigation Tabs */
+      .seg-tabs {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        background: #080a0f;
+        padding: 3px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        gap: 3px;
+      }
+
+      .seg-tab {
+        border: none;
+        background: transparent;
+        color: var(--muted);
+        padding: 6px 8px;
+        font-size: 11px;
+        font-weight: 600;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+
+      .seg-tab:hover {
+        color: var(--fg);
+        background: rgba(255, 255, 255, 0.04);
+      }
+
+      .seg-tab.active {
+        background: var(--surface-2);
+        color: var(--fg);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+      }
+
+      /* Progress Bars */
+      .bar-wrap {
+        width: 100%;
+        height: 5px;
+        background: rgba(255, 255, 255, 0.07);
+        border-radius: 999px;
+        overflow: hidden;
+      }
+
+      .bar-fill {
+        height: 100%;
+        background: var(--ok);
+        transition: width 0.25s ease;
+      }
+
+      .bar-fill.warn {
+        background: var(--warn);
+      }
+
+      .bar-fill.danger {
+        background: var(--danger);
+      }
+
+      /* Preset Chips */
+      .chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px;
+        margin-bottom: 8px;
+      }
+
+      .chip {
+        font-size: 10.5px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        color: var(--muted);
+        cursor: pointer;
+      }
+
+      .chip:hover {
+        color: var(--fg);
+        border-color: var(--border-strong);
+      }
+
+      /* Task Selector Strip */
+      .task-list {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+        max-height: 155px;
+        overflow-y: auto;
+      }
+
+      .task-row {
+        background: var(--surface-2);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 7px 9px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        cursor: pointer;
+        transition: border-color 0.12s ease;
+      }
+
+      .task-row:hover {
+        border-color: var(--border-strong);
+      }
+
+      .task-row.selected {
+        border-color: var(--accent);
+        background: rgba(249, 171, 0, 0.07);
+      }
+
+      .task-row-main {
+        min-width: 0;
+        flex: 1;
+      }
+
+      .task-row-title {
+        font-weight: 600;
+        font-size: 11.5px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .task-row-sub {
+        font-size: 10.5px;
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      /* Terminal Output Viewer */
+      .terminal-box {
+        background: #06080c;
+        border: 1px solid var(--border-strong);
+        border-radius: var(--radius-sm);
+        padding: 10px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+          monospace;
+        font-size: 11px;
+        line-height: 1.48;
+        color: #d2dae6;
+        min-height: 210px;
+        max-height: 340px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .form-group {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-bottom: 9px;
+      }
+
+      .form-label {
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--muted);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .row-between {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      details.helper-details {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 7px 9px;
+        margin-bottom: 9px;
+        font-size: 11px;
+        color: var(--muted);
+      }
+
+      details.helper-details summary {
+        cursor: pointer;
+        font-weight: 600;
+        color: var(--fg);
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Top Bar -->
+    <div class="topbar">
+      <div class="brand">
+        <div class="brand-logo">⚡</div>
+        <div class="brand-text">
+          <div class="brand-title">Colab Compute</div>
+          <div class="brand-status">
+            <span id="topStatusDot" class="status-dot"></span>
+            <span id="topStatusText">Checking environment...</span>
+          </div>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <button id="navWizardBtn" class="ghost" title="Open Setup Helper">
+          ⚙ Setup
+        </button>
+        <button id="refreshBtn" class="ghost" title="Refresh state">↻</button>
+      </div>
+    </div>
+
+    <div class="viewport">
+      <!-- Feedback Notice Banner -->
+      <div id="globalNotice" class="banner info hidden">
+        <span id="globalNoticeText"></span>
+        <button id="closeNoticeBtn" class="ghost" style="padding: 0 4px">
+          ✕
+        </button>
+      </div>
+
+      <!-- ================================================================= -->
+      <!-- VIEW 1: STEP-BY-STEP SETUP HELPER WIZARD                          -->
+      <!-- Shown automatically on first run (!doctor.checks.config.ok)       -->
+      <!-- ================================================================= -->
+      <div id="viewWizard" class="hidden" style="display: flex; flex-direction: column; gap: 10px">
+        <div class="wizard-hero">
+          <h2>Welcome to Colab GPU Helper</h2>
+          <p>
+            Complete this one-time setup to turn Google Colab into a local-feeling
+            SSH &amp; task compute backend.
+          </p>
+        </div>
+
+        <!-- 3-Step Progress Strip -->
+        <div class="stepper">
+          <div id="stepPill1" class="step-pill">
+            <span class="step-num" id="stepNum1">1</span>
+            <span>Environment</span>
+          </div>
+          <div id="stepPill2" class="step-pill">
+            <span class="step-num" id="stepNum2">2</span>
+            <span>Tailscale Key</span>
+          </div>
+          <div id="stepPill3" class="step-pill">
+            <span class="step-num" id="stepNum3">3</span>
+            <span>Google Sign-In</span>
+          </div>
+        </div>
+
+        <!-- Step 1: Environment Check -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Step 1 · Local Prerequisites</div>
+            <span id="step1Badge" class="badge neutral">Checking</span>
+          </div>
+          <div class="env-grid">
+            <div class="env-item">
+              <div class="env-item-label">
+                <span>Tailscale</span>
+                <span id="envTsIcon">•</span>
               </div>
-              <div class="session-meta">
-                <div class="meta-item">
-                  <span class="meta-label">Accelerator</span>
-                  <span class="meta-value">${gpuName}${vramTotal ? ` (${Math.round(vramTotal / 1024)} GB)` : ""}</span>
-                </div>
-                <div class="meta-item">
-                  <span class="meta-label">Tailnet IP</span>
-                  <span class="meta-value mono">${s.ip || "—"}</span>
-                </div>
-                <div class="meta-item">
-                  <span class="meta-label">Uptime / Cost</span>
-                  <span class="meta-value">${formatDuration(s.ageSeconds)} · ≈${s.costSoFarCu} CU</span>
-                </div>
-                <div class="meta-item">
-                  <span class="meta-label">GPU Load / VRAM</span>
-                  <span class="meta-value">${gpuUtil !== null ? `${gpuUtil}%` : "—"}${vramUsed !== null && vramTotal ? ` · ${vramUsed}/${vramTotal} MiB` : ""}</span>
-                </div>
+              <div class="env-item-val" id="envTsVal">--</div>
+            </div>
+            <div class="env-item">
+              <div class="env-item-label">
+                <span>OpenSSH</span>
+                <span id="envSshIcon">•</span>
+              </div>
+              <div class="env-item-val" id="envSshVal">--</div>
+            </div>
+            <div class="env-item">
+              <div class="env-item-label">
+                <span>Workspace Sync</span>
+                <span id="envRsyncIcon">•</span>
+              </div>
+              <div class="env-item-val" id="envRsyncVal">--</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 2: Tailscale Auth Key & SSH Keypair -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Step 2 · Tailscale Auth Key &amp; SSH Key</div>
+            <span id="step2Badge" class="badge warn">Required</span>
+          </div>
+          <div class="card-subtitle">
+            Each Colab GPU VM uses this key to join your private tailnet so Orca
+            can reach it over direct SSH.
+          </div>
+
+          <details class="helper-details">
+            <summary>How do I get a Tailscale / Headscale Auth Key?</summary>
+            <div style="margin-top: 6px; line-height: 1.5">
+              • <strong>Official Tailscale</strong>: Open
+              <span class="mono">Settings → Keys → Generate auth key</span>
+              (enable <em>Reusable</em> + <em>Ephemeral</em>). Starts with
+              <span class="mono">tskey-auth-...</span><br />
+              • <strong>Self-hosted Headscale</strong>: Generate a pre-auth key on
+              your Headscale server (e.g.
+              <span class="mono">headscale preauthkeys create --reusable --ephemeral -u &lt;user&gt;</span>)
+              and fill in your Login Server URL below.
+            </div>
+          </details>
+
+          <div class="form-group">
+            <label class="form-label">
+              <span>Pre-Auth Key</span>
+              <span id="sshKeyStatusText" class="muted" style="font-weight: 400"></span>
+            </label>
+            <input
+              id="setupAuthKeyInput"
+              type="password"
+              placeholder="Paste tskey-auth-... or Headscale hex pre-auth key"
+            />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">
+              <span>Login Server (for Headscale / custom control plane)</span>
+              <span class="row" style="gap: 4px">
+                <span
+                  id="useFeihaoServerChip"
+                  class="chip"
+                  style="padding: 1px 6px; font-size: 10px"
+                >
+                  hs.feihao.xyz
+                </span>
+                <span
+                  id="useDetectedServerChip"
+                  class="chip hidden"
+                  style="padding: 1px 6px; font-size: 10px"
+                >
+                  Detected
+                </span>
+              </span>
+            </label>
+            <input
+              id="setupLoginServerInput"
+              type="text"
+              placeholder="Leave empty for official Tailscale, or https://hs.feihao.xyz"
+            />
+          </div>
+
+          <button id="saveSetupBtn" class="primary" style="width: 100%">
+            Save Auth Key &amp; Generate SSH Keypair
+          </button>
+        </div>
+
+        <!-- Step 3: Google Account Sign-In -->
+        <div class="card">
+          <div class="card-header">
+            <div class="card-title">Step 3 · Google Colab Account</div>
+            <span id="step3Badge" class="badge neutral">Optional</span>
+          </div>
+          <div class="card-subtitle">
+            Sign in once in your default browser (Passkey supported). Allows
+            Orca to assign Colab GPUs headlessly in the background—just like the
+            official Colab VS Code extension.
+          </div>
+          <div class="row-between">
+            <span id="wizardOAuthText" class="muted">Not signed in yet</span>
+            <div class="row">
+              <button id="wizardLoginBtn" class="primary">
+                Sign in with Google
+              </button>
+              <button id="wizardLogoutBtn" class="ghost hidden">Sign out</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Continue Button when Config is Ready -->
+        <button id="finishWizardBtn" class="primary cta-large hidden">
+          Continue to GPU Launch Helper →
+        </button>
+      </div>
+
+      <!-- ================================================================= -->
+      <!-- VIEW 2: GPU LAUNCH HELPER (WHEN NO ACTIVE SESSIONS EXIST)         -->
+      <!-- Shown whenever config is ready but 0 GPU sessions are running     -->
+      <!-- ================================================================= -->
+      <div id="viewLauncher" class="hidden" style="display: flex; flex-direction: column; gap: 10px">
+        <div id="launcherContextBanner" class="banner warn hidden">
+          <span id="launcherContextText">
+            No active GPU session. Launch a Colab GPU runtime below to run tasks
+            or open SSH.
+          </span>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <div>
+              <div class="card-title" style="font-size: 13.5px">
+                Launch a Colab GPU Runtime
+              </div>
+              <div class="muted" style="font-size: 11px; margin-top: 2px">
+                Select an accelerator to allocate a Google Colab VM over your
+                tailnet.
               </div>
             </div>
-          `;
-        })
-        .join("");
-    }
+            <span class="badge info">No Active Session</span>
+          </div>
 
-    function renderTasks(tasks = []) {
-      const listEl = document.getElementById("task-list");
-      const summaryBadge = document.getElementById("tasks-summary-badge");
-      const runningCount = tasks.filter((t) => t.status === "running").length;
-      summaryBadge.textContent =
-        runningCount > 0 ? `${runningCount} running` : `${tasks.length} total`;
-      summaryBadge.className = `badge ${runningCount > 0 ? "running" : ""}`;
+          <!-- Account & Compute Units Status Strip -->
+          <div
+            style="
+              background: var(--surface-2);
+              border: 1px solid var(--border);
+              border-radius: var(--radius-sm);
+              padding: 8px 10px;
+              margin-bottom: 10px;
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              gap: 8px;
+            "
+          >
+            <div>
+              <div style="font-size: 10.5px; color: var(--muted)">
+                Google Account &amp; Balance
+              </div>
+              <div style="font-size: 11.5px; font-weight: 600" id="launcherAuthSummary">
+                Checking account...
+              </div>
+            </div>
+            <div class="row">
+              <button id="launcherLoginBtn" class="primary hidden">
+                Sign in with Google
+              </button>
+              <button id="launcherSyncCcuBtn" class="ghost" title="Query live CCU balance from Colab API">
+                ↻ Sync CCU
+              </button>
+            </div>
+          </div>
 
-      if (tasks.length === 0) {
-        listEl.innerHTML = `<div class="muted" style="font-size:11.5px">No tasks submitted yet. Enter a command above and click <b>Run Task</b>.</div>`;
-        return;
-      }
+          <!-- 2x2 Accelerator Selector Grid -->
+          <div class="form-label" style="margin-bottom: 4px">
+            <span>Select Hardware Accelerator</span>
+            <span class="muted" style="font-weight: 400">Colab Direct API</span>
+          </div>
+          <div class="gpu-grid" id="gpuCardGrid">
+            <div class="gpu-card selected" data-gpu="T4">
+              <div class="gpu-card-top">
+                <span class="gpu-name">NVIDIA T4</span>
+                <span class="gpu-rate">≈ 1.96 CU/h</span>
+              </div>
+              <div class="gpu-spec">16 GB GDDR6 VRAM</div>
+              <div class="gpu-tag">★ Recommended · Inference &amp; Dev</div>
+            </div>
 
-      if (!state.selectedTaskId && tasks.length > 0) {
-        const running = tasks.find((t) => t.status === "running");
-        state.selectedTaskId = (running || tasks[0]).id;
-      }
+            <div class="gpu-card" data-gpu="L4">
+              <div class="gpu-card-top">
+                <span class="gpu-name">NVIDIA L4</span>
+                <span class="gpu-rate">≈ 4.82 CU/h</span>
+              </div>
+              <div class="gpu-spec">24 GB GDDR6 VRAM</div>
+              <div class="gpu-tag">Ada Lovelace · Fine-Tuning</div>
+            </div>
 
-      listEl.innerHTML = tasks
-        .slice(0, 20)
-        .map((t) => {
-          const isSelected = t.id === state.selectedTaskId;
-          let badgeClass = "";
-          let dotHtml = "";
-          if (t.status === "running") {
-            badgeClass = "running";
-            dotHtml = `<span class="pulse-dot"></span>`;
-          } else if (t.status === "succeeded") {
-            badgeClass = "ok";
-          } else if (t.status === "failed") {
-            badgeClass = "err";
-          } else {
-            badgeClass = "warn";
-          }
+            <div class="gpu-card" data-gpu="A100">
+              <div class="gpu-card-top">
+                <span class="gpu-name">NVIDIA A100</span>
+                <span class="gpu-rate">≈ 11.77 CU/h</span>
+              </div>
+              <div class="gpu-spec">40 GB HBM2 VRAM</div>
+              <div class="gpu-tag">High Compute · Training</div>
+            </div>
 
-          const cmdStr = Array.isArray(t.command) ? t.command.join(" ") : String(t.command || "");
-          const elapsed = formatTaskElapsed(t);
-          const exitStr =
-            typeof t.exitCode === "number" && t.status !== "running"
-              ? ` · exit ${t.exitCode}`
-              : "";
+            <div class="gpu-card" data-gpu="CPU">
+              <div class="gpu-card-top">
+                <span class="gpu-name">Colab CPU</span>
+                <span class="gpu-rate">≈ 0.08 CU/h</span>
+              </div>
+              <div class="gpu-spec">12+ GB System RAM</div>
+              <div class="gpu-tag">Lightweight · Debugging</div>
+            </div>
+          </div>
 
-          return `
-            <div class="task-item ${isSelected ? "selected" : ""}" data-task-id="${t.id}">
-              <div class="task-info">
-                <div class="row" style="margin-bottom:2px">
-                  <span class="badge ${badgeClass}">${dotHtml}${t.status.toUpperCase()}</span>
-                  <span class="task-title">${t.name}</span>
-                  <span class="muted mono" style="font-size:10.5px">${elapsed}${exitStr}</span>
-                </div>
-                <div class="task-sub">$ ${cmdStr}</div>
+          <!-- Keep Alive Option -->
+          <div class="row-between" style="margin-bottom: 10px">
+            <label
+              style="
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                color: var(--muted);
+                cursor: pointer;
+                font-size: 11px;
+              "
+            >
+              <input id="launcherKeepCheck" type="checkbox" />
+              Keep session alive (disable 20m idle auto-stop)
+            </label>
+          </div>
+
+          <!-- Primary Launch Button -->
+          <button id="launchGpuBtn" class="primary cta-large">
+            ⚡ Launch NVIDIA T4 Runtime
+          </button>
+
+          <!-- Live Provisioning Progress Box -->
+          <div id="provisioningBox" class="provision-box hidden">
+            <div class="row" style="gap: 8px; margin-bottom: 6px">
+              <div class="spinner"></div>
+              <div style="font-weight: 700; font-size: 12px; color: var(--accent)">
+                Provisioning Colab GPU Runtime...
+              </div>
+            </div>
+            <div
+              id="provisioningMsg"
+              class="mono"
+              style="font-size: 11px; color: var(--fg); margin-bottom: 4px"
+            >
+              Requesting runtime assignment from Colab...
+            </div>
+            <div class="muted" style="font-size: 10.5px">
+              Takes ~25–45 seconds while Tailscale &amp; OpenSSH bootstrap inside
+              the container.
+            </div>
+          </div>
+
+          <div
+            class="row-between"
+            style="
+              margin-top: 10px;
+              padding-top: 8px;
+              border-top: 1px solid var(--border);
+              font-size: 11px;
+            "
+          >
+            <button id="launchInTermBtn" class="ghost" style="font-size: 10.5px">
+              &gt;_ Or launch via Terminal
+            </button>
+            <button id="launcherToPastTasksBtn" class="ghost hidden" style="font-size: 10.5px">
+              View Past Task Logs →
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ================================================================= -->
+      <!-- VIEW 3: ACTIVE GPU WORKSPACE (TABBED, NEVER PILED TOGETHER)       -->
+      <!-- Shown when >= 1 GPU session is active (or viewing past logs)      -->
+      <!-- ================================================================= -->
+      <div id="viewWorkspace" class="hidden" style="display: flex; flex-direction: column; gap: 10px">
+        <!-- Pinned Active GPU Banner -->
+        <div id="activeRuntimeBanner" class="runtime-banner"></div>
+
+        <!-- Segmented Navigation Bar -->
+        <div class="seg-tabs">
+          <button class="seg-tab active" data-tab="tasks">
+            Tasks &amp; Output
+          </button>
+          <button class="seg-tab" data-tab="hardware">
+            Hardware &amp; SSH
+          </button>
+          <button class="seg-tab" data-tab="credits">
+            Credits &amp; Config
+          </button>
+        </div>
+
+        <!-- TAB 1: TASKS & LIVE OUTPUT -->
+        <div id="tabTasks" style="display: flex; flex-direction: column; gap: 10px">
+          <!-- Task Composer Card -->
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">Submit Algorithm Task</div>
+              <span id="runningTaskBadge" class="badge neutral">0 running</span>
+            </div>
+
+            <div class="chip-row">
+              <span class="chip" data-preset="nvidia-smi">GPU Info (nvidia-smi)</span>
+              <span
+                class="chip"
+                data-preset="python3 -c &quot;import torch; print('CUDA:', torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU')&quot;"
+              >
+                PyTorch CUDA Check
+              </span>
+              <span class="chip" data-preset="python3 train.py">
+                python3 train.py
+              </span>
+              <span class="chip" data-preset="pip install -r requirements.txt">
+                pip install -r requirements.txt
+              </span>
+            </div>
+
+            <div class="row" style="margin-bottom: 7px">
+              <input
+                id="taskNameInput"
+                type="text"
+                placeholder="Label (optional)"
+                style="width: 34%"
+              />
+              <input
+                id="taskCmdInput"
+                type="text"
+                class="mono"
+                placeholder="e.g. python3 train.py --epochs 10"
+                style="width: 66%"
+              />
+            </div>
+
+            <div class="row-between">
+              <label
+                style="
+                  display: inline-flex;
+                  align-items: center;
+                  gap: 6px;
+                  font-size: 11px;
+                  color: var(--muted);
+                  cursor: pointer;
+                "
+              >
+                <input id="taskSyncCheck" type="checkbox" checked />
+                Sync current workspace to <span class="mono">/content/workspace</span>
+              </label>
+              <button id="submitTaskBtn" class="primary">▶ Run Task</button>
+            </div>
+          </div>
+
+          <!-- Recent Tasks Selector -->
+          <div class="card" style="padding: 10px 12px">
+            <div class="card-header" style="margin-bottom: 6px">
+              <div class="card-title">Task Queue &amp; History</div>
+              <span class="muted" style="font-size: 10.5px">Click a task to inspect logs</span>
+            </div>
+            <div id="taskListContainer" class="task-list"></div>
+          </div>
+
+          <!-- Live Task Output Terminal -->
+          <div class="card" style="padding: 10px 12px">
+            <div class="card-header" style="margin-bottom: 6px">
+              <div class="card-title">
+                <span>Task Output</span>
+                <span id="outputTaskTag" class="badge neutral">None</span>
               </div>
               <div class="row">
-                ${
-                  t.status === "running"
-                    ? `<button class="sm danger" data-action="stop-task" data-task="${t.id}">Stop</button>`
-                    : ""
-                }
-                <button class="sm" data-action="view-task" data-task="${t.id}">Output</button>
+                <label
+                  style="
+                    font-size: 10.5px;
+                    color: var(--muted);
+                    display: inline-flex;
+                    align-items: center;
+                    gap: 4px;
+                    cursor: pointer;
+                  "
+                >
+                  <input id="autoScrollCheck" type="checkbox" checked />
+                  Follow
+                </label>
+                <button id="copyOutputBtn" class="ghost" style="padding: 2px 6px">
+                  Copy
+                </button>
               </div>
             </div>
-          `;
-        })
-        .join("");
-    }
-
-    function renderTaskConsole(activeOutput) {
-      const consoleEl = document.getElementById("console-output");
-      const badgeEl = document.getElementById("console-task-badge");
-      if (!activeOutput || !activeOutput.taskId) {
-        badgeEl.textContent = "None selected";
-        badgeEl.className = "badge";
-        consoleEl.className = "console-box console-empty";
-        consoleEl.textContent =
-          "Select or submit a task above to stream live stdout/stderr from the Colab GPU...";
-        state.lastLogText = "";
-        return;
-      }
-
-      const status = activeOutput.status || "running";
-      const badgeClass =
-        status === "running"
-          ? "running"
-          : status === "succeeded"
-            ? "ok"
-            : status === "failed"
-              ? "err"
-              : "warn";
-      badgeEl.textContent = `${activeOutput.taskId} · ${status.toUpperCase()}`;
-      badgeEl.className = `badge ${badgeClass}`;
-
-      const text = activeOutput.output || "(Waiting for output...)";
-      state.lastLogText = activeOutput.output || "";
-      consoleEl.className = "console-box";
-      consoleEl.textContent = text;
-
-      const autoScroll = document.getElementById("chk-autoscroll")?.checked;
-      if (autoScroll) {
-        consoleEl.scrollTop = consoleEl.scrollHeight;
-      }
-    }
-
-    function renderCredits(credits) {
-      const container = document.getElementById("credits-summary");
-      const barWrap = document.getElementById("budget-bar-wrap");
-      if (!credits) {
-        container.innerHTML = "";
-        barWrap.style.display = "none";
-        return;
-      }
-
-      const bal =
-        credits.estimatedBalanceCu !== null
-          ? `≈ ${credits.estimatedBalanceCu} CU`
-          : "Uncalibrated";
-      const age =
-        credits.calibrationAgeSeconds !== null
-          ? `${formatDuration(credits.calibrationAgeSeconds)} ago`
-          : "never";
-      const hoursLeft =
-        credits.estimatedRemainingHours !== null
-          ? `≈ ${credits.estimatedRemainingHours}h left`
-          : "—";
-
-      container.innerHTML = `
-        <div class="meta-item">
-          <span class="meta-label">Balance (calibrated ${age})</span>
-          <span class="meta-value">${bal}</span>
+            <div id="taskOutputPre" class="terminal-box">No task selected. Submit a command above to stream live stdout/stderr from Colab.</div>
+          </div>
         </div>
-        <div class="meta-item">
-          <span class="meta-label">Burn Rate</span>
-          <span class="meta-value">${credits.estimatedBurnCuPerHour ?? 0} CU/h (${hoursLeft})</span>
+
+        <!-- TAB 2: HARDWARE TELEMETRY & SESSIONS -->
+        <div id="tabHardware" class="hidden" style="display: flex; flex-direction: column; gap: 10px">
+          <div id="hardwareDetailsList" style="display: flex; flex-direction: column; gap: 10px"></div>
+          <button id="addAnotherGpuBtn" class=" primary" style="width: 100%">
+            + Launch Another Colab Runtime
+          </button>
         </div>
-        <div class="meta-item">
-          <span class="meta-label">Used This Month</span>
-          <span class="meta-value">≈ ${credits.estimatedMonthlyUsedCu ?? 0} CU</span>
+
+        <!-- TAB 3: CREDITS & SETTINGS -->
+        <div id="tabCredits" class="hidden" style="display: flex; flex-direction: column; gap: 10px">
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">Compute Units (Approximate)</div>
+              <button id="syncCreditsBtn" class="primary">
+                ↻ Sync from Colab API
+              </button>
+            </div>
+            <div
+              style="
+                display: flex;
+                align-items: baseline;
+                justify-content: space-between;
+                margin: 6px 0;
+              "
+            >
+              <div id="creditsBalanceBig" style="font-size: 20px; font-weight: 800">
+                ≈ -- CU
+              </div>
+              <div id="creditsBurnText" class="muted" style="font-size: 11px">
+                0 CU/h burn
+              </div>
+            </div>
+            <div id="creditsSubText" class="muted" style="font-size: 11px; margin-bottom: 8px"></div>
+            <div id="budgetSection" class="hidden" style="margin-bottom: 10px">
+              <div class="row-between" style="font-size: 11px; margin-bottom: 4px">
+                <span class="muted">Monthly Budget Usage</span>
+                <span id="budgetLabelText"></span>
+              </div>
+              <div class="bar-wrap">
+                <div id="budgetBarFill" class="bar-fill" style="width: 0%"></div>
+              </div>
+            </div>
+
+            <div class="row" style="margin-top: 8px">
+              <input
+                id="manualBalanceInput"
+                type="number"
+                step="0.1"
+                min="0"
+                placeholder="Set balance (CU)"
+              />
+              <button id="setBalanceBtn">Set Balance</button>
+            </div>
+            <div class="row" style="margin-top: 6px">
+              <input
+                id="manualBudgetInput"
+                type="number"
+                step="1"
+                min="0"
+                placeholder="Monthly budget (CU)"
+              />
+              <button id="setBudgetBtn">Set Budget</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <div class="card-title">Connection &amp; Account Settings</div>
+            </div>
+            <div class="card-subtitle">
+              Re-open the Setup Helper to rotate your Tailscale auth key, update
+              your Headscale login server, or switch Google accounts.
+            </div>
+            <button id="openWizardFromSettingsBtn" style="width: 100%">
+              ⚙ Open Setup &amp; Auth Helper
+            </button>
+          </div>
         </div>
-      `;
+      </div>
+    </div>
 
-      if (typeof credits.budgetCu === "number" && credits.budgetCu > 0) {
-        barWrap.style.display = "block";
-        const used = Number(credits.estimatedMonthlyUsedCu || 0);
-        const pct = Math.min(100, Math.round((used / credits.budgetCu) * 100));
-        document.getElementById("budget-label").textContent =
-          `Monthly budget: ${used} / ${credits.budgetCu} CU`;
-        document.getElementById("budget-pct").textContent = `${pct}%`;
-        const fill = document.getElementById("budget-fill");
-        fill.style.width = `${pct}%`;
-        fill.className = `progress-fill ${pct >= 100 ? "danger" : pct >= 80 ? "warn" : ""}`;
-      } else {
-        barWrap.style.display = "none";
-      }
-    }
+    <script>
+      const orca = window.orca;
+      let dashboardState = null;
+      let selectedGpu = "T4";
+      let selectedTaskId = null;
+      let currentView = null; // "wizard" | "launcher" | "workspace"
+      let currentTab = "tasks"; // "tasks" | "hardware" | "credits"
+      let userForcedView = null;
 
-    function applyDashboard(dash) {
-      if (!dash) return;
-      state.dashboard = dash;
-
-      const authBadge = document.getElementById("auth-badge");
-      const authBtn = document.getElementById("btn-auth");
-      if (dash.auth?.authenticated) {
-        authBadge.textContent = dash.auth.email
-          ? `✓ ${dash.auth.email}`
-          : `✓ OAuth (${dash.auth.account})`;
-        authBadge.className = "badge ok";
-        authBtn.textContent = "Sign out";
-      } else {
-        authBadge.textContent = "Notebook mode (OAuth optional)";
-        authBadge.className = "badge warn";
-        authBtn.textContent = "Sign in with Google";
+      function esc(str) {
+        return String(str ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;");
       }
 
-      if (dash.provisioning?.active) {
-        showBanner(dash.provisioning.message || "Provisioning Colab GPU...");
-      } else if (dash.provisioning?.error) {
-        showBanner(dash.provisioning.error, true);
-      } else {
-        showBanner(null);
+      function formatDuration(sec) {
+        if (!Number.isFinite(sec) || sec < 0) return "0m";
+        const h = Math.floor(sec / 3600);
+        const m = Math.floor((sec % 3600) / 60);
+        const s = Math.floor(sec % 60);
+        if (h > 0) return `${h}h ${m}m`;
+        if (m > 0) return `${m}m ${s}s`;
+        return `${s}s`;
       }
 
-      renderPrerequisites(state.doctor, dash.auth);
-      renderSessions(dash.sessions || []);
-      renderTasks(dash.tasks || []);
-      if (dash.activeTaskOutput) {
-        renderTaskConsole(dash.activeTaskOutput);
+      function showNotice(text, tone = "info") {
+        const el = document.getElementById("globalNotice");
+        const txt = document.getElementById("globalNoticeText");
+        el.className = `banner ${tone}`;
+        txt.textContent = text;
+        el.classList.remove("hidden");
       }
-      renderCredits(dash.credits);
-    }
 
-    async function refreshAll(includeLiveMetrics = true) {
-      try {
-        const [dash, doc] = await Promise.all([
-          orcaApi.plugin.request(
-            "colab.dashboard",
-            {
-              selectedTaskId: state.selectedTaskId,
-              includeLiveMetrics,
-            },
-            { timeoutMs: 20000 },
-          ),
-          orcaApi.plugin.request("colab.doctor", {}, { timeoutMs: 10000 }).catch(() => null),
-        ]);
-        if (doc) state.doctor = doc;
-        applyDashboard(dash);
-      } catch (err) {
-        showBanner(err?.message || String(err), true);
+      function hideNotice() {
+        document.getElementById("globalNotice").classList.add("hidden");
       }
-    }
 
-    document.getElementById("btn-refresh").addEventListener("click", () => {
-      void refreshAll(true);
-    });
+      document
+        .getElementById("closeNoticeBtn")
+        .addEventListener("click", hideNotice);
 
-    document.getElementById("btn-toggle-setup").addEventListener("click", () => {
-      const sec = document.getElementById("setup-section");
-      const visible = sec.style.display !== "none";
-      sec.style.display = visible ? "none" : "block";
-      state.setupManuallyClosed = visible;
-    });
+      function switchView(viewName, { force = false, contextMessage = null } = {}) {
+        currentView = viewName;
+        if (force) {
+          userForcedView = viewName;
+        }
+        document
+          .getElementById("viewWizard")
+          .classList.toggle("hidden", viewName !== "wizard");
+        document
+          .getElementById("viewLauncher")
+          .classList.toggle("hidden", viewName !== "launcher");
+        document
+          .getElementById("viewWorkspace")
+          .classList.toggle("hidden", viewName !== "workspace");
 
-    document.getElementById("btn-save-setup").addEventListener("click", async () => {
-      const authKey = document.getElementById("setup-authkey-input").value.trim();
-      const loginServer = document.getElementById("setup-loginserver-input").value.trim();
-      if (!authKey) {
-        showBanner("Please enter your Tailscale / Headscale Auth Key.", true);
-        return;
+        document
+          .getElementById("navWizardBtn")
+          .classList.toggle("active", viewName === "wizard");
+
+        const ctxBanner = document.getElementById("launcherContextBanner");
+        if (viewName === "launcher" && contextMessage) {
+          document.getElementById("launcherContextText").textContent =
+            contextMessage;
+          ctxBanner.classList.remove("hidden");
+        } else {
+          ctxBanner.classList.add("hidden");
+        }
       }
-      try {
-        const res = await orcaApi.plugin.request("colab.setupConfig", {
-          authKey,
-          loginServer,
+
+      function switchWorkspaceTab(tabName) {
+        currentTab = tabName;
+        document.querySelectorAll(".seg-tab").forEach((btn) => {
+          btn.classList.toggle("active", btn.dataset.tab === tabName);
         });
-        if (res.doctor) state.doctor = res.doctor;
-        document.getElementById("setup-authkey-input").value = "";
-        document.getElementById("setup-section").style.display = "none";
-        state.setupManuallyClosed = true;
-        showBanner("Saved Tailscale Auth Key and generated ~/.orca-colab/id_ed25519.");
-        applyDashboard(res.dashboard);
-      } catch (err) {
-        showBanner(err?.message || String(err), true);
+        document
+          .getElementById("tabTasks")
+          .classList.toggle("hidden", tabName !== "tasks");
+        document
+          .getElementById("tabHardware")
+          .classList.toggle("hidden", tabName !== "hardware");
+        document
+          .getElementById("tabCredits")
+          .classList.toggle("hidden", tabName !== "credits");
       }
-    });
 
-    document.getElementById("btn-auth").addEventListener("click", async () => {
-      const isSigned = Boolean(state.dashboard?.auth?.authenticated);
-      try {
-        if (isSigned) {
-          const res = await orcaApi.plugin.request("colab.authLogout", {});
-          applyDashboard(res.dashboard);
-        } else {
-          showBanner("Opening Google sign-in in your default browser (Passkey supported)...");
-          const res = await orcaApi.plugin.request(
-            "colab.authLogin",
-            {},
-            { timeoutMs: 185000 },
-          );
-          showBanner(null);
-          applyDashboard(res.dashboard);
-        }
-      } catch (err) {
-        showBanner(err?.message || String(err), true);
-      }
-    });
+      document.querySelectorAll(".seg-tab").forEach((btn) => {
+        btn.addEventListener("click", () => switchWorkspaceTab(btn.dataset.tab));
+      });
 
-    document.getElementById("btn-start-gpu").addEventListener("click", async () => {
-      const gpu = document.getElementById("gpu-select").value;
-      const keep = document.getElementById("chk-keep").checked;
-      const btn = document.getElementById("btn-start-gpu");
-      btn.disabled = true;
-      try {
-        showBanner(`Starting Colab ${gpu} session...`);
-        const res = await orcaApi.plugin.request(
-          "colab.startSession",
-          { gpu, keep },
-          { timeoutMs: 300000 },
-        );
-        if (res?.dashboard) {
-          applyDashboard(res.dashboard);
-        } else {
-          showBanner(`Launched 'orca-colab up' in an Orca terminal.`);
-        }
-      } catch (err) {
-        showBanner(err?.message || String(err), true);
-      } finally {
-        btn.disabled = false;
-      }
-    });
-
-    document.getElementById("btn-open-term").addEventListener("click", async () => {
-      const firstSession = state.dashboard?.sessions?.[0]?.name || null;
-      await orcaApi.plugin.request("colab.openTerminal", { session: firstSession });
-    });
-
-    document.getElementById("sessions-container").addEventListener("click", async (e) => {
-      const btn = e.target.closest("button[data-action]");
-      if (!btn) return;
-      const action = btn.dataset.action;
-      const session = btn.dataset.session;
-      try {
-        if (action === "stop-session") {
-          btn.disabled = true;
-          const res = await orcaApi.plugin.request(
-            "colab.stopSession",
-            { session },
-            { timeoutMs: 45000 },
-          );
-          applyDashboard(res.dashboard);
-        } else if (action === "toggle-keep") {
-          const res = await orcaApi.plugin.request("colab.toggleKeep", { session });
-          applyDashboard(res.dashboard);
-        } else if (action === "ssh-session") {
-          await orcaApi.plugin.request("colab.openTerminal", { session });
-        }
-      } catch (err) {
-        showBanner(err?.message || String(err), true);
-      }
-    });
-
-    document.querySelector(".preset-chips").addEventListener("click", (e) => {
-      const chip = e.target.closest(".chip[data-cmd]");
-      if (!chip) return;
-      document.getElementById("task-cmd-input").value = chip.dataset.cmd;
-    });
-
-    document.getElementById("btn-submit-task").addEventListener("click", async () => {
-      const cmdInput = document.getElementById("task-cmd-input");
-      const nameInput = document.getElementById("task-name-input");
-      const syncWorkspace = document.getElementById("chk-sync-workspace").checked;
-      const command = cmdInput.value.trim();
-      if (!command) {
-        showBanner("Enter a command to submit to the Colab GPU.", true);
-        return;
-      }
-      const btn = document.getElementById("btn-submit-task");
-      btn.disabled = true;
-      try {
-        const res = await orcaApi.plugin.request(
-          "colab.submitTask",
-          {
-            name: nameInput.value.trim() || undefined,
-            command,
-            syncWorkspace,
-          },
-          { timeoutMs: 30000 },
-        );
-        if (res?.task?.id) {
-          state.selectedTaskId = res.task.id;
-        }
-        cmdInput.value = "";
-        nameInput.value = "";
-        showBanner(null);
-        applyDashboard(res.dashboard);
-      } catch (err) {
-        showBanner(err?.message || String(err), true);
-      } finally {
-        btn.disabled = false;
-      }
-    });
-
-    document.getElementById("task-list").addEventListener("click", async (e) => {
-      const btn = e.target.closest("button[data-action]");
-      if (btn) {
-        e.stopPropagation();
-        const action = btn.dataset.action;
-        const taskId = btn.dataset.task;
-        if (action === "stop-task") {
-          const res = await orcaApi.plugin.request("colab.stopTask", { taskId });
-          applyDashboard(res.dashboard);
-          return;
-        }
-        if (action === "view-task") {
-          state.selectedTaskId = taskId;
-          const logRes = await orcaApi.plugin.request("colab.getTaskLogs", { taskId });
-          renderTasks(state.dashboard?.tasks || []);
-          renderTaskConsole({
-            taskId: logRes.task.id,
-            status: logRes.task.status,
-            exitCode: logRes.task.exitCode,
-            output: logRes.output,
+      // GPU Card selection
+      document.querySelectorAll(".gpu-card").forEach((card) => {
+        card.addEventListener("click", () => {
+          selectedGpu = card.dataset.gpu;
+          document.querySelectorAll(".gpu-card").forEach((c) => {
+            c.classList.toggle("selected", c.dataset.gpu === selectedGpu);
           });
+          const label =
+            selectedGpu === "CPU"
+              ? "⚡ Launch Colab CPU Runtime"
+              : `⚡ Launch NVIDIA ${selectedGpu} Runtime`;
+          document.getElementById("launchGpuBtn").textContent = label;
+        });
+      });
+
+      // Preset command chips
+      document.querySelectorAll(".chip[data-preset]").forEach((chip) => {
+        chip.addEventListener("click", () => {
+          const cmd = chip.getAttribute("data-preset");
+          document.getElementById("taskCmdInput").value = cmd;
+          document.getElementById("taskCmdInput").focus();
+        });
+      });
+
+      // Quick-fill Headscale URL chips
+      document
+        .getElementById("useFeihaoServerChip")
+        .addEventListener("click", () => {
+          document.getElementById("setupLoginServerInput").value =
+            "https://hs.feihao.xyz";
+        });
+
+      document
+        .getElementById("useDetectedServerChip")
+        .addEventListener("click", () => {
+          const input = document.getElementById("setupLoginServerInput");
+          const detected =
+            dashboardState?.doctor?.checks?.tailscale?.detectedLoginServer ||
+            "https://hs.feihao.xyz";
+          input.value = detected;
+        });
+
+      function renderTaskOutputBox(payload) {
+        const tag = document.getElementById("outputTaskTag");
+        const pre = document.getElementById("taskOutputPre");
+        if (!payload || (!payload.task && !payload.taskId)) {
+          tag.className = "badge neutral";
+          tag.textContent = "None";
+          pre.textContent =
+            "No task selected. Submit a command above to stream live stdout/stderr from Colab.";
           return;
         }
-      }
-
-      const row = e.target.closest(".task-item[data-task-id]");
-      if (row) {
-        state.selectedTaskId = row.dataset.taskId;
-        const logRes = await orcaApi.plugin.request("colab.getTaskLogs", {
-          taskId: state.selectedTaskId,
-        });
-        renderTasks(state.dashboard?.tasks || []);
-        renderTaskConsole({
-          taskId: logRes.task.id,
-          status: logRes.task.status,
-          exitCode: logRes.task.exitCode,
-          output: logRes.output,
-        });
-      }
-    });
-
-    document.getElementById("btn-refresh-logs").addEventListener("click", async () => {
-      if (!state.selectedTaskId) {
-        await refreshAll(false);
-        return;
-      }
-      const logRes = await orcaApi.plugin.request("colab.getTaskLogs", {
-        taskId: state.selectedTaskId,
-      });
-      renderTaskConsole({
-        taskId: logRes.task.id,
-        status: logRes.task.status,
-        exitCode: logRes.task.exitCode,
-        output: logRes.output,
-      });
-    });
-
-    document.getElementById("btn-copy-logs").addEventListener("click", async () => {
-      if (state.lastLogText && navigator.clipboard) {
-        await navigator.clipboard.writeText(state.lastLogText).catch(() => {});
-      }
-    });
-
-    document.getElementById("btn-sync-ccu").addEventListener("click", async () => {
-      try {
-        showBanner("Syncing Compute Units from Colab...");
-        const res = await orcaApi.plugin.request(
-          "colab.calibrateCredits",
-          {},
-          { timeoutMs: 30000 },
-        );
-        showBanner(null);
-        applyDashboard(res.dashboard);
-      } catch (err) {
-        showBanner(err?.message || String(err), true);
-      }
-    });
-
-    document.getElementById("btn-set-balance").addEventListener("click", async () => {
-      const val = Number(document.getElementById("input-balance").value);
-      if (!Number.isFinite(val) || val < 0) return;
-      const res = await orcaApi.plugin.request("colab.setCredits", { balanceCu: val });
-      document.getElementById("input-balance").value = "";
-      applyDashboard(res.dashboard);
-    });
-
-    document.getElementById("btn-set-budget").addEventListener("click", async () => {
-      const val = Number(document.getElementById("input-budget").value);
-      if (!Number.isFinite(val) || val < 0) return;
-      const res = await orcaApi.plugin.request("colab.setBudget", { budgetCu: val });
-      document.getElementById("input-budget").value = "";
-      applyDashboard(res.dashboard);
-    });
-
-    document.getElementById("btn-copy-skill").addEventListener("click", async () => {
-      if (navigator.clipboard) {
-        await navigator.clipboard
-          .writeText("npx skills add vzxxbacq/orca-colab")
-          .catch(() => {});
-      }
-    });
-
-    orcaApi.plugin.on("colab.stateChanged", (dash) => {
-      applyDashboard(dash);
-    });
-
-    orcaApi.plugin.on("colab.provisioningProgress", (prog) => {
-      if (prog?.active) {
-        showBanner(prog.message);
-      }
-    });
-
-    orcaApi.plugin.on("colab.taskOutput", (payload) => {
-      if (!payload?.task) return;
-      if (!state.selectedTaskId || state.selectedTaskId === payload.task.id) {
-        state.selectedTaskId = payload.task.id;
-        renderTaskConsole({
-          taskId: payload.task.id,
-          status: payload.task.status,
-          exitCode: payload.task.exitCode,
-          output: payload.output,
-        });
-      }
-      if (state.dashboard?.tasks) {
-        const idx = state.dashboard.tasks.findIndex((t) => t.id === payload.task.id);
-        if (idx >= 0) {
-          state.dashboard.tasks[idx] = payload.task;
-        } else {
-          state.dashboard.tasks.unshift(payload.task);
+        const status = payload.task?.status || payload.status || "running";
+        const exitCode = payload.task?.exitCode ?? payload.exitCode;
+        const tone =
+          status === "succeeded"
+            ? "ok"
+            : status === "running"
+              ? "info"
+              : "danger";
+        tag.className = `badge ${tone}`;
+        tag.textContent = `${status.toUpperCase()}${exitCode !== null && exitCode !== undefined ? ` (exit ${exitCode})` : ""}`;
+        pre.textContent = payload.output || "(Waiting for task output...)";
+        if (document.getElementById("autoScrollCheck").checked) {
+          pre.scrollTop = pre.scrollHeight;
         }
-        renderTasks(state.dashboard.tasks);
       }
-    });
 
-    void refreshAll(true);
-  </script>
-</body>
+      function renderAll(snap) {
+        if (!snap) return;
+        dashboardState = snap;
+
+        const doc = snap.doctor;
+        const checks = doc?.checks || {};
+        const configOk = Boolean(checks.config?.ok);
+        const oauthOk = Boolean(snap.auth?.authenticated);
+        const activeSessions = (snap.sessions || []).filter(
+          (s) => s.state !== "zombie",
+        );
+
+        // Update Top Status Bar
+        const dot = document.getElementById("topStatusDot");
+        const statusTxt = document.getElementById("topStatusText");
+        if (!configOk) {
+          dot.className = "status-dot warn";
+          statusTxt.textContent = "Setup Required";
+        } else if (activeSessions.length === 0) {
+          dot.className = "status-dot";
+          statusTxt.textContent = oauthOk
+            ? "Ready · No Active GPU"
+            : "Configured · No Active GPU";
+        } else {
+          const s0 = activeSessions[0];
+          const gpuName =
+            s0.rateKey && s0.rateKey !== "unknown" ? s0.rateKey : "GPU";
+          dot.className = "status-dot ok";
+          statusTxt.textContent = `${gpuName} Active · ${s0.ip || s0.name}`;
+        }
+
+        // Decide which view to show if not explicitly overridden by user navigation
+        if (!userForcedView) {
+          if (!configOk) {
+            switchView("wizard");
+          } else if (activeSessions.length === 0) {
+            switchView("launcher");
+          } else {
+            switchView("workspace");
+          }
+        } else if (
+          userForcedView === "launcher" &&
+          activeSessions.length > 0 &&
+          !snap.provisioning?.active
+        ) {
+          // Automatically transition from launcher to workspace once a session starts!
+          userForcedView = null;
+          switchView("workspace");
+        }
+
+        // -------------------------------------------------------------------
+        // Populate View 1: Setup Helper Wizard
+        // -------------------------------------------------------------------
+        const tsOk = Boolean(checks.tailscale?.ok);
+        const sshOk = Boolean(checks.ssh?.ok && checks.sshKeygen?.ok);
+        const rsyncOk = Boolean(checks.rsync?.ok);
+        const step1Ok = tsOk && sshOk;
+
+        document.getElementById("envTsIcon").textContent = tsOk ? "✓" : "!";
+        document.getElementById("envTsIcon").style.color = tsOk
+          ? "#56d364"
+          : "#f85149";
+        document.getElementById("envTsVal").textContent = tsOk
+          ? checks.tailscale.selfHostName || "Connected"
+          : checks.tailscale?.backendState || "Offline";
+
+        document.getElementById("envSshIcon").textContent = sshOk ? "✓" : "!";
+        document.getElementById("envSshIcon").style.color = sshOk
+          ? "#56d364"
+          : "#f85149";
+        document.getElementById("envSshVal").textContent = sshOk
+          ? "Ready"
+          : "Missing";
+
+        document.getElementById("envRsyncIcon").textContent = rsyncOk
+          ? "✓"
+          : "•";
+        document.getElementById("envRsyncIcon").style.color = rsyncOk
+          ? "#56d364"
+          : "#e3b341";
+        document.getElementById("envRsyncVal").textContent = rsyncOk
+          ? "rsync ready"
+          : "tar fallback";
+
+        const step1Badge = document.getElementById("step1Badge");
+        step1Badge.className = `badge ${step1Ok ? "ok" : "danger"}`;
+        step1Badge.textContent = step1Ok ? "Ready" : "Action Needed";
+
+        const step2Badge = document.getElementById("step2Badge");
+        step2Badge.className = `badge ${configOk ? "ok" : "warn"}`;
+        step2Badge.textContent = configOk ? "Configured" : "Required";
+
+        document.getElementById("sshKeyStatusText").textContent = checks.config
+          ?.sshKeyPresent
+          ? "SSH key: ~/.orca-colab/id_ed25519 ✓"
+          : "SSH key will be generated automatically";
+
+        const loginSrvInput = document.getElementById("setupLoginServerInput");
+        const detectedServer =
+          checks.tailscale?.detectedLoginServer || "";
+        const chipEl = document.getElementById("useDetectedServerChip");
+        if (detectedServer && detectedServer !== "https://hs.feihao.xyz") {
+          chipEl.textContent = detectedServer.replace(/^https?:\/\//, "");
+          chipEl.classList.remove("hidden");
+        } else {
+          chipEl.classList.add("hidden");
+        }
+        if (!loginSrvInput.value && checks.config?.configPresent && checks.config?.loginServer) {
+          loginSrvInput.value = checks.config.loginServer;
+        }
+
+        const step3Badge = document.getElementById("step3Badge");
+        step3Badge.className = `badge ${oauthOk ? "ok" : "info"}`;
+        step3Badge.textContent = oauthOk ? "Connected" : "Recommended";
+
+        document.getElementById("wizardOAuthText").textContent = oauthOk
+          ? "Signed in to Google Colab API (Passkey / OAuth token stored)"
+          : "Not signed in yet — click to sign in with your system browser";
+        document
+          .getElementById("wizardLogoutBtn")
+          .classList.toggle("hidden", !oauthOk);
+        document.getElementById("wizardLoginBtn").textContent = oauthOk
+          ? "Switch Account"
+          : "Sign in with Google";
+
+        // Stepper pills
+        document.getElementById("stepPill1").className =
+          `step-pill ${step1Ok ? "done" : "current"}`;
+        document.getElementById("stepNum1").textContent = step1Ok ? "✓" : "1";
+
+        document.getElementById("stepPill2").className =
+          `step-pill ${configOk ? "done" : step1Ok ? "current" : ""}`;
+        document.getElementById("stepNum2").textContent = configOk ? "✓" : "2";
+
+        document.getElementById("stepPill3").className =
+          `step-pill ${oauthOk ? "done" : configOk ? "current" : ""}`;
+        document.getElementById("stepNum3").textContent = oauthOk ? "✓" : "3";
+
+        const finishBtn = document.getElementById("finishWizardBtn");
+        finishBtn.classList.toggle("hidden", !configOk);
+        finishBtn.textContent =
+          activeSessions.length > 0
+            ? "Return to Active GPU Workspace →"
+            : "Continue to GPU Launch Helper →";
+
+        // -------------------------------------------------------------------
+        // Populate View 2: GPU Launch Helper
+        // -------------------------------------------------------------------
+        const c = snap.credits || {};
+        const balStr =
+          c.estimatedBalanceCu !== null && c.estimatedBalanceCu !== undefined
+            ? `≈ ${c.estimatedBalanceCu} CU`
+            : "Balance uncalibrated";
+        document.getElementById("launcherAuthSummary").textContent = oauthOk
+          ? `Google Connected · ${balStr}`
+          : `Google Not Signed In · ${balStr}`;
+        document
+          .getElementById("launcherLoginBtn")
+          .classList.toggle("hidden", oauthOk);
+
+        const provBox = document.getElementById("provisioningBox");
+        const launchBtn = document.getElementById("launchGpuBtn");
+        if (snap.provisioning?.active) {
+          provBox.classList.remove("hidden");
+          document.getElementById("provisioningMsg").textContent =
+            snap.provisioning.message || "Bootstrapping Colab runtime...";
+          launchBtn.disabled = true;
+        } else {
+          provBox.classList.add("hidden");
+          launchBtn.disabled = false;
+          if (snap.provisioning?.error) {
+            showNotice(`Launch failed: ${snap.provisioning.error}`, "error");
+          }
+        }
+
+        const hasTasks = Array.isArray(snap.tasks) && snap.tasks.length > 0;
+        document
+          .getElementById("launcherToPastTasksBtn")
+          .classList.toggle("hidden", !hasTasks);
+
+        // -------------------------------------------------------------------
+        // Populate View 3: Active GPU Workspace
+        // -------------------------------------------------------------------
+        const bannerEl = document.getElementById("activeRuntimeBanner");
+        if (activeSessions.length === 0) {
+          bannerEl.innerHTML = `
+            <div class="runtime-top">
+              <div class="runtime-title">
+                <span class="badge warn">OFFLINE</span>
+                <span>No Active GPU Runtime</span>
+              </div>
+              <button class="primary" onclick="window.__goLaunchHelper()">
+                ⚡ Launch GPU Runtime
+              </button>
+            </div>
+          `;
+        } else {
+          const s = activeSessions[0];
+          const m = s.liveMetrics || {};
+          const gpuUtil =
+            typeof m.gpuUtilizationPercent === "number"
+              ? m.gpuUtilizationPercent
+              : null;
+          const vramUsed = m.vramUsedMiB
+            ? (m.vramUsedMiB / 1024).toFixed(1)
+            : null;
+          const vramTotal =
+            m.vramTotalMiB || s.gpu?.memoryTotalMiB
+              ? ((m.vramTotalMiB || s.gpu.memoryTotalMiB) / 1024).toFixed(1)
+              : null;
+
+          bannerEl.innerHTML = `
+            <div class="runtime-top">
+              <div class="runtime-title">
+                <span class="status-dot ok"></span>
+                <span>${esc(s.gpu?.name || s.rateKey || "Colab GPU")}</span>
+                ${vramTotal ? `<span class="badge neutral">${vramTotal} GB</span>` : ""}
+                ${s.keep ? `<span class="badge info">KEEP</span>` : ""}
+              </div>
+              <div class="row">
+                <button onclick="window.__openSsh('${esc(s.name)}')" title="Open interactive SSH shell">
+                  &gt;_ SSH
+                </button>
+                <button onclick="window.__toggleKeep('${esc(s.name)}')">
+                  ${s.keep ? "Unkeep" : "Keep"}
+                </button>
+                <button class="danger" onclick="window.__stopSession('${esc(s.name)}')">
+                  Stop
+                </button>
+              </div>
+            </div>
+            <div class="runtime-meta">
+              <span class="mono">${esc(s.ip || s.name)}</span>
+              <span>Uptime: ${formatDuration(s.ageSeconds)}</span>
+              <span>Burn: ≈ ${s.costSoFarCu ?? 0} CU (${s.cuPerHour ?? 0} CU/h)</span>
+              ${gpuUtil !== null ? `<span>GPU Load: <strong>${gpuUtil}%</strong></span>` : ""}
+              ${vramUsed && vramTotal ? `<span>VRAM: ${vramUsed}/${vramTotal} GiB</span>` : ""}
+            </div>
+            ${
+              gpuUtil !== null
+                ? `<div class="bar-wrap"><div class="bar-fill" style="width:${Math.min(100, gpuUtil)}%"></div></div>`
+                : ""
+            }
+          `;
+        }
+
+        // Populate Tab 1: Tasks & Output
+        const tasks = snap.tasks || [];
+        const runningCount = tasks.filter((t) => t.status === "running").length;
+        const rBadge = document.getElementById("runningTaskBadge");
+        rBadge.className = `badge ${runningCount > 0 ? "info" : "neutral"}`;
+        rBadge.textContent = `${runningCount} running`;
+
+        if (!selectedTaskId && snap.activeTaskOutput?.taskId) {
+          selectedTaskId = snap.activeTaskOutput.taskId;
+        }
+
+        const taskListEl = document.getElementById("taskListContainer");
+        if (tasks.length === 0) {
+          taskListEl.innerHTML = `<div class="muted" style="font-size:11px;padding:4px 2px">No tasks submitted yet. Enter a command above and click Run Task.</div>`;
+        } else {
+          taskListEl.innerHTML = tasks
+            .slice(0, 12)
+            .map((t) => {
+              const isSel = t.id === selectedTaskId;
+              const tone =
+                t.status === "running"
+                  ? "info"
+                  : t.status === "succeeded"
+                    ? "ok"
+                    : "danger";
+              const startMs = Date.parse(t.startedAt);
+              const endMs = t.finishedAt ? Date.parse(t.finishedAt) : Date.now();
+              const dur = formatDuration(Math.floor((endMs - startMs) / 1000));
+              return `
+                <div class="task-row ${isSel ? "selected" : ""}" onclick="window.__selectTask('${esc(t.id)}')">
+                  <div class="task-row-main">
+                    <div class="row" style="gap:6px">
+                      <span class="badge ${tone}">${esc(t.status.toUpperCase())}</span>
+                      <span class="task-row-title">${esc(t.name)}</span>
+                    </div>
+                    <div class="task-row-sub">${esc(t.command)} · ${dur}</div>
+                  </div>
+                  ${
+                    t.status === "running"
+                      ? `<button class="danger" style="padding:3px 7px;font-size:10.5px" onclick="event.stopPropagation(); window.__stopTask('${esc(t.id)}')">Stop</button>`
+                      : ""
+                  }
+                </div>
+              `;
+            })
+            .join("");
+        }
+
+        if (snap.activeTaskOutput) {
+          renderTaskOutputBox(snap.activeTaskOutput);
+        }
+
+        // Populate Tab 2: Hardware & Sessions
+        const hwListEl = document.getElementById("hardwareDetailsList");
+        if (activeSessions.length === 0) {
+          hwListEl.innerHTML = `<div class="card muted">No active GPU sessions.</div>`;
+        } else {
+          hwListEl.innerHTML = activeSessions
+            .map((s) => {
+              const m = s.liveMetrics || {};
+              const gpuUtil =
+                typeof m.gpuUtilizationPercent === "number"
+                  ? m.gpuUtilizationPercent
+                  : null;
+              const vramUsed = m.vramUsedMiB
+                ? (m.vramUsedMiB / 1024).toFixed(1)
+                : null;
+              const vramTotal =
+                m.vramTotalMiB || s.gpu?.memoryTotalMiB
+                  ? ((m.vramTotalMiB || s.gpu.memoryTotalMiB) / 1024).toFixed(1)
+                  : null;
+              return `
+                <div class="card">
+                  <div class="card-header">
+                    <div class="card-title">${esc(s.name)} · ${esc(s.gpu?.name || s.rateKey)}</div>
+                    <span class="badge ok">SSH Connected</span>
+                  </div>
+                  <div class="muted mono" style="font-size:11px;margin-bottom:8px">
+                    ssh -i ~/.orca-colab/id_ed25519 root@${esc(s.ip)}
+                  </div>
+                  <div class="row-between" style="font-size:11px;margin-bottom:4px">
+                    <span class="muted">GPU Load</span>
+                    <span>${gpuUtil !== null ? `${gpuUtil}%` : "N/A"}</span>
+                  </div>
+                  <div class="bar-wrap" style="margin-bottom:8px">
+                    <div class="bar-fill" style="width:${gpuUtil || 0}%"></div>
+                  </div>
+                  <div class="row-between" style="font-size:11px">
+                    <span class="muted">VRAM Usage</span>
+                    <span>${vramUsed && vramTotal ? `${vramUsed} / ${vramTotal} GiB` : `${vramTotal || "--"} GiB`}</span>
+                  </div>
+                </div>
+              `;
+            })
+            .join("");
+        }
+
+        // Populate Tab 3: Credits & Settings
+        document.getElementById("creditsBalanceBig").textContent =
+          c.estimatedBalanceCu !== null && c.estimatedBalanceCu !== undefined
+            ? `≈ ${c.estimatedBalanceCu} CU`
+            : "≈ -- CU";
+        document.getElementById("creditsBurnText").textContent =
+          `${c.estimatedBurnCuPerHour ?? 0} CU/h burn`;
+        const calAgeHours =
+          typeof c.calibrationAgeSeconds === "number"
+            ? (c.calibrationAgeSeconds / 3600).toFixed(1)
+            : null;
+        document.getElementById("creditsSubText").textContent =
+          c.lastCalibratedAt
+            ? `Calibrated ${calAgeHours ?? 0}h ago · Monthly used: ≈ ${c.estimatedMonthlyUsedCu ?? 0} CU`
+            : "Click 'Sync from Colab API' to fetch your live Google Colab Compute Units balance.";
+
+        const budgetSec = document.getElementById("budgetSection");
+        if (c.budgetCu && c.budgetCu > 0) {
+          budgetSec.classList.remove("hidden");
+          const pct = Math.min(100, c.estimatedBudgetUsedPercent || 0);
+          document.getElementById("budgetLabelText").textContent =
+            `≈ ${c.estimatedMonthlyUsedCu} / ${c.budgetCu} CU (${Math.round(pct)}%)`;
+          const fill = document.getElementById("budgetBarFill");
+          fill.style.width = `${pct}%`;
+          fill.className = `bar-fill ${pct >= 100 ? "danger" : pct >= 80 ? "warn" : ""}`;
+        } else {
+          budgetSec.classList.add("hidden");
+        }
+      }
+
+      async function refreshAll(includeLiveMetrics = false) {
+        try {
+          const snap = await orca.invoke("colab.dashboard", {
+            selectedTaskId,
+            includeLiveMetrics,
+          });
+          renderAll(snap);
+        } catch (err) {
+          showNotice(err?.message || String(err), "error");
+        }
+      }
+
+      // Navigation Handlers
+      document.getElementById("navWizardBtn").addEventListener("click", () => {
+        if (currentView === "wizard" && dashboardState?.doctor?.checks?.config?.ok) {
+          userForcedView = null;
+          renderAll(dashboardState);
+        } else {
+          switchView("wizard", { force: true });
+        }
+      });
+
+      document.getElementById("finishWizardBtn").addEventListener("click", () => {
+        userForcedView = null;
+        renderAll(dashboardState);
+      });
+
+      document
+        .getElementById("openWizardFromSettingsBtn")
+        .addEventListener("click", () => {
+          switchView("wizard", { force: true });
+        });
+
+      document
+        .getElementById("addAnotherGpuBtn")
+        .addEventListener("click", () => {
+          switchView("launcher", { force: true });
+        });
+
+      document
+        .getElementById("launcherToPastTasksBtn")
+        .addEventListener("click", () => {
+          switchView("workspace", { force: true });
+          switchWorkspaceTab("tasks");
+        });
+
+      window.__goLaunchHelper = (msg) => {
+        switchView("launcher", {
+          force: true,
+          contextMessage:
+            msg ||
+            "Select a GPU below and click Launch to start a Colab runtime.",
+        });
+      };
+
+      document
+        .getElementById("refreshBtn")
+        .addEventListener("click", () => refreshAll(true));
+
+      // Step 2: Save Tailscale Auth Key & SSH Key
+      document
+        .getElementById("saveSetupBtn")
+        .addEventListener("click", async () => {
+          const authKey = document
+            .getElementById("setupAuthKeyInput")
+            .value.trim();
+          const loginServer = document
+            .getElementById("setupLoginServerInput")
+            .value.trim();
+          if (!authKey) {
+            showNotice("Please paste your Tailscale or Headscale Pre-Auth Key.", "warn");
+            return;
+          }
+          const btn = document.getElementById("saveSetupBtn");
+          btn.disabled = true;
+          btn.textContent = "Saving & Generating SSH Keypair...";
+          try {
+            const res = await orca.invoke("colab.setupConfig", {
+              authKey,
+              loginServer: loginServer || undefined,
+            });
+            document.getElementById("setupAuthKeyInput").value = "";
+            showNotice(
+              "Saved Tailscale Auth Key and generated ~/.orca-colab/id_ed25519!",
+              "ok",
+            );
+            renderAll(res.dashboard);
+          } catch (err) {
+            showNotice(err?.message || String(err), "error");
+          } finally {
+            btn.disabled = false;
+            btn.textContent = "Save Auth Key & Generate SSH Keypair";
+          }
+        });
+
+      // Step 3: Google OAuth Sign-In
+      async function handleGoogleSignIn(btnEl) {
+        const origText = btnEl.textContent;
+        btnEl.disabled = true;
+        btnEl.textContent = "Waiting for browser login...";
+        showNotice(
+          "Opened your default browser for Google Sign-In (Passkey supported). Complete sign-in to return here automatically.",
+          "info",
+        );
+        try {
+          const res = await orca.invoke("colab.authLogin", {});
+          showNotice("Google Colab account connected!", "ok");
+          renderAll(res.dashboard);
+        } catch (err) {
+          showNotice(err?.message || String(err), "error");
+        } finally {
+          btnEl.disabled = false;
+          btnEl.textContent = origText;
+        }
+      }
+
+      document
+        .getElementById("wizardLoginBtn")
+        .addEventListener("click", (e) => handleGoogleSignIn(e.currentTarget));
+      document
+        .getElementById("launcherLoginBtn")
+        .addEventListener("click", (e) => handleGoogleSignIn(e.currentTarget));
+
+      document
+        .getElementById("wizardLogoutBtn")
+        .addEventListener("click", async () => {
+          const res = await orca.invoke("colab.authLogout", {});
+          showNotice("Signed out of Google Colab.", "info");
+          renderAll(res.dashboard);
+        });
+
+      // Launch GPU Runtime
+      document
+        .getElementById("launchGpuBtn")
+        .addEventListener("click", async () => {
+          const keep = document.getElementById("launcherKeepCheck").checked;
+          hideNotice();
+          try {
+            const res = await orca.invoke("colab.startSession", {
+              gpu: selectedGpu,
+              keep,
+            });
+            if (res?.dashboard) {
+              userForcedView = null;
+              renderAll(res.dashboard);
+            }
+          } catch (err) {
+            showNotice(err?.message || String(err), "error");
+            await refreshAll();
+          }
+        });
+
+      document
+        .getElementById("launchInTermBtn")
+        .addEventListener("click", async () => {
+          const keep = document.getElementById("launcherKeepCheck").checked;
+          await orca.invoke("colab.startSession", {
+            gpu: selectedGpu,
+            keep,
+            useTerminal: true,
+          });
+        });
+
+      // Submit Task (with automatic redirect to Launch Helper if no active session!)
+      document
+        .getElementById("submitTaskBtn")
+        .addEventListener("click", async () => {
+          const name = document.getElementById("taskNameInput").value.trim();
+          const command = document.getElementById("taskCmdInput").value.trim();
+          const syncWorkspace =
+            document.getElementById("taskSyncCheck").checked;
+          if (!command) {
+            showNotice("Please enter a command to run on Colab GPU.", "warn");
+            return;
+          }
+          const btn = document.getElementById("submitTaskBtn");
+          btn.disabled = true;
+          try {
+            const res = await orca.invoke("colab.submitTask", {
+              name: name || undefined,
+              command,
+              syncWorkspace,
+            });
+            if (res?.code === "NO_ACTIVE_SESSION") {
+              switchView("launcher", {
+                force: true,
+                contextMessage:
+                  "No active GPU session found. Launch a Colab GPU runtime below first, then run your task.",
+              });
+              return;
+            }
+            selectedTaskId = res.task.id;
+            document.getElementById("taskCmdInput").value = "";
+            document.getElementById("taskNameInput").value = "";
+            renderAll(res.dashboard);
+          } catch (err) {
+            const msg = err?.message || String(err);
+            if (msg.includes("no active sessions")) {
+              switchView("launcher", {
+                force: true,
+                contextMessage:
+                  "No active GPU session found. Launch a Colab GPU runtime below first.",
+              });
+            } else {
+              showNotice(msg, "error");
+            }
+          } finally {
+            btn.disabled = false;
+          }
+        });
+
+      // Sync CCU
+      async function handleSyncCcu() {
+        try {
+          const res = await orca.invoke("colab.calibrateCredits", {});
+          showNotice("Synced Compute Units balance from Colab API.", "ok");
+          renderAll(res.dashboard);
+        } catch (err) {
+          showNotice(err?.message || String(err), "error");
+        }
+      }
+
+      document
+        .getElementById("launcherSyncCcuBtn")
+        .addEventListener("click", handleSyncCcu);
+      document
+        .getElementById("syncCreditsBtn")
+        .addEventListener("click", handleSyncCcu);
+
+      document
+        .getElementById("setBalanceBtn")
+        .addEventListener("click", async () => {
+          const val = Number(
+            document.getElementById("manualBalanceInput").value,
+          );
+          if (!Number.isFinite(val) || val < 0) return;
+          const res = await orca.invoke("colab.setCredits", { balanceCu: val });
+          document.getElementById("manualBalanceInput").value = "";
+          renderAll(res.dashboard);
+        });
+
+      document
+        .getElementById("setBudgetBtn")
+        .addEventListener("click", async () => {
+          const val = Number(
+            document.getElementById("manualBudgetInput").value,
+          );
+          if (!Number.isFinite(val) || val < 0) return;
+          const res = await orca.invoke("colab.setBudget", { budgetCu: val });
+          document.getElementById("manualBudgetInput").value = "";
+          renderAll(res.dashboard);
+        });
+
+      document
+        .getElementById("copyOutputBtn")
+        .addEventListener("click", async () => {
+          const text = document.getElementById("taskOutputPre").textContent;
+          await navigator.clipboard.writeText(text);
+          showNotice("Copied task output to clipboard.", "ok");
+        });
+
+      // Global inline handlers for dynamic cards
+      window.__openSsh = async (sessionName) => {
+        const res = await orca.invoke("colab.openTerminal", {
+          session: sessionName,
+          title: `SSH: ${sessionName}`,
+        });
+        if (res?.code === "NO_ACTIVE_SESSION") {
+          window.__goLaunchHelper(res.message);
+        }
+      };
+
+      window.__toggleKeep = async (sessionName) => {
+        const res = await orca.invoke("colab.toggleKeep", {
+          session: sessionName,
+        });
+        renderAll(res.dashboard);
+      };
+
+      window.__stopSession = async (sessionName) => {
+        const res = await orca.invoke("colab.stopSession", {
+          session: sessionName,
+        });
+        userForcedView = null;
+        renderAll(res.dashboard);
+      };
+
+      window.__selectTask = async (taskId) => {
+        selectedTaskId = taskId;
+        const res = await orca.invoke("colab.getTaskLogs", { taskId });
+        renderTaskOutputBox(res);
+        await refreshAll();
+      };
+
+      window.__stopTask = async (taskId) => {
+        const res = await orca.invoke("colab.stopTask", { taskId });
+        renderAll(res.dashboard);
+      };
+
+      // Live Worker Event Listeners
+      orca.on("colab.stateChanged", (snap) => {
+        renderAll(snap);
+      });
+
+      orca.on("colab.provisioningProgress", (state) => {
+        const box = document.getElementById("provisioningBox");
+        if (state?.active) {
+          box.classList.remove("hidden");
+          document.getElementById("provisioningMsg").textContent =
+            state.message || "Bootstrapping...";
+        }
+      });
+
+      orca.on("colab.taskOutput", (payload) => {
+        if (
+          !selectedTaskId ||
+          payload?.task?.id === selectedTaskId ||
+          payload?.task?.status === "running"
+        ) {
+          selectedTaskId = payload?.task?.id || selectedTaskId;
+          renderTaskOutputBox(payload);
+        }
+      });
+
+      refreshAll(true);
+    </script>
+  </body>
 </html>

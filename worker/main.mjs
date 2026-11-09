@@ -308,9 +308,12 @@ export default async function activate(orca) {
       };
     }
 
+    const doctor = runDoctor({ homeDir, env: process.env });
+
     return {
       defaultAccount,
       accounts,
+      doctor,
       provisioning: provisioningState,
       auth: authByAccount[defaultAccount] || {
         account: defaultAccount,
@@ -740,6 +743,18 @@ export default async function activate(orca) {
     if (!rawCommand) {
       throw new Error("Task command cannot be empty.");
     }
+    const activeSessions = listSessions(homeDir).filter(
+      (s) => s.state !== "zombie",
+    );
+    if (activeSessions.length === 0) {
+      return {
+        ok: false,
+        code: "NO_ACTIVE_SESSION",
+        message:
+          "No active Colab GPU runtime. Let's launch a GPU session first.",
+        dashboard: await buildDashboardSnapshot(),
+      };
+    }
     const { workspacePath } = await resolveWorkspaceInfo(orca);
     const syncPath = input?.syncWorkspace
       ? workspacePath || process.cwd()
@@ -843,12 +858,24 @@ export default async function activate(orca) {
   });
 
   orca.panels.handle("colab.openTerminal", async (input = {}) => {
+    const activeSessions = listSessions(homeDir).filter(
+      (s) => s.state !== "zombie",
+    );
+    if (!input?.command && activeSessions.length === 0) {
+      return {
+        ok: false,
+        code: "NO_ACTIVE_SESSION",
+        message:
+          "No active Colab GPU runtime. Launch a GPU session first to open an SSH shell.",
+      };
+    }
+    const targetSession = input?.session || activeSessions[0]?.name;
     const cli = await resolveCliCommand(orca);
-    const cmd = input?.session
-      ? `${cli} run --session ${input.session} -- bash -l`
+    const cmd = targetSession
+      ? `${cli} run --session ${targetSession} -- bash -l`
       : input?.command || `${cli} status`;
     await openTerminalWithCommand(orca, {
-      title: input?.title || "Colab Shell",
+      title: input?.title || (targetSession ? `SSH: ${targetSession}` : "Colab Shell"),
       command: cmd,
     });
     return { ok: true };
