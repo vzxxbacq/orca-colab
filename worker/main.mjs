@@ -527,7 +527,7 @@ class TerminalBridge {
     this.environmentResolved = false;
     this.autoBridge = true;
     this.queue = [];
-    this.inFlight = null;
+    this.inFlight = new Map();
     this.flushTimer = null;
     this.lastFlushAt = 0;
     this.controlPending = {};
@@ -559,7 +559,7 @@ class TerminalBridge {
       manualCommand: this.manualCommand,
       autoBridge: this.autoBridge,
       transport: this.transport,
-      pendingOps: this.queue.length + (this.inFlight?.ops.length || 0) + this.pending.size,
+      pendingOps: this.queue.length + this.inFlightOps().length + this.pending.size,
       remoteProtocol: this.remoteProtocol || null,
       outdatedWatch: Boolean(this.latestSnap) && (this.remoteProtocol || 1) < 2,
       lastCliMs: this.helper?.recentTimings?.().at(-1)?.ms ?? null,
@@ -789,7 +789,7 @@ class TerminalBridge {
     this.lastPollAt = 0;
     this.timers.push(
       setInterval(() => {
-        const busy = this.inFlight || this.pending.size > 0 || this.isPanelActive();
+        const busy = this.inFlight.size > 0 || this.pending.size > 0 || this.isPanelActive();
         const interval = busy ? 2000 : 10_000;
         if (Date.now() - this.lastPollAt >= interval) {
           this.lastPollAt = Date.now();
@@ -810,11 +810,13 @@ class TerminalBridge {
       p.reject(new Error("Bridge stopped."));
     }
     this.pending.clear();
-    if (this.inFlight) {
-      clearTimeout(this.inFlight.timer);
-      for (const op of this.inFlight.ops) op.reject(new Error("Bridge stopped."));
-      this.inFlight = null;
+    for (const flight of this.inFlight.values()) {
+      for (const op of flight.ops) {
+        clearTimeout(op.timer);
+        if (!op.settled) op.reject(new Error("Bridge stopped."));
+      }
     }
+    this.inFlight.clear();
     for (const op of this.queue.splice(0)) op.reject(new Error("Bridge stopped."));
   }
 
@@ -1036,8 +1038,16 @@ class TerminalBridge {
     }
   }
 
+  inFlightOps() {
+    const out = [];
+    for (const flight of this.inFlight.values()) {
+      for (const op of flight.ops) if (!op.settled) out.push(op);
+    }
+    return out;
+  }
+
   optimisticOps() {
-    return [...(this.inFlight?.ops || []), ...this.queue].filter((op) => op.optimistic);
+    return [...this.inFlightOps(), ...this.queue].filter((op) => op.optimistic);
   }
 
   decorate(snapInput) {
@@ -1134,7 +1144,7 @@ class TerminalBridge {
   // Sends run at most every FLUSH_INTERVAL_MS and never overlap: an idle bridge flushes at once, a
   // busy one folds everything that arrives meanwhile into the next batch.
   scheduleFlush() {
-    if (this.flushTimer || this.inFlight) {
+    if (this.flushTimer) {
       return;
     }
     const wait = Math.max(0, FLUSH_INTERVAL_MS - (Date.now() - this.lastFlushAt));
@@ -1145,7 +1155,7 @@ class TerminalBridge {
   }
 
   async flush() {
-    if (this.inFlight || !this.terminalId) {
+    if (!this.terminalId) {
       return;
     }
     const hasControl = Object.keys(this.controlPending).length > 0;
@@ -1162,17 +1172,17 @@ class TerminalBridge {
     this.reqCounter += 1;
     const reqId = `b${Date.now().toString(36)}${this.reqCounter}`;
     const payload = { ops: ops.map(({ id, action, input }) => ({ id, action, input })), ...control };
-    const timeoutMs = Math.max(20_000, ...ops.map((o) => o.timeoutMs));
-    const timer = setTimeout(() => {
-      if (this.inFlight?.reqId !== reqId) return;
-      this.inFlight = null;
-      for (const op of ops) {
+    // Each op keeps its own deadline; the batch is forgotten once every op has settled.
+    for (const op of ops) {
+      op.timer = setTimeout(() => {
+        if (op.settled) return;
+        op.settled = true;
         op.reject(new Error(`Timed out waiting for the remote ${op.action} to finish.`));
         if (op.optimistic) this.onEvent("actionFailed", { action: op.action, error: "timed out" }, this);
-      }
-      this.scheduleFlush();
-    }, timeoutMs);
-    this.inFlight = { reqId, ops, timer };
+        this.forgetSettledBatch(reqId);
+      }, op.timeoutMs);
+    }
+    this.inFlight.set(reqId, { reqId, ops });
     this.lastFlushAt = Date.now();
     const b64 = Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
     this.sendRaw(`batch ${reqId} ${b64}`);
@@ -1207,20 +1217,32 @@ class TerminalBridge {
     void this.readUntilSettled();
   }
 
+  forgetSettledBatch(reqId) {
+    const flight = this.inFlight.get(reqId);
+    if (flight && flight.ops.every((op) => op.settled)) {
+      this.inFlight.delete(reqId);
+    }
+  }
+
+  // Partial frames settle single ops as they finish; the final frame settles whatever is left.
   settleBatch(payload) {
-    const flight = this.inFlight;
-    if (!flight || flight.reqId !== payload.reqId) {
+    const flight = this.inFlight.get(payload.reqId);
+    if (!flight) {
       return false;
     }
-    clearTimeout(flight.timer);
-    this.inFlight = null;
     const results = new Map((payload.results || []).map((r) => [r.id, r]));
     for (const op of flight.ops) {
+      if (op.settled) continue;
       const r = results.get(op.id);
       if (!r) {
+        if (payload.partial) continue;
+        op.settled = true;
+        clearTimeout(op.timer);
         op.reject(new Error(payload.error || `no result for ${op.action}`));
         continue;
       }
+      op.settled = true;
+      clearTimeout(op.timer);
       if (r.ok) {
         op.resolve(r.result ?? {});
       } else {
@@ -1228,6 +1250,7 @@ class TerminalBridge {
         if (op.optimistic) this.onEvent("actionFailed", { action: op.action, error: r.error }, this);
       }
     }
+    this.forgetSettledBatch(payload.reqId);
     if (this.queue.length > 0 || Object.keys(this.controlPending).length > 0) {
       this.scheduleFlush();
     }
@@ -1241,7 +1264,7 @@ class TerminalBridge {
     try {
       const deadline = Date.now() + 60_000;
       let wait = 500;
-      while ((this.inFlight || this.pending.size > 0) && Date.now() < deadline) {
+      while ((this.inFlight.size > 0 || this.pending.size > 0) && Date.now() < deadline) {
         await this.sendChain?.catch?.(() => {});
         await new Promise((r) => setTimeout(r, wait));
         await this.poll().catch(() => {});

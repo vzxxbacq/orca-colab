@@ -92,7 +92,7 @@ test("watch answers a call over stdin with a res frame and emits snap frames", a
   const batchB64 = Buffer.from(JSON.stringify({ ops: [{ id: "x1", action: "setBudget", input: { budgetCu: 43 } }, { id: "x2", action: "nope", input: {} }], live: false })).toString("base64");
   const batchRes = new Promise((r) => {
     child.stdout.on("data", () => {
-      const f = frames.find((x) => x.kind === "res" && x.payload.reqId === "b1");
+      const f = frames.find((x) => x.kind === "res" && x.payload.reqId === "b1" && !x.payload.partial);
       if (f) r(f);
     });
   });
@@ -103,6 +103,8 @@ test("watch answers a call over stdin with a res frame and emits snap frames", a
   ]);
   assert.equal(batch.payload.ok, false);
   assert.deepEqual(batch.payload.results.map((r) => [r.id, r.ok]), [["x1", true], ["x2", false]]);
+  const partials = frames.filter((x) => x.kind === "res" && x.payload.reqId === "b1" && x.payload.partial);
+  assert.equal(partials.length, 2, "one partial frame per op");
   assert.equal(readLedgerEvents(tmpHome).filter((e) => e.type === "budget.set").at(-1).budgetCu, 43);
 
   child.stdin.write("call req2 nope e30=\n");

@@ -257,11 +257,17 @@ export async function run(
     if (typeof control?.live === "boolean") {
       includeLiveMetrics = control.live;
     }
-    const results = [];
-    for (const op of ops) {
-      const outcome = await runAction(op.action, op.input ?? {});
-      results.push({ id: op.id, action: op.action, ...outcome });
-    }
+    // Ops run concurrently and each answers as soon as it finishes, so a slow runtime assignment never
+    // holds up a budget change that shares its batch; the final frame repeats everything.
+    const results = await Promise.all(
+      ops.map(async (op) => {
+        const outcome = await runAction(op.action, op.input ?? {});
+        const result = { id: op.id, action: op.action, ...outcome };
+        emit("res", { reqId, partial: true, results: [result] });
+        void emitSnapshot({ force: true });
+        return result;
+      }),
+    );
     emit("res", { reqId, ok: results.every((r) => r.ok), results });
     await emitSnapshot({ force: true });
   };
