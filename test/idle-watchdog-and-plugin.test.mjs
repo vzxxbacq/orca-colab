@@ -4,6 +4,54 @@ import {
   evaluateBudgetAlert,
   evaluateSessionIdleState,
 } from "../bin/lib/idle-watchdog.mjs";
+import activateWorker, { deactivate as deactivateWorker } from "../worker/main.mjs";
+
+test("worker/main.mjs activates and registers commands and panel handlers cleanly", async () => {
+  const registeredCommands = new Map();
+  const registeredPanels = new Map();
+  let statusBarState = null;
+
+  const fakeOrca = {
+    host: {
+      async has() { return true; },
+      async call(method, params) {
+        if (method === "statusBar.update") {
+          statusBarState = params;
+        }
+        return {};
+      },
+    },
+    commands: {
+      register(id, fn) {
+        registeredCommands.set(id, fn);
+      },
+    },
+    panels: {
+      handle(name, fn) {
+        registeredPanels.set(name, fn);
+      },
+      post() {},
+    },
+    settings: {
+      async get() { return undefined; },
+    },
+    log() {},
+  };
+
+  await activateWorker(fakeOrca);
+  try {
+    assert.equal(registeredCommands.has("colab.up"), true);
+    assert.equal(registeredCommands.has("colab.down"), true);
+    assert.equal(registeredCommands.has("colab.showPanel"), true);
+    assert.equal(registeredPanels.has("colab.dashboard"), true);
+    assert.equal(registeredPanels.has("colab.setupConfig"), true);
+    assert.equal(registeredPanels.has("colab.submitTask"), true);
+    assert.equal(registeredPanels.has("colab.getTaskLogs"), true);
+    assert.equal(statusBarState?.id, "colab-sessions");
+  } finally {
+    deactivateWorker();
+  }
+});
 
 test("idle watchdog D14: 40-minute run with one low sample or active PIDs does not trigger", () => {
   const baseNow = Date.parse("2026-11-09T12:40:00.000Z");

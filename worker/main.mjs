@@ -45,7 +45,7 @@ import {
   readSession,
   writeSession,
 } from "../bin/lib/session-store.mjs";
-import { probeSshBanner } from "../bin/lib/ssh-banner-probe.mjs";
+import { probeSshBannerOnce } from "../bin/lib/ssh-banner-probe.mjs";
 import { execSshCapture } from "../bin/lib/ssh-exec.mjs";
 import { listTasks, readTask, readTaskLog } from "../bin/lib/task-store.mjs";
 
@@ -197,7 +197,7 @@ export default async function activate(orca) {
         let reachable = s.state !== "zombie";
         let liveMetrics = null;
         if (includeLiveMetrics && s.ip && s.state !== "zombie") {
-          const probe = await probeSshBanner({
+          const probe = await probeSshBannerOnce({
             host: s.ip,
             port: 22,
             timeoutMs: 2500,
