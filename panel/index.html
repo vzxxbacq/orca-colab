@@ -825,13 +825,12 @@
           <div class="brand-status">
             <span id="topStatusDot" class="status-dot"></span>
             <span id="topStatusText">Checking environment...</span>
-            <span id="originBadge" class="badge neutral hidden" style="margin-left: 6px"></span>
           </div>
         </div>
       </div>
       <div class="topbar-actions">
         <button id="navWizardBtn" class="ghost" title="Open Setup Helper">
-          ⚙ Setup
+          <span id="originBadge" class="badge neutral">⚙ Local</span>
         </button>
         <button id="refreshBtn" class="ghost" title="Refresh state">↻</button>
       </div>
@@ -1644,14 +1643,13 @@
         const statusTxt = document.getElementById("topStatusText");
         const originBadge = document.getElementById("originBadge");
         const isRemote = snap.origin?.kind === "remote";
-        originBadge.classList.remove("hidden");
         originBadge.className = `badge ${isRemote ? "info" : "neutral"}`;
         originBadge.textContent = isRemote
-          ? `Server · ${snap.origin.workspaceName || snap.origin.hostId || snap.origin.host || "remote"}`
-          : "Local";
-        originBadge.title = isRemote
-          ? `Showing ~/.orca-colab of the Orca server that hosts this workspace (bridge terminal "Colab Bridge"${snap.bridge?.remoteCli ? `, ${snap.bridge.remoteCli}` : ""}).`
-          : "Showing ~/.orca-colab on this computer.";
+          ? `⚙ Server · ${snap.origin.host || snap.origin.workspaceName || snap.origin.hostId || "remote"}`
+          : `⚙ Local · ${snap.origin?.host || "this computer"}`;
+        originBadge.parentElement.title = isRemote
+          ? `Colab state of the Orca server "${snap.origin.host || snap.origin.hostId}" that hosts workspace "${snap.origin.workspaceName || ""}" (bridge terminal "Colab Bridge"${snap.bridge?.remoteCli ? `, ${snap.bridge.remoteCli}` : ""}). Click for Setup.`
+          : "Colab state of this computer. Click for Setup.";
         if (isRemote && !snap.bridge?.connected) {
           dot.className = "status-dot warn";
           statusTxt.textContent = snap.bridge?.error
