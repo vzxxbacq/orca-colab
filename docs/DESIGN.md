@@ -31,7 +31,11 @@ Three deliverables, one repo:
 | D8 | **Port forwarding is plain `ssh -L`** managed by the CLI (`forward <port>` records the pid; `down` kills it). | Jupyter, TensorBoard, Gradio, vLLM on Colab show up at `localhost:<port>` for the user and the agent. |
 | D9 | **No Google OAuth in milestone 1.** The browser session is the Google login. | Consumer Colab has no runtime API. OAuth is only worth it for Drive automation (M3) or Colab Enterprise (M4). |
 | D10 | **`down` = `google.colab.runtime.unassign()` over SSH, best effort, then local cleanup.** No suspend/resume: a dead runtime is a dead runtime. | Colab cannot pause. Frees quota promptly without extra credentials. |
-| D11 | **The Orca plugin is thin.** It never provisions; it shows state read from `~/.orca-colab/` and launches the CLI in an Orca terminal. | Provisioning needs the user's shell, clipboard and browser; the terminal is where the user already sees the CLI's prompts. |
+| D11 | **The Orca plugin is thin on provisioning, thick on stewardship.** It never provisions; it reads `~/.orca-colab/`, launches the CLI in an Orca terminal, and owns the always-on parts: credit ledger, idle watchdog, budget alerts. | Provisioning needs the user's shell, clipboard and browser. Watching sessions and credits needs a process that outlives any one CLI call; the worker is kept alive by its status bar item. |
+| D12 | **Credits are tracked locally in a ledger, not read from an API.** Each session records GPU type, start, end and a per-hour rate from an editable rate table; the user enters the balance shown in Colab's Resources pane, and the plugin counts down from there. | Colab exposes no compute-unit API, not even inside the VM. A ledger with periodic calibration is the only honest option; the plugin always labels numbers as estimates and shows when the balance was last calibrated. |
+| D13 | **Calibration can be automated through Orca's embedded browser** (`orca browser`, user's own Google session) by reading the Resources pane text. Optional, M2; manual entry stays the default. | Avoids OAuth and scraping from the VM; uses a session the user already has. Fragile to UI changes, so it is a convenience over the ledger, never the source of truth. |
+| D14 | **Idle watchdog in the worker.** When a session shows no CLI activity (`run`/`sync`/`pull`/`forward` traffic) and GPU utilisation under 5 % for `autoStopIdleMinutes` (default 20), the worker notifies, then runs `down` after a 5-minute grace unless the user cancels. Sessions started with `up --keep` are exempt. | Forgotten runtimes are where Colab credits actually go. Paid GPUs burn units even when idle. |
+| D15 | **Several Google accounts = several credit pools.** Config holds `accounts: [{ label, notebookUrl, balance, calibratedAt }]`; `up --account` picks one; the panel shows each pool. | Users with Pro on one account and pay-as-you-go on another need to choose where a session's cost lands. |
 
 ## The user's experience
 
@@ -51,6 +55,40 @@ Per session (about 2 minutes, mostly waiting on Colab):
 3. `up` sees the peer, probes SSH, runs `nvidia-smi --query-gpu=name,memory.total --format=csv`, prints
    the session JSON and exits. Agent continues on its own: `sync`, `run`, `pull`, `forward`.
 
+## Credit management
+
+What the user sees in the panel, per account:
+
+```
+Account: work (Pro)              balance ≈ 61.3 CU   calibrated 2 days ago   [Calibrate]
+Burn now: 1.96 CU/h (T4)        at this rate ≈ 31 h left     budget: 80 CU/month, used 18.7
+Sessions this month: 7          wasted idle (auto-stopped): 2.4 CU
+```
+
+Mechanics:
+
+- **Rate table** `~/.orca-colab/rates.json`, user-editable, shipped defaults (compute units per hour,
+  approximate, Nov 2026): `T4 1.96`, `L4 4.82`, `A100 11.77`, `TPU v2-8 1.76`, `CPU 0.08`, `unknown 2`.
+  `nvidia-smi` names map to keys (`Tesla T4` → `T4`, `NVIDIA A100-SXM4-40GB` → `A100`). High-RAM adds a
+  multiplier (default 1.0 until measured; recorded per session when the notebook reports total RAM).
+- **Ledger** `~/.orca-colab/ledger.jsonl`, one line per event: `session.start`, `session.end` (with cause
+  `user|idle-watchdog|colab-died`), `calibrate` (balance, source `manual|browser`), `budget.set`.
+  Estimated balance = last calibration − Σ(hours × rate) since. Free-tier accounts have no balance; the
+  ledger still records hours so the user can see usage against the unofficial quota.
+- **Budget**: optional `monthlyBudgetCu`; the status bar turns `warning` at 80 %, `danger` at 100 %; the
+  skill tells the agent to confirm with the user before `up` once the budget is exceeded.
+- **Pre-flight estimate**: `up --json` returns `estimatedCuPerHour`; the skill makes the agent state
+  "about N CU/h, ~H hours of balance left" before long jobs and prefer T4 unless the task needs more.
+- **Calibration sources**: `credits set <balance> [--account]` (manual, from Colab's Resources pane);
+  M2 `credits calibrate --browser` opens colab.research.google.com in Orca's embedded browser and reads
+  the "compute units available" text; the panel's Calibrate button runs the same.
+- **Idle watchdog** (D14): the CLI stamps `lastActivityAt` in the session file on every command; the
+  worker samples `nvidia-smi --query-gpu=utilization.gpu` over SSH every 5 min; both idle → notify → `down`.
+
+CLI additions: `credits [--json]` (balances, burn, projection), `credits set <cu> [--account A]`,
+`credits budget <cu>`, `credits calibrate --browser` (M2), `ledger [--month YYYY-MM] [--json]`,
+`rates [--set T4=2.0]`, `up --keep` (no auto-stop), `up --account A`.
+
 ## CLI (`bin/orca-colab.mjs`)
 
 Plain Node ≥ 20, zero dependencies, `package.json` with `"bin"`. State:
@@ -59,7 +97,10 @@ Plain Node ≥ 20, zero dependencies, `package.json` with `"bin"`. State:
 ~/.orca-colab/config.json        { authKey, loginServer?, notebookUrl?, tags, projectRootBase } (0600)
 ~/.orca-colab/id_ed25519(.pub)   global key pair, comment "orca-colab"
 ~/.orca-colab/known_hosts        per-IP host keys; hosts are disposable, StrictHostKeyChecking=accept-new
-~/.orca-colab/sessions/<name>.json  { name, hostname, ip, gpu, createdAt, remoteRoot, forwards: [{port, pid}] }
+~/.orca-colab/sessions/<name>.json  { name, account, hostname, ip, gpu, rateKey, cuPerHour, createdAt,
+                                      lastActivityAt, keep, remoteRoot, forwards: [{port, pid}] }
+~/.orca-colab/ledger.jsonl       append-only credit events (see Credit management)
+~/.orca-colab/rates.json         editable CU/h table
 ```
 
 | Command | Does | Exit |
@@ -168,12 +209,14 @@ No outputs committed. No pip packages.
 }
 ```
 
-- Worker: reads `~/.orca-colab/sessions/*.json` (30 s poll + `fs.watch`), updates the status bar (`Colab: 1
-  · T4`, hidden at 0). `colab.up` → `terminal.create` in the focused workspace running `npx -y
+- Worker: reads `~/.orca-colab/sessions/*.json` and the ledger (30 s poll + `fs.watch`), updates the
+  status bar (`Colab: T4 · 1.96 CU/h · ≈61 CU`, hidden with no sessions and no balance; tone follows the
+  budget), runs the idle watchdog (D14) and the budget alerts. `colab.up` → `terminal.create` in the focused workspace running `npx -y
   github:vzxxbacq/orca-colab#<tag> up`; `colab.down` likewise with `down`. Panel handlers: `colab.sessions`,
   `colab.doctor`.
-- Panel: prerequisites ✓/✗, sessions (name, GPU, IP, age, forwards), buttons Start/Stop (they call the
-  worker, which opens the terminal), the skill install command for copy, the three-step per-session text.
+- Panel: prerequisites ✓/✗; the credit block above per account (Calibrate, Set budget); sessions (name,
+  GPU, CU/h, cost so far, IP, age, idle state, forwards) with Start/Stop/Keep; a monthly usage bar; the
+  skill install command for copy; the three-step per-session text.
   Inline assets only; Orca frame CSS variables.
 - Install identity `vzxxbacq.colab` (publisher derived from the repo owner).
 
@@ -187,10 +230,11 @@ recipe for users who *do* want agents on the GPU box. Facts for it are kept in
 ## Milestones
 
 - **M1 — Skill + CLI usable end to end on macOS.** `doctor`, `setup`, `up`, `run`, `sync`, `pull`,
-  `forward`, `down`, notebook, SKILL.md, release tag. Exit: a local agent, following the skill, trains a
+  `forward`, `down`, `credits`/`ledger` with manual calibration, notebook, SKILL.md, release tag. Exit: a local agent, following the skill, trains a
   toy model on a T4 and pulls the checkpoint back with the user only pressing Run in Colab.
-- **M2 — Orca plugin + platforms.** Panel, status bar, terminal-launched commands; Linux/Windows paths;
-  abort handling; Headscale `loginServer`; auth-key expiry warnings; CI.
+- **M2 — Orca plugin + platforms.** Panel with credit block, status bar, idle watchdog, budget alerts,
+  browser calibration via Orca's embedded browser; terminal-launched commands; Linux/Windows paths; abort
+  handling; Headscale `loginServer`; auth-key expiry warnings; CI.
 - **M3 — Drive automation.** Optional OAuth (`drive.file`): `setup` creates the Drive copy with prefilled
   values; `up` reads the notebook's saved outputs to detect the IP without needing a tailnet peer scan.
 - **M4 — Colab Enterprise.** Vertex AI runtime templates and execution jobs: GPU type chosen from the CLI,
@@ -202,6 +246,8 @@ recipe for users who *do* want agents on the GPU box. Facts for it are kept in
 - Colab sessions end (≈90 min idle / 12 h on free, longer on Pro/Pro+); nothing persists on the VM.
   Everything valuable must be `pull`ed or pushed to Git/Drive/HF from Colab.
 - GPU type is chosen in Colab's UI until M4.
+- Credit figures are estimates: Google publishes no per-GPU rate and no balance API. Rates drift; the
+  user recalibrates from the Resources pane, and the panel shows how stale the calibration is.
 - Throughput through a DERP relay is a few MB/s: fine for code and logs, wrong for datasets and weights;
   have Colab download those directly.
 - Local Tailscale must be installed and signed in; `rsync` recommended (Windows: use WSL's or the tar

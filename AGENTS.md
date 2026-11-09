@@ -37,6 +37,9 @@ docs/                       design, verified Orca facts, TODO
   contract (see DESIGN § CLI); the skill depends on them.
 - **Idempotent and interruptible**: `up` may be killed at any time. Never leave a half-written session
   file; write JSON atomically (tmp + rename). `down` must succeed even when Colab is already gone.
+- **Credits are estimates.** Every number derived from the ledger is labelled approximate and shows its
+  calibration age. Never present a projected balance as a fact, in the UI or in `--json` (`estimated`
+  prefix on field names).
 - **Secrets**: the Tailscale auth key lives only in `~/.orca-colab/config.json` (0600) and in the user's
   own notebook copy. Never log it, never put it in `--json` output, never commit a notebook with it.
 - **No comments that restate code.** One line, why not how, only where the code cannot say it.
