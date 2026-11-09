@@ -72,6 +72,15 @@ export function isRemoteHostId(hostId) {
   return typeof hostId === "string" && hostId.trim() !== "" && hostId.trim().toLowerCase() !== "local";
 }
 
+// host.has is synchronous on real Orca and async in tests.
+async function hostHas(orca, method) {
+  try {
+    return Boolean(await orca.host.has(method));
+  } catch {
+    return false;
+  }
+}
+
 function workspaceRows(listRes) {
   return Array.isArray(listRes) ? listRes : Array.isArray(listRes?.workspaces) ? listRes.workspaces : [];
 }
@@ -443,7 +452,7 @@ class TerminalBridge {
     }
     // Older hosts only know the terminal.sendText spelling.
     for (const name of ["terminal.send", "terminal.sendText"]) {
-      if (await this.orca.host.has(name).catch(() => false)) {
+      if (await hostHas(this.orca, name)) {
         this.sendMethod = name;
         return name;
       }
@@ -804,9 +813,9 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
       resolved: await resolveWorkspaceInfo(orca),
       activeBridge: activeBridge?.kind || null,
       hostHas: {
-        terminalSend: await orca.host.has("terminal.send").catch(() => null),
-        terminalSendText: await orca.host.has("terminal.sendText").catch(() => null),
-        terminalRead: await orca.host.has("terminal.read").catch(() => null),
+        terminalSend: await hostHas(orca, "terminal.send"),
+        terminalSendText: await hostHas(orca, "terminal.sendText"),
+        terminalRead: await hostHas(orca, "terminal.read"),
       },
     };
   });
