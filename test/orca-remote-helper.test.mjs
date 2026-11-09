@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildOrcaArgs,
   createOrcaRemoteHelper,
+  parseOrcaEnvelope,
   parseOrcaJson,
 } from "../bin/lib/orca-remote-helper.mjs";
 
@@ -23,6 +24,7 @@ test("buildOrcaArgs renders flags and always appends --json", () => {
 test("parseOrcaJson unwraps the CLI envelope and rejects failures", () => {
   assert.deepEqual(parseOrcaJson('noise\n{"id":"1","ok":true,"result":{"terminals":[]}}'), { terminals: [] });
   assert.equal(parseOrcaJson('{"id":"1","ok":false,"error":"nope"}'), null);
+  assert.equal(parseOrcaEnvelope('{"id":"1","ok":false,"error":{"code":"not_found","message":"no worktree"}}').error, "no worktree");
   assert.equal(parseOrcaJson("not json"), null);
 });
 

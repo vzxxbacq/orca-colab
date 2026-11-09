@@ -20,19 +20,32 @@ export function buildOrcaArgs(command, options = {}) {
 }
 
 export function parseOrcaJson(stdout) {
+  return parseOrcaEnvelope(stdout).data;
+}
+
+// The CLI answers `{ ok, result }` or `{ ok: false, error }`; the error may be a string or an object.
+export function parseOrcaEnvelope(stdout) {
   const text = String(stdout || "");
   const start = text.indexOf("{");
   if (start === -1) {
-    return null;
+    return { data: null, error: text.trim().split("\n")[0] || null };
   }
   try {
     const parsed = JSON.parse(text.slice(start));
     if (parsed && typeof parsed === "object" && "ok" in parsed) {
-      return parsed.ok ? (parsed.result ?? {}) : null;
+      if (parsed.ok) {
+        return { data: parsed.result ?? {}, error: null };
+      }
+      const err = parsed.error;
+      const message =
+        typeof err === "string"
+          ? err
+          : err?.message || err?.code || (err ? JSON.stringify(err) : "orca CLI reported a failure");
+      return { data: null, error: message };
     }
-    return parsed;
+    return { data: parsed, error: null };
   } catch {
-    return null;
+    return { data: null, error: text.trim().split("\n")[0] || "unparsable orca CLI output" };
   }
 }
 
@@ -78,12 +91,12 @@ export function createOrcaRemoteHelper({
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        const data = parseOrcaJson(stdout);
-        if (code === 0 && data) {
-          resolve({ ok: true, error: null, data });
+        const envelope = parseOrcaEnvelope(stdout);
+        if (code === 0 && envelope.data) {
+          resolve({ ok: true, error: null, data: envelope.data });
         } else {
-          const msg = stderr.trim() || stdout.trim() || `exit ${code}`;
-          resolve({ ok: false, error: msg.split("\n")[0].slice(0, 300), data: null });
+          const msg = envelope.error || stderr.trim().split("\n")[0] || `exit ${code}`;
+          resolve({ ok: false, error: `orca ${command.join(" ")}: ${msg}`.slice(0, 300), data: null });
         }
       });
     });
