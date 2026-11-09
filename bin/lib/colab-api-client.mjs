@@ -220,21 +220,78 @@ export async function assignRuntime({
     });
 
     const opName = operation.name;
+    const pendingRuntimeId = stripResourcePrefix(
+      operation?.metadata?.runtime || "",
+      "runtimes/",
+    );
     let pollCount = 0;
-    while (!operation.done && opName && pollCount < 14) {
+    let pollTimedOut = false;
+    while (!operation.done && opName && pollCount < 2) {
       pollCount += 1;
       const opId = stripResourcePrefix(opName, "operations/");
       const waitUrl = new URL(
         `/v1/operations/${encodeURIComponent(opId)}:wait`,
         publicApiDomain,
       );
-      waitUrl.searchParams.set("timeout", "15s");
-      operation = await colabJsonRequest(waitUrl, {
-        method: "GET",
-        accessToken,
-        fetchImpl,
-        signal,
-      });
+      waitUrl.searchParams.set("timeout", "10s");
+      const pollSignal =
+        signal ||
+        (typeof AbortSignal?.timeout === "function"
+          ? AbortSignal.timeout(12_000)
+          : undefined);
+      try {
+        operation = await colabJsonRequest(waitUrl, {
+          method: "GET",
+          accessToken,
+          fetchImpl,
+          signal: pollSignal,
+        });
+      } catch (pollErr) {
+        if (!signal?.aborted) {
+          pollTimedOut = true;
+        } else {
+          throw pollErr;
+        }
+      }
+
+      if (!operation?.done) {
+        try {
+          const currentList = await listRuntimes({
+            accessToken,
+            publicApiDomain,
+            fetchImpl,
+            signal,
+          });
+          const readyRt = currentList.find((rt) => {
+            const rtId = stripResourcePrefix(rt?.name || "", "runtimes/");
+            return (
+              rtId &&
+              (rtId === pendingRuntimeId || !excluded.has(rtId)) &&
+              rt?.connectionInfo?.url &&
+              rt?.connectionInfo?.token &&
+              rt?.runtimeSpec?.variant === runtimeSpec.variant &&
+              (rt?.runtimeSpec?.accelerator || "NONE") ===
+                runtimeSpec.accelerator
+            );
+          });
+          if (readyRt) {
+            operation = { done: true, response: readyRt };
+            pollTimedOut = false;
+            break;
+          }
+        } catch {
+          // Ignore fallback list check error.
+        }
+      }
+    }
+
+    if (pollTimedOut && !operation.done) {
+      lastError = new Error("Colab runtime assignment timed out waiting for operation; retrying...");
+      if (attempt < maxAttempts) {
+        await new Promise((r) => setTimeout(r, 1000));
+        continue;
+      }
+      throw lastError;
     }
 
     if (operation.error) {
