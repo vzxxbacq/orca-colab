@@ -25,6 +25,9 @@ const LOCAL_CLI_PATH = path.resolve(__dirname, "..", "bin", "orca-colab.mjs");
 const BUNDLED_SKILL_DIR = path.resolve(__dirname, "..", "skills", "colab-gpu");
 const BRIDGE_TERMINAL_TITLE = "Colab Bridge";
 const DEFAULT_CLI_COMMAND = "npx -y github:vzxxbacq/orca-colab#v0.1.0";
+// The bridge needs `watch`, which v0.1.0 lacks; point at the branch until the next tag ships.
+const DEFAULT_REMOTE_CLI_COMMAND = "npx -y github:vzxxbacq/orca-colab#remote-host-bridge";
+const WATCH_UNSUPPORTED_RE = /unknown command: watch/;
 const ACTION_TIMEOUTS_MS = {
   authLogin: 320_000,
   startSession: 15 * 60_000,
@@ -139,7 +142,11 @@ async function resolveCliCommand(orca, { remote = false } = {}) {
     if (typeof remoteConfigured === "string" && remoteConfigured.trim()) {
       return remoteConfigured.trim();
     }
-  } else if (existsSync(LOCAL_CLI_PATH)) {
+    const configured = await readSetting(orca, "cliCommand", null);
+    const usable = typeof configured === "string" && configured.trim() && configured.trim() !== DEFAULT_CLI_COMMAND;
+    return usable ? configured.trim() : DEFAULT_REMOTE_CLI_COMMAND;
+  }
+  if (existsSync(LOCAL_CLI_PATH)) {
     return `node ${JSON.stringify(LOCAL_CLI_PATH)}`;
   }
   const configured = await readSetting(orca, "cliCommand", null);
@@ -383,6 +390,8 @@ class TerminalBridge {
     this.helper = helper;
     this.transport = "host";
     this.lastHelperError = null;
+    this.deadTerminals = new Set();
+    this.watchUnsupported = false;
     this.storageKey = `bridgeTerminal:${workspace.workspaceId || `name:${workspace.workspaceName}`}`;
   }
 
@@ -415,6 +424,12 @@ class TerminalBridge {
     return Boolean(this.helper?.available) && !this.lastHelperError;
   }
 
+  markWatchUnsupported() {
+    this.watchUnsupported = true;
+    this.lastHelperError = `The orca-colab on the server ("${this.remoteCli}") has no 'watch' command. Set the plugin setting "orca-colab command on remote Orca servers" to a newer orca-colab (for a checkout: node /path/to/orca-colab/bin/orca-colab.mjs) and reopen the panel`;
+    this.terminalId = null;
+  }
+
   // Where the host API cannot see the workspace, the local `orca` CLI still can. It finds a terminal
   // that already prints frames or creates one running `watch`; errors are kept for the panel hint.
   async ensureTerminalViaHelper() {
@@ -431,10 +446,19 @@ class TerminalBridge {
         continue;
       }
       for (const t of listed.data) {
+        if (this.deadTerminals.has(t.handle)) continue;
+        if (WATCH_UNSUPPORTED_RE.test(t.preview)) {
+          this.deadTerminals.add(t.handle);
+          this.markWatchUnsupported();
+          return null;
+        }
         if (t.title === BRIDGE_TERMINAL_TITLE || /@@OC /.test(t.preview)) {
           this.lastHelperError = null;
           return t.handle;
         }
+      }
+      if (this.watchUnsupported) {
+        return null;
       }
       if (Date.now() - this.lastCreateAt < 30_000) {
         return null;
@@ -543,7 +567,9 @@ class TerminalBridge {
     } catch {
       // Stored terminal is gone; fall through to create a new one.
     }
-    const existing = (this.workspace.terminals || []).find((t) => t.title === BRIDGE_TERMINAL_TITLE);
+    const existing = (this.workspace.terminals || []).find(
+      (t) => t.title === BRIDGE_TERMINAL_TITLE && !this.deadTerminals.has(t.id),
+    );
     const found = existing?.id || (await this.findRunningBridgeTerminal());
     if (found) {
       await this.rememberTerminal(found);
@@ -622,6 +648,11 @@ class TerminalBridge {
         return;
       }
       const lines = await this.readTerminal(terminalId);
+      if (!this.lastFrameAt && lines.some((l) => WATCH_UNSUPPORTED_RE.test(String(l)))) {
+        this.deadTerminals.add(terminalId);
+        this.markWatchUnsupported();
+        return;
+      }
       for (const frame of this.assembler.ingest(lines.join("\n"))) {
         this.lastFrameAt = Date.now();
         this.lastError = null;
@@ -849,6 +880,13 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
       bridge.start();
     } else {
       bridge.workspace = info;
+      const remoteCli = await resolveCliCommand(orca, { remote: true });
+      if (remoteCli !== bridge.remoteCli) {
+        bridge.remoteCli = remoteCli;
+        bridge.watchUnsupported = false;
+        bridge.lastHelperError = null;
+        bridge.terminalId = null;
+      }
     }
     if (activeBridge !== bridge) {
       activeBridge = bridge;

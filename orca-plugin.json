@@ -60,7 +60,7 @@
       {
         "key": "remoteCliCommand",
         "title": "orca-colab command on remote Orca servers",
-        "description": "Used inside workspaces that live on a remote Orca server (the panel then shows that server's Colab state). Leave empty to reuse the orca-colab command above.",
+        "description": "Used inside workspaces that live on a remote Orca server (the panel then shows that server's Colab state). Needs an orca-colab with the 'watch' command; defaults to the current development branch until the next release. For a checkout on the server: node /path/to/orca-colab/bin/orca-colab.mjs",
         "type": "string",
         "default": ""
       }
