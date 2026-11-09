@@ -55,6 +55,11 @@ it conflicts with the current Orca source, fix this file.
   file-read or run-command method for a workspace; the terminal is the only channel to a remote host.
   `events.subscribe` carries lifecycle events only, no terminal output.
 - Browser clients: `orca.shell` and `orca.files` are undefined and no worker runs there.
+- Observed on 1.4.254 through `orca plugin dev request`: `workspace.list` reports the machine Orca runs
+  on as `hostId: "local"`, not `null`; only `terminal.sendText` exists (`terminal.send` → "unknown host
+  method"). A dev plugin whose capabilities changed shows as `pending` in `orca plugin list` and runs
+  nothing until `orca plugin dev reload . --approve <fingerprint>`; the panel then silently shows stale
+  or empty data, which looks exactly like a client/server mismatch.
 
 ## Panel frame (`panel/index.html`)
 
