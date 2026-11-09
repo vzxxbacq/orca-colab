@@ -52,7 +52,16 @@ it conflicts with the current Orca source, fix this file.
   `--orca-muted-foreground`, `--orca-border`, `--orca-secondary`, `--orca-primary`.
 - Example: `examples/plugins/hello-orca/panel.html`, `examples/plugins/hello-worker-panel/`.
 
-## VM recipes
+## Skills
+
+- `orca skills install` installs only the skills bundled with the Orca build (via the community skills
+  CLI). Third-party skills install with `npx skills add <owner>/<repo>`, which expects the agentskills
+  layout: `skills/<name>/SKILL.md` with frontmatter `name` and `description`. Orca's `contributes.skills`
+  manifest point is reserved and must stay empty, so a plugin cannot ship a skill yet.
+- Orca terminals: a worker can open one in the focused workspace with `terminal.create` (`terminal:send`,
+  host API 1.3) and read it with `terminal.read` (`terminal:read`).
+
+## VM recipes (reference for the optional remote-workspace mode, M5)
 
 - Contribution: `"contributes.vmRecipes": [{ "path": "recipes/x.json" }]` (`declarative` or higher).
   Recipe JSON type `OrcaVmRecipe` in `src/shared/orca-yaml-hook-types.ts:31`:
@@ -97,7 +106,7 @@ it conflicts with the current Orca source, fix this file.
 - After a `ssh` result Orca registers the target (`src/main/ephemeral-vm/runtime-ssh.ts`), connects, and
   deploys orcad over that connection (`src/main/managed-server/install/orcad-remote-*.ts`). orcad is a
   Node bundle shipped inside the desktop app plus a pinned Node runtime the host downloads or receives;
-  there is **no standalone orcad download**, which is why we return `ssh` and not `orca-server`.
+  there is **no standalone orcad download**, so a recipe would return `ssh` and not `orca-server`.
 - `orca serve --project-root <path> --pairing-address <addr> --recipe-json` exists for the `orca-server`
   path (`src/cli/specs/serve.ts`); keep it in mind for M3/M4 if a standalone server build ever ships.
 
@@ -105,6 +114,8 @@ it conflicts with the current Orca source, fix this file.
 
 - Orca's docs recommend Tailscale for remote servers (`docs/site/content/docs/remote-servers.mdx`). Host
   kinds: `src/shared/remote-runtime/host-catalog/runtime-environment-host-kind.ts` (`network`, `ssh`, `wsl`).
+- Remote hosts use their own home, PATH and credentials; agent CLI logins on the laptop do not carry over
+  (`remote-servers.mdx:30`). This is one reason agents stay local in this project (D1).
 - On Linux the Orca CLI is `orca-ide`, not `orca` (GNOME screen reader owns `orca`).
 
 ## Notebook kernels

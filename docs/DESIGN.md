@@ -2,134 +2,139 @@
 
 ## Goal
 
-Make a Google Colab runtime usable as an Orca remote host, so a workspace created in Orca lives on
-Colab's machine and every terminal and agent Orca launches runs there, next to the GPU. "Maximum use of
-Colab compute" means: Orca's own server (orcad) runs on the Colab VM and the local app is only the UI.
+Let a coding agent running **locally** in Orca (Claude Code, Codex, …) set up a Google Colab GPU
+runtime together with the user in a few minutes, then use that GPU as a compute backend: sync code to
+it, run training or inference there, forward ports, pull results back. The workspace, the agent and the
+user's credentials stay on the local machine. Colab is a disposable GPU box reached over the user's
+tailnet.
+
+Three deliverables, one repo:
+
+| Deliverable | Who uses it | What it is |
+|---|---|---|
+| `skills/colab-gpu/SKILL.md` | the agent | Procedure: when to reach for Colab, how to run the one-time setup with the user, the per-session flow, how to run work and fetch results, hygiene. Installed with `npx skills add vzxxbacq/orca-colab`. |
+| `bin/orca-colab.mjs` (+ `bin/lib/`) | the agent (via the skill) and the user | Zero-dependency Node CLI. `doctor`, `setup`, `up`, `status`, `run`, `sync`, `pull`, `forward`, `down`. Every command has `--json`. Run as `npx -y github:vzxxbacq/orca-colab#<tag> <cmd>` or `npm i -g`. |
+| Orca plugin (`orca-plugin.json`, `worker/`, `panel/`) | the user, in Orca's UI | Panel showing sessions, GPU, age and prerequisites; a "Start Colab session" command that opens an Orca terminal running `orca-colab up`; status bar item with the live session count. |
+| `notebooks/orca-colab-bootstrap.ipynb` | runs inside Colab | Joins the tailnet, starts `sshd`, reports the GPU. |
 
 ## Decisions
 
 | # | Decision | Why |
 |---|----------|-----|
-| D1 | Integrate as a **VM recipe** (`contributes.vmRecipes`), not as a custom host kind. | Orca already turns a recipe result into a managed remote host: SSH connect, orcad deploy, terminals, ports, agents. No core changes needed. |
-| D2 | Return an **`ssh` connection**, not `orca-server`. | orcad is not downloadable on its own; Orca uploads it from the local app over SSH. With `ssh`, Orca owns orcad's lifecycle and upgrades. |
-| D3 | Reach Colab over **Tailscale** with a plain **`sshd`** inside Colab (not Tailscale SSH). | Colab allows no inbound connections; Tailscale in userspace mode forwards inbound tailnet traffic to local ports. Tailscale SSH's default ACL is `check` mode, which blocks non-interactive SSH clients. |
-| D4 | The only thing pasted into Colab is the **SSH public key line**; its comment carries the host name `orca-colab-<id>`. | One paste, no secrets. The recipe puts that line on the clipboard and opens Colab, so the user only presses paste and run. |
-| D5 | Tailscale login inside Colab is **interactive browser login** (`tailscale up` prints a URL). | Avoids a second paste (auth key). Devices accumulate in the tailnet; D10 handles cleanup later. |
-| D6 | Repo gets to Colab by **`git push` from the local machine over the new SSH link**, then the recipe reports `checkoutMode: provisioned-root`. | Works for private repos without putting any Git credential on Colab. The pushed commit is `ORCA_REPO_REF_HEAD`, so Orca's provisioned-root verification matches. |
-| D7 | Recipe commands are `npx -y github:vzxxbacq/orca-colab#<tag> <mode>`. | Recipes get no plugin-root path or env var; `cwd` is the user's repo and the shell is OS-native. npx on a pinned tag is the one cross-platform, zero-install way to reach our code. |
-| D8 | **No Google OAuth in milestone 1.** The user's existing browser session is the login. | Consumer Colab has no runtime API; OAuth buys nothing until Drive (M3) or Colab Enterprise (M4). |
-| D9 | `suspend` is a no-op that succeeds; `resume` only re-checks reachability. | Colab cannot pause a VM. A dead runtime must be destroyed and recreated; the error text says so. |
-| D10 | `destroy` best-effort runs `google.colab.runtime.unassign()` over SSH, then deletes local state. Tailscale device removal is deferred (needs an API key). | Frees the Colab quota promptly without extra credentials. |
+| D1 | **Agents run locally; Colab is a compute backend reached over SSH**, not an Orca remote host. | The owner's call. Keeps credentials, repo and agent sessions on the laptop; Colab VMs are too short-lived to host agent state. The earlier VM-recipe design is kept as an optional later mode (see "Optional remote-workspace mode"). |
+| D2 | **Tailscale with a plain `sshd` inside Colab** (not Tailscale SSH, not a public tunnel). | Colab allows no inbound traffic; Tailscale userspace mode forwards inbound tailnet traffic to local ports. Tailscale SSH's default ACL is `check` mode, which breaks non-interactive clients. Self-hosted DERP works unchanged (the DERP map comes from the control plane); Headscale works through a `loginServer` setting. |
+| D3 | **Pre-authorised, reusable, ephemeral, tagged auth key** (`tag:orca-colab`) joins Colab to the tailnet. The user creates it once in the admin console; `setup` stores it in `~/.orca-colab/config.json` (0600). | No per-session Tailscale login click. Ephemeral devices vanish when the VM dies, so no device accumulation. The key's only power is to add a tagged node; ACLs can confine such nodes to inbound SSH from the user's own devices. 90-day max expiry; `doctor` warns 7 days ahead. |
+| D4 | **One SSH key pair for all sessions**, `~/.orca-colab/id_ed25519`, created by `setup`. | Lets the public key be prefilled once (D5). Per-session keys bought nothing once auth keys replaced pasting. |
+| D5 | **Two notebook paths.** Default: the user saves a personal copy of the bootstrap notebook in Drive with the auth key, login server and public key prefilled in the form cell; `setup` prints the exact values and `config.notebookUrl` stores the copy's URL. Fallback: open the GitHub-hosted notebook and paste one line `<authkey> <pubkey>` from the clipboard. | Default path makes a session "Colab tab opens → click Run". Fallback needs no Drive and still has zero logins. |
+| D6 | **Session discovery = a new online tailnet peer with hostname prefix `orca-colab-`** that was not present when `up` started; the notebook generates the suffix. | No id has to travel from laptop to Colab. `up --name x` pins the hostname for the fallback path. |
+| D7 | **File transfer = `rsync` over SSH when available, else `tar | ssh`**; `sync` pushes the workspace (honouring `.gitignore` and `.colabignore`), `pull` fetches a remote path. No Git credentials go to Colab. | Works for private repos and uncommitted work, which is what an agent mid-task has. |
+| D8 | **Port forwarding is plain `ssh -L`** managed by the CLI (`forward <port>` records the pid; `down` kills it). | Jupyter, TensorBoard, Gradio, vLLM on Colab show up at `localhost:<port>` for the user and the agent. |
+| D9 | **No Google OAuth in milestone 1.** The browser session is the Google login. | Consumer Colab has no runtime API. OAuth is only worth it for Drive automation (M3) or Colab Enterprise (M4). |
+| D10 | **`down` = `google.colab.runtime.unassign()` over SSH, best effort, then local cleanup.** No suspend/resume: a dead runtime is a dead runtime. | Colab cannot pause. Frees quota promptly without extra credentials. |
+| D11 | **The Orca plugin is thin.** It never provisions; it shows state read from `~/.orca-colab/` and launches the CLI in an Orca terminal. | Provisioning needs the user's shell, clipboard and browser; the terminal is where the user already sees the CLI's prompts. |
 
-## Components
+## The user's experience
 
-### 1. Recipe (`recipes/colab-gpu.json`)
+One-time (about 5 minutes, agent-guided):
 
-```json
-{
-  "schemaVersion": 1,
-  "id": "colab-gpu",
-  "name": "Google Colab (GPU)",
-  "description": "Runs this workspace on a Google Colab GPU runtime reached over Tailscale.",
-  "checkoutMode": "provisioned-root",
-  "create":  "npx -y github:vzxxbacq/orca-colab#v0.1.0 create",
-  "suspend": "npx -y github:vzxxbacq/orca-colab#v0.1.0 suspend",
-  "resume":  "npx -y github:vzxxbacq/orca-colab#v0.1.0 resume",
-  "destroy": "npx -y github:vzxxbacq/orca-colab#v0.1.0 destroy",
-  "timeoutSeconds": { "create": 900, "resume": 120, "destroy": 120 }
-}
-```
+1. Agent runs `orca-colab doctor`; tells the user what is missing (Tailscale signed in, Node ≥ 20, rsync).
+2. Agent asks the user to create a Tailscale auth key (reusable, ephemeral, pre-approved, tag
+   `orca-colab`) and paste it into the terminal when `orca-colab setup` prompts. `setup` writes config and
+   the SSH key pair, prints the three values to prefill, and offers to open the notebook so the user can
+   "Save a copy in Drive", fill the form once, and paste the copy's URL back.
 
-The tag is bumped on every release together with `version` in `orca-plugin.json`. During local
-development the recipe may point at `node /abs/path/bin/orca-colab.mjs` but that never ships.
+Per session (about 2 minutes, mostly waiting on Colab):
 
-### 2. Recipe CLI (`bin/orca-colab.mjs` + `bin/lib/*.mjs`)
+1. Agent runs `orca-colab up --json` (or the user presses "Start Colab session" in the Orca panel).
+   The Colab tab opens on the user's notebook copy.
+2. User picks a GPU runtime if not already set, presses Run. Tailscale auth and `sshd` take ~60 s.
+3. `up` sees the peer, probes SSH, runs `nvidia-smi --query-gpu=name,memory.total --format=csv`, prints
+   the session JSON and exits. Agent continues on its own: `sync`, `run`, `pull`, `forward`.
 
-Plain Node ≥ 20, no dependencies, `package.json` with `"bin": { "orca-colab": "bin/orca-colab.mjs" }`.
-State lives in `~/.orca-colab/<ORCA_VM_INSTANCE_ID>/` (`os.homedir()`, never `$HOME`):
+## CLI (`bin/orca-colab.mjs`)
+
+Plain Node ≥ 20, zero dependencies, `package.json` with `"bin"`. State:
 
 ```
-id_ed25519, id_ed25519.pub      key pair, comment "orca-colab-<id>"
-state.json                      { id, hostname, ip, projectRoot, createdAt, repoUrl }
+~/.orca-colab/config.json        { authKey, loginServer?, notebookUrl?, tags, projectRootBase } (0600)
+~/.orca-colab/id_ed25519(.pub)   global key pair, comment "orca-colab"
+~/.orca-colab/known_hosts        per-IP host keys; hosts are disposable, StrictHostKeyChecking=accept-new
+~/.orca-colab/sessions/<name>.json  { name, hostname, ip, gpu, createdAt, remoteRoot, forwards: [{port, pid}] }
 ```
 
-`create` flow, with stderr progress lines prefixed `[colab]`:
+| Command | Does | Exit |
+|---|---|---|
+| `doctor [--json]` | Finds `tailscale` (PATH, macOS app bundle, Windows path), parses `tailscale status --json` (`BackendState`, `Self`), checks `ssh`, `ssh-keygen`, `rsync` (optional), `git`, clipboard tool, config presence, auth-key age. | 0 all good, 1 something missing (each line actionable) |
+| `setup [--auth-key K] [--login-server URL] [--notebook-url URL] [--non-interactive]` | Writes config, generates the key pair if absent, prints prefill values, optionally opens the notebook. Prompts on a TTY for anything not passed. | 0 / 1 |
+| `up [--name N] [--timeout S=600] [--no-open] [--json]` | Snapshots current peers, opens the notebook URL (copying `<authkey> <pubkey>` to the clipboard on the fallback path), waits for a new `orca-colab-*` peer online, probes the `SSH-` banner on 22, reads GPU info, writes the session file, prints it. Streams `[colab]` progress to stderr. | 0, 1 prerequisite, 2 timeout (says which step), 3 aborted |
+| `status [--json]` / `ls` | Lists sessions, re-checking reachability (3 s TCP probe) and age. | 0 |
+| `run [--session N] [--cwd DIR] -- <cmd…>` | `ssh root@ip` with a pty when stdin is a TTY, streams output, propagates the exit code. `--cwd` defaults to the session's `remoteRoot`. | remote exit code |
+| `sync [--session N] [--to DIR] [path=.]` | rsync `-az --delete --filter=':- .gitignore' --filter=':- .colabignore'` to `/content/orca/<basename>`; `tar | ssh` fallback. Records `remoteRoot`. | 0 / 1 |
+| `pull [--session N] <remotePath> <localPath>` | rsync or `ssh tar` back. | 0 / 1 |
+| `forward [--session N] <port>[:<remotePort>]` / `forward --stop <port>` | Background `ssh -N -L`, pid recorded in the session file; prints `http://localhost:<port>`. | 0 / 1 |
+| `down [--session N|--all] [--json]` | Kills forwards, `ssh … python3 -c 'from google.colab import runtime; runtime.unassign()'` with a 20 s timeout, ignores failure, deletes the session file. | 0 |
 
-1. `doctor` checks: `tailscale` CLI reachable (PATH, then `/Applications/Tailscale.app/Contents/MacOS/Tailscale`,
-   then `C:\Program Files\Tailscale\tailscale.exe`), `tailscale status --json` has `BackendState == "Running"`,
-   `ssh-keygen`, `git`. Any failure exits 1 with one actionable line.
-2. `id` = 6 lowercase base32 chars. `ssh-keygen -t ed25519 -N "" -C orca-colab-<id>`.
-3. Clipboard: `pbcopy` / `wl-copy` or `xclip -selection clipboard` / `clip.exe`. If none works, print the
-   line to stderr in a clearly marked block and continue.
-4. Open `https://colab.research.google.com/github/vzxxbacq/orca-colab/blob/main/notebooks/orca-colab-bootstrap.ipynb`
-   with `open` / `xdg-open` / `cmd /c start "" <url>`.
-5. Poll `tailscale status --json` every 3 s until a peer has `HostName == "orca-colab-<id>"` and `Online`.
-   Take `TailscaleIPs[0]` (IPv4 preferred).
-6. Probe TCP 22 on that IP until it answers with an `SSH-` banner.
-7. Push the repo: `ssh root@ip 'git init -q <root> && git -C <root> config receive.denyCurrentBranch updateInstead'`,
-   then `git push -q ssh://root@ip<root> <ORCA_REPO_REF_HEAD>:refs/heads/<branch>`, then
-   `ssh root@ip 'git -C <root> checkout -q <branch> && git -C <root> remote add origin <ORCA_REPO_URL>'`.
-   `GIT_SSH_COMMAND="ssh -i <key> -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=<state>/known_hosts -o BatchMode=yes"`.
-   `<root>` = `/content/orca/<repo basename>`; `<branch>` = `ORCA_REPO_BRANCH` or `ORCA_REPO_REF` or `main`.
-8. Write `state.json`, then print the result as the **last stdout line**:
+Every SSH invocation uses `-i ~/.orca-colab/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes
+-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=~/.orca-colab/known_hosts -o ConnectTimeout=10`.
+Default session = the only one, or the newest; `--session` otherwise. `--json` output is one object on
+stdout; everything else on stderr, so agents can parse safely.
 
-```json
-{"schemaVersion":2,"checkoutMode":"provisioned-root",
- "connection":{"type":"ssh","projectRoot":"/content/orca/<repo>",
-   "target":{"label":"Colab orca-colab-<id>","host":"100.x.y.z","port":22,"username":"root",
-             "identityFile":"/Users/me/.orca-colab/<instance>/id_ed25519","identitiesOnly":true}},
- "userData":{"id":"<id>","hostname":"orca-colab-<id>"}}
-```
+## Skill (`skills/colab-gpu/SKILL.md`)
 
-Timeouts: Orca kills the process group at `timeoutSeconds.create`; the CLI also stops itself 30 s
-earlier with a message naming the step it was waiting on. On abort, keep the state dir only if
-`state.json` was written.
+Frontmatter `name: colab-gpu`, `description` that triggers on: GPU, CUDA, training, fine-tuning, model
+inference too heavy for the laptop, "Colab", "run this on a GPU". Body sections:
 
-`resume`: read `state.json`, re-run steps 5–6 with a 90 s budget, print the same JSON. On failure exit 1
-with "Colab runtime is gone. Destroy this workspace's environment and create it again."
-`suspend`: print a note to stderr, exit 0.
-`destroy`: `ssh root@ip "python3 -c 'from google.colab import runtime; runtime.unassign()'"` with a 20 s
-timeout, ignore failures, remove the state dir, exit 0.
+1. **Resolve the CLI**: prefer `orca-colab` on PATH, else `npx -y github:vzxxbacq/orca-colab#<tag>`.
+   Always pass `--json` and read stdout only.
+2. **First run with the user**: run `doctor`; for each failure give the user the one action; run `setup`
+   in an Orca terminal the user can see (`orca terminal` from the orca-cli skill, or ask them). Explain
+   the auth key's scope in one sentence. Confirm with `doctor` again.
+3. **Start a session**: `up --json`; while waiting, tell the user exactly: "A Colab tab opened. Choose a
+   GPU runtime (Runtime → Change runtime type) if needed and press Run on the cell." Do not poll faster
+   than the CLI does; it blocks until done.
+4. **Do the work**: `sync` the workspace, `run -- pip install -r requirements.txt`, `run -- python
+   train.py …` with `nohup`/`tmux` for long jobs and `run -- tail -f` to follow; `pull` results into the
+   workspace; `forward` for TensorBoard/Jupyter/Gradio and give the user the localhost URL.
+5. **Hygiene**: Colab sessions die (≈90 min idle on free tier, 12 h cap; longer on Pro). Pull results as
+   soon as they exist; write checkpoints to the synced dir and pull them; tell the user to keep the tab
+   open; run `down` when finished. Never store secrets on Colab beyond the session; pass API keys as
+   `run --env` only when the user agrees.
+6. **Failure table**: `up` exit 2 → ask whether the cell was run / GPU quota exhausted; `run` connection
+   refused → `status`, likely the runtime died, offer `up` again and re-`sync`.
 
-### 3. Bootstrap notebook (`notebooks/orca-colab-bootstrap.ipynb`)
+Distribution: `npx skills add vzxxbacq/orca-colab` (agentskills layout); the README shows the command.
+The Orca plugin's panel also shows it for copy-paste. `contributes.skills` in Orca manifests is still
+reserved, so the plugin cannot install the skill itself yet.
 
-One markdown cell (what this does, pick a GPU runtime first) and one form cell:
+## Bootstrap notebook (`notebooks/orca-colab-bootstrap.ipynb`)
+
+Markdown cell: what this does, "pick a GPU runtime first", the one-line security note. Form cell:
 
 ```python
-#@title Connect this runtime to Orca
-SSH_PUBLIC_KEY = ""  #@param {type:"string"}
+#@title Connect this runtime to your tailnet for orca-colab
+TAILSCALE_AUTH_KEY = ""     #@param {type:"string"}
+SSH_PUBLIC_KEY = ""         #@param {type:"string"}
+TAILSCALE_LOGIN_SERVER = "" #@param {type:"string"}
+HOSTNAME_SUFFIX = ""        #@param {type:"string"}
+PASTE = ""                  #@param {type:"string"}   # fallback: "<authkey> <pubkey>" in one line
 ```
 
-followed by a code cell that, as root (Colab default):
+Code cell, as root:
 
-1. Parses the hostname from the key comment (`orca-colab-<id>`), fails loudly if the format is wrong.
-2. `apt-get install -y openssh-server`; writes `/root/.ssh/authorized_keys` (0600); sets
-   `PermitRootLogin prohibit-password`, `PasswordAuthentication no`; starts `sshd`.
-3. Installs Tailscale (`curl -fsSL https://tailscale.com/install.sh | sh`), starts
-   `tailscaled --tun=userspace-networking --socks5-server=localhost:1055 --state=/root/tailscaled.state`
-   in the background, then `tailscale up --hostname <hostname> --accept-dns=false --accept-routes=false`
-   and streams its output so the login URL is visible.
-4. Prints `nvidia-smi -L` (or "no GPU: Runtime → Change runtime type"), the tailnet IP and "Orca can
-   connect now. Keep this tab open."
-5. Optionally starts a keepalive loop cell (separate cell, documented, not auto-run).
+1. Resolve values (`PASTE` overrides the two fields); fail loudly if the key does not start with
+   `ssh-ed25519`/`ssh-rsa` or the auth key does not start with `tskey-`.
+2. `apt-get install -y -qq openssh-server rsync`; `authorized_keys` 0600; `PermitRootLogin
+   prohibit-password`, `PasswordAuthentication no`; start `sshd`.
+3. Install Tailscale; `tailscaled --tun=userspace-networking --socks5-server=localhost:1055
+   --state=/root/tailscaled.state &`; `tailscale up --authkey … --hostname orca-colab-<suffix or 6 random
+   chars> --accept-dns=false --accept-routes=false [--login-server …]`.
+4. Print `nvidia-smi -L` (or the "no GPU" hint), `tailscale ip -4`, and "Connected. Keep this tab open."
+5. Separate, not-auto-run cell: a keepalive loop that touches a file every 5 min (does not defeat the
+   browser idle rule; documented as such).
 
-No outputs committed. Python 3, no extra pip packages.
+No outputs committed. No pip packages.
 
-### 4. Worker (`worker/main.mjs`) and panel (`panel/index.html`)
-
-The worker exists for status and help, not for provisioning. Because the manifest declares a status bar
-item together with `main`, Orca keeps the worker running while the plugin is enabled.
-
-- Status bar item `colab-runtimes`: text `Colab: n` where n = state dirs under `~/.orca-colab`, hidden
-  when 0; refreshed every 30 s and on `fs.watch` of that dir. Pressing it opens the panel command.
-- Panel requests (`orca.panels.handle`): `colab.list` → runtimes from state files; `colab.doctor` → same
-  checks as the CLI (import the same module); `colab.openNotebook` is not needed, the panel uses
-  `orca.shell.openExternal` directly on click.
-- Panel: prerequisites with ✓/✗, list of runtimes (id, ip, project root, age), a "Open bootstrap notebook"
-  button, and the three-step instructions. Inline CSS/JS only, Orca frame tokens for colours
-  (`--orca-background`, `--orca-foreground`, `--orca-muted-foreground`, `--orca-border`).
-
-### 5. Manifest (`orca-plugin.json`)
+## Orca plugin
 
 ```json
 {
@@ -137,48 +142,67 @@ item together with `main`, Orca keeps the worker running while the plugin is ena
   "manifestVersion": 2,
   "execution": "trusted-worker",
   "id": "colab",
-  "name": "Google Colab",
+  "name": "Google Colab GPU",
   "version": "0.1.0",
-  "description": "Run Orca workspaces and agents on a Google Colab GPU runtime reached over Tailscale.",
+  "description": "Use a Google Colab GPU runtime as a compute backend from your local Orca workspace and agents.",
   "repository": "https://github.com/vzxxbacq/orca-colab",
   "license": "MIT",
   "engines": { "orca": ">=1.4.248" },
   "pluginApi": 1,
   "main": "worker/main.mjs",
   "contributes": {
-    "vmRecipes": [{ "path": "recipes/colab-gpu.json" }],
-    "panels": [{ "id": "colab", "title": "Colab", "icon": "cloud", "entry": "panel/index.html" }],
-    "commands": [{ "id": "colab.showPanel", "title": "Colab: Show runtimes" }],
-    "statusBarItems": [{ "id": "colab-runtimes", "icon": "cloud", "text": "Colab", "command": "colab.showPanel" }]
+    "panels": [{ "id": "colab", "title": "Colab GPU", "icon": "zap", "entry": "panel/index.html" }],
+    "commands": [
+      { "id": "colab.up", "title": "Colab: Start GPU session", "when": "workspace" },
+      { "id": "colab.down", "title": "Colab: Stop GPU session" },
+      { "id": "colab.showPanel", "title": "Colab: Show sessions" }
+    ],
+    "statusBarItems": [{ "id": "colab-sessions", "icon": "zap", "text": "Colab", "command": "colab.showPanel" }]
   },
-  "capabilities": [{ "kind": "notifications:show" }, { "kind": "storage:own" }]
+  "capabilities": [
+    { "kind": "workspace:read" },
+    { "kind": "terminal:send" },
+    { "kind": "notifications:show" },
+    { "kind": "storage:own" }
+  ]
 }
 ```
 
-Install identity will be `vzxxbacq.colab` (publisher derived from the repository owner; ids starting
-with `orca-` are reserved). The plugin needs no `secrets:own` in M1.
+- Worker: reads `~/.orca-colab/sessions/*.json` (30 s poll + `fs.watch`), updates the status bar (`Colab: 1
+  · T4`, hidden at 0). `colab.up` → `terminal.create` in the focused workspace running `npx -y
+  github:vzxxbacq/orca-colab#<tag> up`; `colab.down` likewise with `down`. Panel handlers: `colab.sessions`,
+  `colab.doctor`.
+- Panel: prerequisites ✓/✗, sessions (name, GPU, IP, age, forwards), buttons Start/Stop (they call the
+  worker, which opens the terminal), the skill install command for copy, the three-step per-session text.
+  Inline assets only; Orca frame CSS variables.
+- Install identity `vzxxbacq.colab` (publisher derived from the repo owner).
+
+## Optional remote-workspace mode (not scheduled)
+
+The first design made Colab an Orca remote host via a VM recipe (`contributes.vmRecipes`, `ssh` result,
+orcad deployed by Orca). It still works with this repo's notebook and could ship later as a second
+recipe for users who *do* want agents on the GPU box. Facts for it are kept in
+`docs/orca-plugin-facts.md` § VM recipes. Do not build it unless a TODO item asks.
 
 ## Milestones
 
-- **M1 — Works end to end on one machine (macOS), manual Colab step.** Recipe CLI, notebook, manifest,
-  validation passing, documented happy path. Exit: a workspace created from the recipe opens on Colab and
-  `nvidia-smi` works in an Orca terminal.
-- **M2 — Robustness and platforms.** Linux and Windows paths of the CLI, abort/timeout behaviour,
-  idle-timeout warnings in the panel, destroy via `runtime.unassign()`, release tagging and the
-  `orca-plugin` GitHub topic.
-- **M3 — Zero-paste via Drive.** Optional Google OAuth (PKCE loopback in the recipe CLI, token in the OS
-  keychain via the worker's `secrets.set`): the CLI copies the notebook into the user's Drive with the key
-  prefilled and polls the saved notebook's outputs through the Drive API, removing the paste.
-- **M4 — Colab Enterprise.** `notebookRuntimeTemplates` / `notebookExecutionJobs` on Vertex AI for a fully
-  automatic, GPU-selectable path with no browser interaction.
-- **M5 — Remote notebook kernel (Orca core change).** Let `.ipynb` files in a Colab workspace execute on
-  the Colab kernel; today Orca runs kernels only locally.
+- **M1 — Skill + CLI usable end to end on macOS.** `doctor`, `setup`, `up`, `run`, `sync`, `pull`,
+  `forward`, `down`, notebook, SKILL.md, release tag. Exit: a local agent, following the skill, trains a
+  toy model on a T4 and pulls the checkpoint back with the user only pressing Run in Colab.
+- **M2 — Orca plugin + platforms.** Panel, status bar, terminal-launched commands; Linux/Windows paths;
+  abort handling; Headscale `loginServer`; auth-key expiry warnings; CI.
+- **M3 — Drive automation.** Optional OAuth (`drive.file`): `setup` creates the Drive copy with prefilled
+  values; `up` reads the notebook's saved outputs to detect the IP without needing a tailnet peer scan.
+- **M4 — Colab Enterprise.** Vertex AI runtime templates and execution jobs: GPU type chosen from the CLI,
+  no browser at all, long-running paid runtimes.
+- **M5 — Remote-workspace mode** as a second recipe, if asked.
 
 ## Known limits
 
-- Free/Pro Colab disconnects idle sessions (about 90 min without browser activity on free tier) and caps
-  session length. The Colab tab must stay open. The panel will surface this (M2).
-- The GPU type is chosen in Colab's UI, not by the recipe (until M4).
-- Each Colab session adds a device to the tailnet until removed manually (until a Tailscale API key is
-  optionally configured).
-- Tailscale must be installed and signed in on the local machine.
+- Colab sessions end (≈90 min idle / 12 h on free, longer on Pro/Pro+); nothing persists on the VM.
+  Everything valuable must be `pull`ed or pushed to Git/Drive/HF from Colab.
+- GPU type is chosen in Colab's UI until M4.
+- Throughput through a DERP relay is a few MB/s: fine for code and logs, wrong for datasets and weights;
+  have Colab download those directly.
+- Local Tailscale must be installed and signed in; `rsync` recommended (Windows: use WSL's or the tar
+  fallback).
