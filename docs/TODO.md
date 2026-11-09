@@ -18,9 +18,9 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
 - [x] **M1.3 Doctor.** `bin/lib/tailscale-cli.mjs` (locate binary, `status --json` parse: BackendState,
       Self, Peer map), `bin/lib/doctor.mjs` (checks per DESIGN, structured result), `doctor` command
       output. Test with a fixture status JSON. — Done: Tailscale locator/status parser and structured prerequisite checks (`test/doctor.test.mjs`).
-- [ ] **M1.4 Setup.** Prompts (`node:readline/promises`) or flags; `bin/lib/ssh-keypair.mjs` (ed25519,
+- [x] **M1.4 Setup.** Prompts (`node:readline/promises`) or flags; `bin/lib/ssh-keypair.mjs` (ed25519,
       comment `orca-colab`); writes config; prints prefill values; `bin/lib/open-url.mjs` and
-      `bin/lib/clipboard.mjs` (pbcopy / wl-copy / xclip / clip.exe, graceful fallback).
+      `bin/lib/clipboard.mjs` (pbcopy / wl-copy / xclip / clip.exe, graceful fallback). — Done: `setup` command, ed25519 keygen, clipboard and Orca/system browser helpers (`test/setup.test.mjs`).
 - [ ] **M1.5 Peer discovery + SSH probe.** `bin/lib/tailscale-peer-wait.mjs` (snapshot, poll 3 s, new
       online `orca-colab-*` peer, IPv4), `bin/lib/ssh-banner-probe.mjs` (TCP 22, `SSH-` banner, deadline,
       AbortSignal). Tests with a fake status runner and a local fake banner server.
