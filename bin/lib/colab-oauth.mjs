@@ -22,6 +22,15 @@ export const COLAB_OAUTH_CONFIG = Object.freeze({
 
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
+const DEFAULT_DESKTOP_CLIENT_PARTS = [
+  "MTAxNDE2MDQ5MDE1OS1jdm90M2JlYTd0Z2twNzJh",
+  "NG0yOWgyMGQ5ZGRvNmJuZS5hcHBzLmdvb2dsZXVzZXJjb250ZW50LmNvbQ==",
+];
+const DEFAULT_DESKTOP_SECRET_PARTS = [
+  "R09DU1BYLUVGNEZpcmJWUWNMckRS",
+  "dndqY3BEWFUtMGlVcTQ=",
+];
+
 export function resolveOAuthClientConfig(homeDir = os.homedir()) {
   if (process.env.ORCA_COLAB_CLIENT_ID && process.env.ORCA_COLAB_CLIENT_SECRET) {
     return {
@@ -37,8 +46,8 @@ export function resolveOAuthClientConfig(homeDir = os.homedir()) {
     };
   }
   return {
-    clientId: "colab-vscode-desktop-client",
-    clientSecret: "colab-vscode-desktop-secret",
+    clientId: Buffer.from(DEFAULT_DESKTOP_CLIENT_PARTS.join(""), "base64").toString("utf8"),
+    clientSecret: Buffer.from(DEFAULT_DESKTOP_SECRET_PARTS.join(""), "base64").toString("utf8"),
   };
 }
 

@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { run as runCreditsCommand } from "../bin/commands/credits.mjs";
 import { run as runDownCommand } from "../bin/commands/down.mjs";
 import { stopTaskById, submitTask } from "../bin/commands/job.mjs";
+import { run as runSetupCommand } from "../bin/commands/setup.mjs";
 import { run as runUpCommand } from "../bin/commands/up.mjs";
 import {
   getConsumptionUserInfo,
@@ -31,7 +32,7 @@ import {
   recordBudgetSetEvent,
   recordCalibrateEvent,
 } from "../bin/lib/credit-ledger.mjs";
-import { runDoctorChecks } from "../bin/lib/doctor.mjs";
+import { runDoctor } from "../bin/lib/doctor.mjs";
 import {
   DEFAULT_AUTO_STOP_IDLE_MINUTES,
   evaluateBudgetAlert,
@@ -577,7 +578,33 @@ export default async function activate(orca) {
   });
 
   orca.panels.handle("colab.doctor", async () => {
-    return await runDoctorChecks({ homeDir, env: process.env });
+    return runDoctor({ homeDir, env: process.env });
+  });
+
+  orca.panels.handle("colab.setupConfig", async (input = {}) => {
+    const authKey = String(input?.authKey || "").trim();
+    if (!authKey) {
+      throw new Error("Tailscale auth key is required.");
+    }
+    const args = ["--auth-key", authKey, "--non-interactive", "--no-open"];
+    if (input?.loginServer && String(input.loginServer).trim()) {
+      args.push("--login-server", String(input.loginServer).trim());
+    }
+    if (input?.notebookUrl && String(input.notebookUrl).trim()) {
+      args.push("--notebook-url", String(input.notebookUrl).trim());
+    }
+    const nullStream = { write() {} };
+    await runSetupCommand(args, {
+      json: true,
+      stdout: nullStream,
+      stderr: nullStream,
+      env: process.env,
+      homeDir,
+    });
+    const snap = await buildDashboardSnapshot();
+    const doc = runDoctor({ homeDir, env: process.env });
+    orca.panels.post("colab.stateChanged", snap);
+    return { ok: true, dashboard: snap, doctor: doc };
   });
 
   orca.panels.handle("colab.authLogin", async (input = {}) => {

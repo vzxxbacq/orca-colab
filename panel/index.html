@@ -383,12 +383,42 @@
       <span id="auth-badge" class="badge">Checking...</span>
     </div>
     <div class="row">
+      <button id="btn-toggle-setup" class="sm" title="Configure Tailscale Auth Key & Login Server">⚙ Setup</button>
       <button id="btn-auth" class="sm">Sign in with Google</button>
       <button id="btn-refresh" class="sm" title="Refresh status">↻</button>
     </div>
   </div>
 
   <div id="status-banner" class="banner" style="display:none"></div>
+
+  <!-- 0. Initial Setup (auto-shown when unconfigured) -->
+  <div id="setup-section" class="section" style="display:none">
+    <div class="section-header">
+      <h2 class="section-title">1-Time Setup (Tailscale Auth Key & SSH Key)</h2>
+      <span class="badge warn">Required once</span>
+    </div>
+    <div class="task-form" style="border-bottom:none;margin-bottom:0;padding-bottom:0">
+      <div class="row">
+        <input
+          type="text"
+          id="setup-authkey-input"
+          class="mono"
+          placeholder="Tailscale Pre-Auth Key (tskey-auth-... or Headscale key)"
+          style="flex: 1"
+        />
+      </div>
+      <div class="row">
+        <input
+          type="text"
+          id="setup-loginserver-input"
+          class="mono"
+          placeholder="Login server (optional, e.g. https://hs.feihao.xyz for Headscale)"
+          style="flex: 1"
+        />
+        <button id="btn-save-setup" class="primary">Save & Generate SSH Key</button>
+      </div>
+    </div>
+  </div>
 
   <!-- 1. GPU Runtime & Resource Monitor -->
   <div class="section">
@@ -554,14 +584,16 @@
 
     function renderPrerequisites(doctor, auth) {
       const bar = document.getElementById("prereq-bar");
+      const setupSec = document.getElementById("setup-section");
       if (!doctor) {
         bar.innerHTML = "";
         return;
       }
+      const c = doctor.checks || {};
       const items = [
-        { label: "Tailscale", ok: doctor.tailscale?.loggedIn },
-        { label: "SSH Key", ok: doctor.sshKey?.present },
-        { label: "Auth Key", ok: doctor.config?.authKeyValid },
+        { label: "Tailscale", ok: Boolean(c.tailscale?.loggedIn) },
+        { label: "SSH Key", ok: Boolean(c.config?.sshKeyPresent) },
+        { label: "Auth Key", ok: Boolean(c.config?.hasAuthKey) },
         { label: "Direct API OAuth", ok: Boolean(auth?.authenticated) },
       ];
       bar.innerHTML = items
@@ -570,6 +602,10 @@
             `<span class="badge ${i.ok ? "ok" : "warn"}">${i.ok ? "✓" : "•"} ${i.label}</span>`,
         )
         .join("");
+
+      if (!c.config?.ok && !state.setupManuallyClosed) {
+        setupSec.style.display = "block";
+      }
     }
 
     function renderSessions(sessions = []) {
@@ -841,6 +877,36 @@
 
     document.getElementById("btn-refresh").addEventListener("click", () => {
       void refreshAll(true);
+    });
+
+    document.getElementById("btn-toggle-setup").addEventListener("click", () => {
+      const sec = document.getElementById("setup-section");
+      const visible = sec.style.display !== "none";
+      sec.style.display = visible ? "none" : "block";
+      state.setupManuallyClosed = visible;
+    });
+
+    document.getElementById("btn-save-setup").addEventListener("click", async () => {
+      const authKey = document.getElementById("setup-authkey-input").value.trim();
+      const loginServer = document.getElementById("setup-loginserver-input").value.trim();
+      if (!authKey) {
+        showBanner("Please enter your Tailscale / Headscale Auth Key.", true);
+        return;
+      }
+      try {
+        const res = await orcaApi.plugin.request("colab.setupConfig", {
+          authKey,
+          loginServer,
+        });
+        if (res.doctor) state.doctor = res.doctor;
+        document.getElementById("setup-authkey-input").value = "";
+        document.getElementById("setup-section").style.display = "none";
+        state.setupManuallyClosed = true;
+        showBanner("Saved Tailscale Auth Key and generated ~/.orca-colab/id_ed25519.");
+        applyDashboard(res.dashboard);
+      } catch (err) {
+        showBanner(err?.message || String(err), true);
+      }
     });
 
     document.getElementById("btn-auth").addEventListener("click", async () => {
