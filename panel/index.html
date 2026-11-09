@@ -813,7 +813,7 @@
       <!-- VIEW 1: STEP-BY-STEP SETUP HELPER WIZARD                          -->
       <!-- Shown automatically on first run (!doctor.checks.config.ok)       -->
       <!-- ================================================================= -->
-      <div id="viewWizard" class="hidden" style="display: flex; flex-direction: column; gap: 10px">
+      <div id="viewWizard" style="display: flex; flex-direction: column; gap: 10px">
         <div class="wizard-hero">
           <h2>Welcome to Colab GPU Helper</h2>
           <p>
@@ -1334,9 +1334,32 @@
       let dashboardState = null;
       let selectedGpu = "T4";
       let selectedTaskId = null;
-      let currentView = null; // "wizard" | "launcher" | "workspace"
+      let currentView = "wizard"; // "wizard" | "launcher" | "workspace"
       let currentTab = "tasks"; // "tasks" | "hardware" | "credits"
       let userForcedView = null;
+
+      async function callWorker(name, input = {}, options = {}) {
+        if (orca?.plugin && typeof orca.plugin.request === "function") {
+          return await orca.plugin.request(name, input, options);
+        }
+        if (typeof orca?.invoke === "function") {
+          return await orca.invoke(name, input);
+        }
+        throw new Error("Orca plugin bridge (orca.plugin.request) is unavailable.");
+      }
+
+      function onWorkerEvent(name, handler) {
+        try {
+          if (orca?.plugin && typeof orca.plugin.on === "function") {
+            return orca.plugin.on(name, handler);
+          }
+          if (typeof orca?.on === "function") {
+            return orca.on(name, handler);
+          }
+        } catch (err) {
+          console.warn("Failed to subscribe to worker event:", name, err);
+        }
+      }
 
       function esc(str) {
         return String(str ?? "")
@@ -1864,7 +1887,7 @@
 
       async function refreshAll(includeLiveMetrics = false) {
         try {
-          const snap = await orca.invoke("colab.dashboard", {
+          const snap = await callWorker("colab.dashboard", {
             selectedTaskId,
             includeLiveMetrics,
           });
@@ -1939,7 +1962,7 @@
           btn.disabled = true;
           btn.textContent = "Saving & Generating SSH Keypair...";
           try {
-            const res = await orca.invoke("colab.setupConfig", {
+            const res = await callWorker("colab.setupConfig", {
               authKey,
               loginServer: loginServer || undefined,
             });
@@ -1967,7 +1990,11 @@
           "info",
         );
         try {
-          const res = await orca.invoke("colab.authLogin", {});
+          const res = await callWorker(
+            "colab.authLogin",
+            {},
+            { timeoutMs: 310000 },
+          );
           showNotice("Google Colab account connected!", "ok");
           renderAll(res.dashboard);
         } catch (err) {
@@ -1988,7 +2015,7 @@
       document
         .getElementById("wizardLogoutBtn")
         .addEventListener("click", async () => {
-          const res = await orca.invoke("colab.authLogout", {});
+          const res = await callWorker("colab.authLogout", {});
           showNotice("Signed out of Google Colab.", "info");
           renderAll(res.dashboard);
         });
@@ -2000,10 +2027,14 @@
           const keep = document.getElementById("launcherKeepCheck").checked;
           hideNotice();
           try {
-            const res = await orca.invoke("colab.startSession", {
-              gpu: selectedGpu,
-              keep,
-            });
+            const res = await callWorker(
+              "colab.startSession",
+              {
+                gpu: selectedGpu,
+                keep,
+              },
+              { timeoutMs: 240000 },
+            );
             if (res?.dashboard) {
               userForcedView = null;
               renderAll(res.dashboard);
@@ -2018,7 +2049,7 @@
         .getElementById("launchInTermBtn")
         .addEventListener("click", async () => {
           const keep = document.getElementById("launcherKeepCheck").checked;
-          await orca.invoke("colab.startSession", {
+          await callWorker("colab.startSession", {
             gpu: selectedGpu,
             keep,
             useTerminal: true,
@@ -2040,7 +2071,7 @@
           const btn = document.getElementById("submitTaskBtn");
           btn.disabled = true;
           try {
-            const res = await orca.invoke("colab.submitTask", {
+            const res = await callWorker("colab.submitTask", {
               name: name || undefined,
               command,
               syncWorkspace,
@@ -2076,7 +2107,7 @@
       // Sync CCU
       async function handleSyncCcu() {
         try {
-          const res = await orca.invoke("colab.calibrateCredits", {});
+          const res = await callWorker("colab.calibrateCredits", {});
           showNotice("Synced Compute Units balance from Colab API.", "ok");
           renderAll(res.dashboard);
         } catch (err) {
@@ -2098,7 +2129,7 @@
             document.getElementById("manualBalanceInput").value,
           );
           if (!Number.isFinite(val) || val < 0) return;
-          const res = await orca.invoke("colab.setCredits", { balanceCu: val });
+          const res = await callWorker("colab.setCredits", { balanceCu: val });
           document.getElementById("manualBalanceInput").value = "";
           renderAll(res.dashboard);
         });
@@ -2110,7 +2141,7 @@
             document.getElementById("manualBudgetInput").value,
           );
           if (!Number.isFinite(val) || val < 0) return;
-          const res = await orca.invoke("colab.setBudget", { budgetCu: val });
+          const res = await callWorker("colab.setBudget", { budgetCu: val });
           document.getElementById("manualBudgetInput").value = "";
           renderAll(res.dashboard);
         });
@@ -2125,7 +2156,7 @@
 
       // Global inline handlers for dynamic cards
       window.__openSsh = async (sessionName) => {
-        const res = await orca.invoke("colab.openTerminal", {
+        const res = await callWorker("colab.openTerminal", {
           session: sessionName,
           title: `SSH: ${sessionName}`,
         });
@@ -2135,14 +2166,14 @@
       };
 
       window.__toggleKeep = async (sessionName) => {
-        const res = await orca.invoke("colab.toggleKeep", {
+        const res = await callWorker("colab.toggleKeep", {
           session: sessionName,
         });
         renderAll(res.dashboard);
       };
 
       window.__stopSession = async (sessionName) => {
-        const res = await orca.invoke("colab.stopSession", {
+        const res = await callWorker("colab.stopSession", {
           session: sessionName,
         });
         userForcedView = null;
@@ -2151,22 +2182,22 @@
 
       window.__selectTask = async (taskId) => {
         selectedTaskId = taskId;
-        const res = await orca.invoke("colab.getTaskLogs", { taskId });
+        const res = await callWorker("colab.getTaskLogs", { taskId });
         renderTaskOutputBox(res);
         await refreshAll();
       };
 
       window.__stopTask = async (taskId) => {
-        const res = await orca.invoke("colab.stopTask", { taskId });
+        const res = await callWorker("colab.stopTask", { taskId });
         renderAll(res.dashboard);
       };
 
       // Live Worker Event Listeners
-      orca.on("colab.stateChanged", (snap) => {
+      onWorkerEvent("colab.stateChanged", (snap) => {
         renderAll(snap);
       });
 
-      orca.on("colab.provisioningProgress", (state) => {
+      onWorkerEvent("colab.provisioningProgress", (state) => {
         const box = document.getElementById("provisioningBox");
         if (state?.active) {
           box.classList.remove("hidden");
@@ -2175,7 +2206,7 @@
         }
       });
 
-      orca.on("colab.taskOutput", (payload) => {
+      onWorkerEvent("colab.taskOutput", (payload) => {
         if (
           !selectedTaskId ||
           payload?.task?.id === selectedTaskId ||
