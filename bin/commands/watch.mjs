@@ -17,21 +17,58 @@ import { createPanelActions } from "../lib/panel-actions.mjs";
 import { listSessions, readSession, writeSession } from "../lib/session-store.mjs";
 import { listTasks } from "../lib/task-store.mjs";
 
+// 2 = understands `batch` and the ";;" terminator. Clients fall back to single `call` lines below it.
+export const WATCH_PROTOCOL = 2;
 export const WATCH_SNAPSHOT_TAIL_LINES = 120;
 export const WATCH_SNAPSHOT_LOG_BYTES = 16384;
 const HEARTBEAT_MS = 20_000;
 const POLL_MS = 1500;
 const WATCHDOG_MS = 5 * 60_000;
 
-// Parses one control line typed into the watch terminal. Arguments travel base64-encoded so that a
-// pty's line discipline never sees quotes, newlines or control characters from user input.
+export const CONTROL_TERMINATOR = ";;";
+const CONTROL_SEGMENT_RE = /\b(call|batch|live|select|snap|ping|quit)\b[^;]*?;;/g;
+
+// Several clients may type into one bridge terminal at once and their lines can merge, so every
+// control line ends in ";;" and a merged line is split back into its commands. Lines without the
+// terminator (older clients) are parsed whole.
+export function parseControlLines(line) {
+  const text = String(line);
+  if (!text.includes(CONTROL_TERMINATOR)) {
+    const one = parseControlLine(text);
+    return one ? [one] : [];
+  }
+  const out = [];
+  CONTROL_SEGMENT_RE.lastIndex = 0;
+  let match;
+  while ((match = CONTROL_SEGMENT_RE.exec(text)) !== null) {
+    const parsed = parseControlLine(match[0].slice(0, -CONTROL_TERMINATOR.length));
+    if (parsed) out.push(parsed);
+  }
+  return out;
+}
+
+// Parses one control command. Arguments travel base64-encoded so that a pty's line discipline never
+// sees quotes, newlines or control characters from user input.
 export function parseControlLine(line) {
-  const trimmed = String(line).trim();
+  const trimmed = String(line).replace(/;;\s*$/, "").trim();
   if (!trimmed) {
     return null;
   }
   const [verb, ...rest] = trimmed.split(/\s+/);
   switch (verb) {
+    case "batch": {
+      // batch <reqId> <b64 of { ops: [{ id, action, input }], select?, live? }>
+      const [reqId, b64] = rest;
+      if (!reqId || !b64) {
+        return null;
+      }
+      try {
+        const payload = JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
+        return { verb, reqId, ops: Array.isArray(payload?.ops) ? payload.ops : [], control: payload || {} };
+      } catch {
+        return { verb, reqId, error: `malformed batch (${b64.length} chars)` };
+      }
+    }
     case "ping":
     case "quit":
     case "snap":
@@ -122,7 +159,7 @@ export async function run(
   const builder = new DashboardSnapshotBuilder({
     homeDir,
     env,
-    origin: { kind: "remote", host: hostLabel, platform: process.platform },
+    origin: { kind: "remote", host: hostLabel, platform: process.platform, protocol: WATCH_PROTOCOL },
   });
   const actions = createPanelActions({ homeDir, env, defaultLocalCwd: () => cwd });
 
@@ -155,23 +192,20 @@ export async function run(
     }
   };
 
-  const handleCall = async ({ reqId, action, input, error }) => {
-    if (error) {
-      emit("res", { reqId, ok: false, error });
-      return;
-    }
+  const hooks = {
+    onAuthUrl: (payload) => emit("evt", { name: "oauthUrl", payload }),
+    onProgress: (message) => {
+      provisioningState = { active: true, message, error: null };
+      emit("evt", { name: "provisioningProgress", payload: provisioningState });
+    },
+  };
+
+  // Runs one panel action and returns { ok, result | error } without emitting anything.
+  const runAction = async (action, input) => {
     const fn = actions[action];
     if (typeof fn !== "function") {
-      emit("res", { reqId, ok: false, error: `unknown action: ${action}` });
-      return;
+      return { ok: false, error: `unknown action: ${action}` };
     }
-    const hooks = {
-      onAuthUrl: (payload) => emit("evt", { name: "oauthUrl", payload }),
-      onProgress: (message) => {
-        provisioningState = { active: true, message, error: null };
-        emit("evt", { name: "provisioningProgress", payload: provisioningState });
-      },
-    };
     if (action === "startSession") {
       provisioningState = {
         active: true,
@@ -191,14 +225,44 @@ export async function run(
       if (action === "submitTask" && result?.task?.id) {
         selectedTaskId = result.task.id;
       }
-      emit("res", { reqId, ok: true, result });
+      return { ok: true, result };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (action === "startSession") {
         provisioningState = { active: false, message: null, error: message };
       }
-      emit("res", { reqId, ok: false, error: message });
+      return { ok: false, error: message };
     }
+  };
+
+  const handleCall = async ({ reqId, action, input, error }) => {
+    if (error) {
+      emit("res", { reqId, ok: false, error });
+      return;
+    }
+    const outcome = await runAction(action, input);
+    emit("res", { reqId, ...outcome });
+    await emitSnapshot({ force: true });
+  };
+
+  // One round trip for many operations: every result comes back in one frame, then one snapshot.
+  const handleBatch = async ({ reqId, ops, control, error }) => {
+    if (error) {
+      emit("res", { reqId, ok: false, error });
+      return;
+    }
+    if (typeof control?.select === "string") {
+      selectedTaskId = control.select || null;
+    }
+    if (typeof control?.live === "boolean") {
+      includeLiveMetrics = control.live;
+    }
+    const results = [];
+    for (const op of ops) {
+      const outcome = await runAction(op.action, op.input ?? {});
+      results.push({ id: op.id, action: op.action, ...outcome });
+    }
+    emit("res", { reqId, ok: results.every((r) => r.ok), results });
     await emitSnapshot({ force: true });
   };
 
@@ -290,15 +354,13 @@ export async function run(
       rl.close();
       resolve();
     };
-    rl.on("line", (line) => {
-      const ctl = parseControlLine(line);
-      if (!ctl) return;
+    const handleControl = (ctl) => {
       if (ctl.verb === "quit") {
         stop();
         return;
       }
       if (ctl.verb === "ping") {
-        emit("evt", { name: "pong", payload: { at: Date.now() } });
+        emit("evt", { name: "pong", payload: { at: Date.now(), protocol: WATCH_PROTOCOL } });
         return;
       }
       if (ctl.verb === "select") {
@@ -314,7 +376,14 @@ export async function run(
         void emitSnapshot({ force: true });
         return;
       }
+      if (ctl.verb === "batch") {
+        void handleBatch(ctl);
+        return;
+      }
       void handleCall(ctl);
+    };
+    rl.on("line", (line) => {
+      for (const ctl of parseControlLines(line)) handleControl(ctl);
     });
     rl.on("close", stop);
     stdin.on?.("end", stop);

@@ -57,13 +57,20 @@ export function createOrcaRemoteHelper({
 } = {}) {
   const available = Boolean(orcaBin);
 
-  // One orca process at a time: calls to a paired server take seconds each and a burst of them
-  // starves the first ones into timeouts.
-  let chain = Promise.resolve();
-  const run = (command, options = {}) => {
-    const next = chain.then(() => runNow(command, options));
-    chain = next.catch(() => {});
-    return next;
+  // Two lanes: writes to a terminal must never overlap each other (their text and Enter keys would
+  // interleave), and reads must not queue behind writes or a burst of them starves everything into
+  // timeouts. Each lane runs one orca process at a time.
+  const lanes = { send: Promise.resolve(), read: Promise.resolve() };
+  const timings = [];
+  const run = (command, options = {}, lane = "read") => {
+    const startedAt = Date.now();
+    const next = lanes[lane].then(() => runNow(command, options));
+    lanes[lane] = next.catch(() => {});
+    return next.then((res) => {
+      timings.push({ command: command.join(" "), ms: Date.now() - startedAt, ok: res.ok, lane });
+      if (timings.length > 30) timings.shift();
+      return res;
+    });
   };
 
   const runNow = (command, options = {}) =>
@@ -115,6 +122,7 @@ export function createOrcaRemoteHelper({
   return {
     available,
     orcaBin,
+    recentTimings: () => timings.slice(),
 
     // Saved paired servers; the worktree the client shows may live on one of them.
     async listEnvironments() {
@@ -213,7 +221,8 @@ export function createOrcaRemoteHelper({
     },
 
     async sendTerminal(handle, text, { environment = null } = {}) {
-      return run(["terminal", "send"], { terminal: handle, text, enter: true, ...envOpt(environment) });
+      return run(["terminal", "send"], { terminal: handle, text, enter: true, ...envOpt(environment) }, "send");
     },
+
   };
 }

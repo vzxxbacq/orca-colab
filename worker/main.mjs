@@ -87,6 +87,95 @@ export function pickWorktreeRow(rows, { workspaceName, branch }) {
   return byName.length === 1 ? byName[0] : null;
 }
 
+// Actions whose outcome is fully determined by their input: the panel shows them at once and the
+// server confirms in the next batch. Everything else waits for the server's answer.
+export const OPTIMISTIC_ACTIONS = new Set([
+  "updatePolicy",
+  "setBudget",
+  "setCredits",
+  "toggleKeep",
+  "clearFinishedTasks",
+  "authSwitch",
+]);
+const FLUSH_INTERVAL_MS = 2000;
+
+function coalesceKey(op) {
+  switch (op.action) {
+    case "updatePolicy":
+    case "authSwitch":
+      return op.action;
+    case "setBudget":
+    case "setCredits":
+      return `${op.action}:${op.input?.account || ""}`;
+    case "toggleKeep":
+      return `toggleKeep:${op.input?.session || ""}`;
+    case "clearFinishedTasks":
+      return `clearFinishedTasks:${op.input?.sessionName || ""}`;
+    default:
+      return null;
+  }
+}
+
+// Folds a new op into the queue: a later value of the same setting replaces the earlier one (which
+// resolves as superseded) and two toggles of the same flag cancel out.
+export function coalesceOps(queue, op) {
+  const key = coalesceKey(op);
+  if (!key) {
+    return [...queue, op];
+  }
+  const idx = queue.findIndex((q) => coalesceKey(q) === key);
+  if (idx === -1) {
+    return [...queue, op];
+  }
+  const prev = queue[idx];
+  const rest = queue.filter((_, i) => i !== idx);
+  if (op.action === "toggleKeep") {
+    prev.resolve?.({ superseded: true });
+    op.resolve?.({ superseded: true });
+    return rest;
+  }
+  prev.resolve?.({ superseded: true });
+  return [...rest, op];
+}
+
+export function applyOptimisticOps(snapshot, ops) {
+  if (!ops.length) {
+    return snapshot;
+  }
+  const snap = structuredClone(snapshot);
+  for (const { action, input = {} } of ops) {
+    if (action === "updatePolicy") {
+      snap.policy = {
+        ...snap.policy,
+        allowedGpus: Array.isArray(input.allowedGpus) && input.allowedGpus.length ? input.allowedGpus.map((g) => String(g).toUpperCase()) : snap.policy?.allowedGpus,
+        maxConcurrentSessions:
+          typeof input.maxConcurrentSessions === "number" ? Math.floor(input.maxConcurrentSessions) : snap.policy?.maxConcurrentSessions,
+      };
+    } else if (action === "setBudget" || action === "setCredits") {
+      const field = action === "setBudget" ? "budgetCu" : "estimatedBalanceCu";
+      const value = Number(action === "setBudget" ? input.budgetCu : input.balanceCu);
+      const account = input.account || snap.defaultAccount;
+      if (snap.credits && (!input.account || input.account === snap.defaultAccount)) {
+        snap.credits = { ...snap.credits, [field]: value };
+      }
+      if (snap.creditsByAccount?.[account]) {
+        snap.creditsByAccount[account] = { ...snap.creditsByAccount[account], [field]: value };
+      }
+    } else if (action === "toggleKeep") {
+      snap.sessions = (snap.sessions || []).map((x) => (x.name === input.session ? { ...x, keep: !x.keep } : x));
+    } else if (action === "clearFinishedTasks") {
+      snap.tasks = (snap.tasks || []).filter(
+        (t) => t.status === "running" || (input.sessionName && t.sessionName !== input.sessionName),
+      );
+    } else if (action === "authSwitch" && input.account) {
+      snap.defaultAccount = input.account;
+      snap.auth = snap.authByAccount?.[input.account] || snap.auth;
+      snap.credits = snap.creditsByAccount?.[input.account] || snap.credits;
+    }
+  }
+  return snap;
+}
+
 // Orca reports the machine it runs on as host "local" (observed on 1.4.254), not as null.
 export function isRemoteHostId(hostId) {
   return typeof hostId === "string" && hostId.trim() !== "" && hostId.trim().toLowerCase() !== "local";
@@ -436,6 +525,12 @@ class TerminalBridge {
     this.environmentName = null;
     this.environmentResolved = false;
     this.autoBridge = true;
+    this.queue = [];
+    this.inFlight = null;
+    this.flushTimer = null;
+    this.lastFlushAt = 0;
+    this.controlPending = {};
+    this.isPanelActive = () => true;
     this.storageKey = `bridgeTerminal:${workspace.workspaceId || `name:${workspace.workspaceName}`}`;
   }
 
@@ -463,6 +558,10 @@ class TerminalBridge {
       manualCommand: this.manualCommand,
       autoBridge: this.autoBridge,
       transport: this.transport,
+      pendingOps: this.queue.length + (this.inFlight?.ops.length || 0) + this.pending.size,
+      remoteProtocol: this.remoteProtocol || null,
+      outdatedWatch: Boolean(this.latestSnap) && (this.remoteProtocol || 1) < 2,
+      lastCliMs: this.helper?.recentTimings?.().at(-1)?.ms ?? null,
       helper: this.helper
         ? {
             available: this.helper.available,
@@ -684,30 +783,45 @@ class TerminalBridge {
     return null;
   }
 
+  // Reads are round trips too: 2 s while the panel is open or an answer is due, 10 s otherwise.
   start() {
-    this.timers.push(setInterval(() => {
-      if (this.polling) return;
-      this.polling = this.poll().finally(() => {
-        this.polling = null;
-      });
-    }, this.transport === "cli" ? 2500 : 1500));
+    this.lastPollAt = 0;
+    this.timers.push(
+      setInterval(() => {
+        const busy = this.inFlight || this.pending.size > 0 || this.isPanelActive();
+        const interval = busy ? 2000 : 10_000;
+        if (Date.now() - this.lastPollAt >= interval) {
+          this.lastPollAt = Date.now();
+          void this.poll();
+        }
+      }, 500),
+    );
     void this.poll();
   }
 
   stop() {
     for (const t of this.timers) clearInterval(t);
     this.timers = [];
+    clearTimeout(this.flushTimer);
+    this.flushTimer = null;
     for (const p of this.pending.values()) {
       clearTimeout(p.timer);
       p.reject(new Error("Bridge stopped."));
     }
     this.pending.clear();
+    if (this.inFlight) {
+      clearTimeout(this.inFlight.timer);
+      for (const op of this.inFlight.ops) op.reject(new Error("Bridge stopped."));
+      this.inFlight = null;
+    }
+    for (const op of this.queue.splice(0)) op.reject(new Error("Bridge stopped."));
   }
 
   async rememberTerminal(id) {
     this.terminalId = id;
     this.cliCursor = undefined;
     this.liveSent = null;
+    this.selectSent = null;
     try {
       await this.orca.storage?.set?.(this.storageKey, id);
     } catch {
@@ -800,11 +914,13 @@ class TerminalBridge {
     return this.sendMethod;
   }
 
-  // Sends are serialised: two concurrent writes to one pty interleave their text and Enter keys.
-  sendRaw(text) {
+  // Sends are serialised: two concurrent writes to one pty interleave their text and Enter keys. The
+  // ";;" terminator lets `watch` recover when another client's line still merges with ours.
+  sendRaw(command) {
     if (!this.terminalId) {
       return;
     }
+    const text = `${command} ;;`;
     const terminalId = this.terminalId;
     this.sendChain = (this.sendChain || Promise.resolve()).then(async () => {
       if (process.env.ORCA_COLAB_BRIDGE_DEBUG) {
@@ -822,13 +938,30 @@ class TerminalBridge {
     });
   }
 
-  async poll() {
+  // Single-flight: concurrent reads would each fetch the same window and delay the one that matters.
+  poll() {
+    if (this.polling) {
+      return this.polling;
+    }
+    this.polling = this.pollNow().finally(() => {
+      this.polling = null;
+    });
+    return this.polling;
+  }
+
+  async pollNow() {
     try {
       const terminalId = await this.ensureTerminal();
       if (!terminalId) {
         return;
       }
       const lines = await this.readTerminal(terminalId);
+      if (process.env.ORCA_COLAB_BRIDGE_DEBUG) {
+        const kinds = [];
+        const probe = new FrameAssembler();
+        for (const f of probe.ingest(lines.join("\n"))) kinds.push(`${f.kind}${f.kind === "res" ? ":" + f.payload.reqId : ""}`);
+        this.orca.log(`bridge read ${lines.length} lines via ${this.transport} cursor=${this.cliCursor ?? "-"} pending=${this.pending.size} frames=[${kinds.join(",")}]`);
+      }
       if (!this.lastFrameAt && lines.some((l) => WATCH_UNSUPPORTED_RE.test(String(l)))) {
         this.deadTerminals.add(terminalId);
         this.markWatchUnsupported();
@@ -852,6 +985,7 @@ class TerminalBridge {
 
   handleFrame({ kind, payload }) {
     if (kind === "snap") {
+      this.remoteProtocol = Number(payload.origin?.protocol) || 1;
       this.latestSnap = payload;
       this.onSnapshot(this.decorate(payload), { stateChanged: true });
       const out = payload.activeTaskOutput;
@@ -866,6 +1000,9 @@ class TerminalBridge {
       return;
     }
     if (kind === "res") {
+      if (this.settleBatch(payload)) {
+        return;
+      }
       const entry = this.pending.get(payload.reqId);
       if (!entry) {
         return;
@@ -884,7 +1021,12 @@ class TerminalBridge {
     }
   }
 
-  decorate(snap) {
+  optimisticOps() {
+    return [...(this.inFlight?.ops || []), ...this.queue].filter((op) => op.optimistic);
+  }
+
+  decorate(snapInput) {
+    const snap = applyOptimisticOps(snapInput, this.optimisticOps());
     return {
       ...snap,
       origin: {
@@ -898,16 +1040,23 @@ class TerminalBridge {
   }
 
   selectTask(taskId) {
-    this.sendRaw(`select ${taskId || ""}`.trim());
+    const next = taskId || "";
+    if (this.selectSent === next) {
+      return;
+    }
+    this.selectSent = next;
+    this.controlPending.select = next;
+    this.scheduleFlush();
   }
 
   setLive(on) {
-    const next = on ? 1 : 0;
+    const next = Boolean(on);
     if (this.liveSent === next) {
       return;
     }
     this.liveSent = next;
-    this.sendRaw(`live ${next}`);
+    this.controlPending.live = next;
+    this.scheduleFlush();
   }
 
   // Never blocks: the panel polls every 2 s and a slow answer would time out and freeze the old view.
@@ -945,18 +1094,147 @@ class TerminalBridge {
       throw new Error(this.lastError || "Colab bridge terminal is not available yet; try again in a moment.");
     }
     this.reqCounter += 1;
-    const reqId = `r${Date.now().toString(36)}${this.reqCounter}`;
-    const b64 = Buffer.from(JSON.stringify(input ?? {}), "utf8").toString("base64");
-    const timeoutMs = hooks.timeoutMs || ACTION_TIMEOUTS_MS[action] || 45_000;
+    const op = {
+      id: `o${this.reqCounter}`,
+      action,
+      input: input ?? {},
+      hooks,
+      optimistic: OPTIMISTIC_ACTIONS.has(action),
+      timeoutMs: hooks.timeoutMs || ACTION_TIMEOUTS_MS[action] || 45_000,
+    };
     const promise = new Promise((resolve, reject) => {
+      op.resolve = resolve;
+      op.reject = reject;
+    });
+    this.queue = coalesceOps(this.queue, op);
+    this.scheduleFlush();
+    if (op.optimistic) {
+      // The panel sees the change now; a failure comes back as a colab.actionFailed event.
+      promise.catch(() => {});
+      return { optimistic: true };
+    }
+    return promise;
+  }
+
+  // Sends run at most every FLUSH_INTERVAL_MS and never overlap: an idle bridge flushes at once, a
+  // busy one folds everything that arrives meanwhile into the next batch.
+  scheduleFlush() {
+    if (this.flushTimer || this.inFlight) {
+      return;
+    }
+    const wait = Math.max(0, FLUSH_INTERVAL_MS - (Date.now() - this.lastFlushAt));
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null;
+      void this.flush();
+    }, wait);
+  }
+
+  async flush() {
+    if (this.inFlight || !this.terminalId) {
+      return;
+    }
+    const hasControl = Object.keys(this.controlPending).length > 0;
+    if (this.queue.length === 0 && !hasControl) {
+      return;
+    }
+    const ops = this.queue.splice(0);
+    const control = this.controlPending;
+    this.controlPending = {};
+    if ((this.remoteProtocol || 1) < 2) {
+      this.flushLegacy(ops, control);
+      return;
+    }
+    this.reqCounter += 1;
+    const reqId = `b${Date.now().toString(36)}${this.reqCounter}`;
+    const payload = { ops: ops.map(({ id, action, input }) => ({ id, action, input })), ...control };
+    const timeoutMs = Math.max(20_000, ...ops.map((o) => o.timeoutMs));
+    const timer = setTimeout(() => {
+      if (this.inFlight?.reqId !== reqId) return;
+      this.inFlight = null;
+      for (const op of ops) {
+        op.reject(new Error(`Timed out waiting for the remote ${op.action} to finish.`));
+        if (op.optimistic) this.onEvent("actionFailed", { action: op.action, error: "timed out" }, this);
+      }
+      this.scheduleFlush();
+    }, timeoutMs);
+    this.inFlight = { reqId, ops, timer };
+    this.lastFlushAt = Date.now();
+    const b64 = Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
+    this.sendRaw(`batch ${reqId} ${b64}`);
+    void this.readUntilSettled();
+  }
+
+  // A `watch` older than protocol 2 gets one line per op; answers arrive through the pending map.
+  flushLegacy(ops, control) {
+    if (typeof control.select === "string") this.sendRaw(`select ${control.select}`.trim());
+    if (typeof control.live === "boolean") this.sendRaw(`live ${control.live ? 1 : 0}`);
+    for (const op of ops) {
+      this.reqCounter += 1;
+      const reqId = `r${Date.now().toString(36)}${this.reqCounter}`;
       const timer = setTimeout(() => {
         this.pending.delete(reqId);
-        reject(new Error(`Timed out waiting for the remote ${action} to finish.`));
-      }, timeoutMs);
-      this.pending.set(reqId, { resolve, reject, timer, hooks });
-    });
-    this.sendRaw(`call ${reqId} ${action} ${b64}`);
-    return promise;
+        op.reject(new Error(`Timed out waiting for the remote ${op.action} to finish.`));
+        if (op.optimistic) this.onEvent("actionFailed", { action: op.action, error: "timed out" }, this);
+      }, op.timeoutMs);
+      this.pending.set(reqId, {
+        resolve: op.resolve,
+        reject: (err) => {
+          op.reject(err);
+          if (op.optimistic) this.onEvent("actionFailed", { action: op.action, error: err?.message || String(err) }, this);
+        },
+        timer,
+        hooks: op.hooks,
+      });
+      const b64 = Buffer.from(JSON.stringify(op.input ?? {}), "utf8").toString("base64");
+      this.sendRaw(`call ${reqId} ${op.action} ${b64}`);
+    }
+    this.lastFlushAt = Date.now();
+    void this.readUntilSettled();
+  }
+
+  settleBatch(payload) {
+    const flight = this.inFlight;
+    if (!flight || flight.reqId !== payload.reqId) {
+      return false;
+    }
+    clearTimeout(flight.timer);
+    this.inFlight = null;
+    const results = new Map((payload.results || []).map((r) => [r.id, r]));
+    for (const op of flight.ops) {
+      const r = results.get(op.id);
+      if (!r) {
+        op.reject(new Error(payload.error || `no result for ${op.action}`));
+        continue;
+      }
+      if (r.ok) {
+        op.resolve(r.result ?? {});
+      } else {
+        op.reject(new Error(r.error || "remote action failed"));
+        if (op.optimistic) this.onEvent("actionFailed", { action: op.action, error: r.error }, this);
+      }
+    }
+    if (this.queue.length > 0 || Object.keys(this.controlPending).length > 0) {
+      this.scheduleFlush();
+    }
+    return true;
+  }
+
+  // While an answer is outstanding, read every 400 ms instead of waiting for the regular tick.
+  async readUntilSettled() {
+    if (this.fastReading) return;
+    this.fastReading = true;
+    try {
+      const deadline = Date.now() + 60_000;
+      let wait = 500;
+      while ((this.inFlight || this.pending.size > 0) && Date.now() < deadline) {
+        await this.sendChain?.catch?.(() => {});
+        await new Promise((r) => setTimeout(r, wait));
+        await this.poll().catch(() => {});
+        wait = Math.min(1500, Math.round(wait * 1.5));
+      }
+    } finally {
+      this.fastReading = false;
+    }
   }
 }
 
@@ -999,11 +1277,17 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
     }
   };
 
+  let lastPanelRequestAt = 0;
+  const isPanelActive = () => Date.now() - lastPanelRequestAt < 10_000;
+
   const onRemoteEvent = (name, payload, bridge) => {
     if (bridge !== activeBridge) {
       return;
     }
-    if (name === "oauthUrl") {
+    if (name === "actionFailed") {
+      orca.panels.post("colab.actionFailed", payload);
+      void bridge.snapshot().then((snap) => orca.panels.post("colab.stateChanged", snap));
+    } else if (name === "oauthUrl") {
       orca.panels.post("colab.oauthUrl", { ...payload, manual: true, origin: "remote" });
     } else if (name === "provisioningProgress") {
       orca.panels.post("colab.provisioningProgress", payload);
@@ -1033,7 +1317,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
     if (ids.length === 0 || !remoteHelper.available) {
       return null;
     }
-    if (Date.now() - localTerminalCache.at > 5000) {
+    if (Date.now() - localTerminalCache.at > 30_000) {
       // workspace.list ids already are `identity:<key>` selectors; anything else is a repo::path id.
       const selector = String(localRow.id).startsWith("identity:") ? localRow.id : `id:${localRow.id}`;
       const listed = await remoteHelper.listTerminals(selector);
@@ -1118,6 +1402,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
         },
       });
       bridge.autoBridge = autoBridge !== false;
+      bridge.isPanelActive = isPanelActive;
       remoteBridges.set(bridgeKey, bridge);
       bridge.start();
     } else {
@@ -1253,6 +1538,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
             bin: remoteHelper.orcaBin,
             activeWorktree: await remoteHelper.activeWorktree(),
             environments: await remoteHelper.listEnvironments(),
+            recentTimingsMs: remoteHelper.recentTimings(),
           }
         : { bin: null },
       hostHas: {
@@ -1270,6 +1556,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
   });
 
   orca.panels.handle("colab.dashboard", async (input = {}) => {
+    lastPanelRequestAt = Date.now();
     const bridge = await resolveBridge();
     if (input?.selectedTaskId) {
       bridge.selectTask(String(input.selectedTaskId));

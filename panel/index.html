@@ -1702,6 +1702,12 @@
           dot.className = "status-dot ok";
           statusTxt.textContent = `${gpuName} Active · ${s0.ip || "Direct API"}`;
         }
+        if (snap.bridge?.pendingOps > 0) {
+          statusTxt.textContent += " · syncing…";
+        }
+        if (snap.bridge?.outdatedWatch) {
+          statusTxt.textContent += " · bridge runs an older orca-colab, close its terminal to restart it";
+        }
 
         // Decide which view to show if not explicitly overridden by user navigation
         if (!userForcedView) {
@@ -2812,6 +2818,13 @@
         } finally {
           btn.disabled = false;
         }
+      });
+
+      onWorkerEvent("colab.actionFailed", (payload) => {
+        showNotice(
+          `${payload?.action || "Change"} was not applied on the server: ${payload?.error || "unknown error"}`,
+          "error",
+        );
       });
 
       onWorkerEvent("colab.taskOutput", (payload) => {

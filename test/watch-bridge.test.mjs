@@ -7,7 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { FrameAssembler } from "../bin/lib/bridge-frames.mjs";
 import { readLedgerEvents } from "../bin/lib/credit-ledger.mjs";
-import { parseControlLine, snapshotFingerprint } from "../bin/commands/watch.mjs";
+import { parseControlLine, parseControlLines, snapshotFingerprint } from "../bin/commands/watch.mjs";
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "bin", "orca-colab.mjs");
 
@@ -89,6 +89,22 @@ test("watch answers a call over stdin with a res frame and emits snap frames", a
       if (f) r(f);
     });
   });
+  const batchB64 = Buffer.from(JSON.stringify({ ops: [{ id: "x1", action: "setBudget", input: { budgetCu: 43 } }, { id: "x2", action: "nope", input: {} }], live: false })).toString("base64");
+  const batchRes = new Promise((r) => {
+    child.stdout.on("data", () => {
+      const f = frames.find((x) => x.kind === "res" && x.payload.reqId === "b1");
+      if (f) r(f);
+    });
+  });
+  child.stdin.write(`batch b1 ${batchB64} ;;\n`);
+  const batch = await Promise.race([
+    batchRes,
+    new Promise((_, rej) => setTimeout(() => rej(new Error("no batch res within 10s")), 10_000)),
+  ]);
+  assert.equal(batch.payload.ok, false);
+  assert.deepEqual(batch.payload.results.map((r) => [r.id, r.ok]), [["x1", true], ["x2", false]]);
+  assert.equal(readLedgerEvents(tmpHome).filter((e) => e.type === "budget.set").at(-1).budgetCu, 43);
+
   child.stdin.write("call req2 nope e30=\n");
   const bad = await Promise.race([
     unknown,
@@ -123,4 +139,64 @@ test("pickWorktreeRow prefers the live row whose name and branch both match", as
   assert.equal(pickWorktreeRow(rows, { workspaceName: "remote-host-bridge", branch: "remote-host-bridge" }).id, "c");
   assert.equal(pickWorktreeRow(rows, { workspaceName: "main", branch: null }), null);
   assert.equal(pickWorktreeRow(rows, { workspaceName: "nope", branch: "main" }), null);
+});
+
+test("parseControlLines splits commands that two clients merged into one line", () => {
+  const b64 = Buffer.from(JSON.stringify({ budgetCu: 5 })).toString("base64");
+  const merged = `call r9 setBudget ${b64} ;;live 0 ;;`;
+  assert.deepEqual(parseControlLines(merged), [
+    { verb: "call", reqId: "r9", action: "setBudget", input: { budgetCu: 5 } },
+    { verb: "live", on: false },
+  ]);
+  assert.deepEqual(parseControlLines(`live 1 ;;call r2 ping x ;;`).map((c) => c.verb), ["live", "call"]);
+  assert.deepEqual(parseControlLines("snap"), [{ verb: "snap" }]);
+  assert.deepEqual(parseControlLines(`call r3 setBudget ${b64}`), [
+    { verb: "call", reqId: "r3", action: "setBudget", input: { budgetCu: 5 } },
+  ]);
+});
+
+test("parseControlLines decodes a batch and splits merged lines from two clients", () => {
+  const b64 = Buffer.from(JSON.stringify({ ops: [{ id: "o1", action: "setBudget", input: { budgetCu: 5 } }], live: true })).toString("base64");
+  const merged = `batch b1 ${b64} ;;live 0 ;;`;
+  const parsed = parseControlLines(merged);
+  assert.equal(parsed.length, 2);
+  assert.equal(parsed[0].verb, "batch");
+  assert.equal(parsed[0].reqId, "b1");
+  assert.deepEqual(parsed[0].ops, [{ id: "o1", action: "setBudget", input: { budgetCu: 5 } }]);
+  assert.equal(parsed[0].control.live, true);
+  assert.deepEqual(parsed[1], { verb: "live", on: false });
+});
+
+test("coalesceOps keeps the last value per setting and cancels paired toggles", async () => {
+  const { coalesceOps, applyOptimisticOps } = await import("../worker/main.mjs");
+  const mk = (action, input) => ({ id: Math.random().toString(36), action, input, resolve: () => {}, optimistic: true });
+  let q = [];
+  q = coalesceOps(q, mk("setBudget", { budgetCu: 10 }));
+  q = coalesceOps(q, mk("setBudget", { budgetCu: 20 }));
+  q = coalesceOps(q, mk("toggleKeep", { session: "s1" }));
+  q = coalesceOps(q, mk("toggleKeep", { session: "s1" }));
+  q = coalesceOps(q, mk("submitTask", { command: "a" }));
+  q = coalesceOps(q, mk("submitTask", { command: "b" }));
+  assert.deepEqual(q.map((o) => o.action), ["setBudget", "submitTask", "submitTask"]);
+  assert.equal(q[0].input.budgetCu, 20);
+
+  const snap = {
+    defaultAccount: "default",
+    credits: { budgetCu: null, estimatedBalanceCu: 100 },
+    creditsByAccount: { default: { budgetCu: null, estimatedBalanceCu: 100 } },
+    policy: { allowedGpus: ["T4"], maxConcurrentSessions: 1 },
+    sessions: [{ name: "s1", keep: false }],
+    tasks: [{ id: "t1", status: "running" }, { id: "t2", status: "succeeded" }],
+  };
+  const out = applyOptimisticOps(snap, [
+    mk("setBudget", { budgetCu: 20 }),
+    mk("updatePolicy", { allowedGpus: ["t4", "l4"] }),
+    mk("toggleKeep", { session: "s1" }),
+    mk("clearFinishedTasks", {}),
+  ]);
+  assert.equal(out.credits.budgetCu, 20);
+  assert.deepEqual(out.policy.allowedGpus, ["T4", "L4"]);
+  assert.equal(out.sessions[0].keep, true);
+  assert.deepEqual(out.tasks.map((t) => t.id), ["t1"]);
+  assert.equal(snap.credits.budgetCu, null, "input snapshot is not mutated");
 });

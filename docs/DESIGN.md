@@ -268,6 +268,15 @@ No outputs committed. No pip packages.
   in the first project that needs it and shared by every other project on that server; `autoBridge: false`
   stops the plugin from opening it and the panel shows the `watch` command to run by hand. Settings:
   `remoteCliCommand` (empty → `cliCommand`), `autoBridge` (default true). Capability `terminal:read` added.
+  Protocol (v2): every control line ends in `;;` so lines merged by two clients typing into the same
+  terminal split cleanly; `batch <id> <b64 {ops, select?, live?}>` carries every queued operation in one
+  round trip and answers with one frame; snapshots carry `origin.protocol`, and a client talking to an
+  older `watch` falls back to one `call` per operation. The worker queues operations, flushes at once
+  when idle and otherwise every 2 s, coalesces repeated settings and paired toggles, and applies
+  deterministic operations (policy, budget, balance, keep, clear history, account switch) to the shown
+  snapshot immediately; a server-side failure surfaces as `colab.actionFailed`. CLI calls run in two
+  lanes (one writer, one reader), reads are cursor-based and adaptive (2 s while the panel is open or an
+  answer is due, 10 s otherwise).
   A fully hidden bridge is not possible today: terminals are the only channel Orca gives a plugin to a
   remote host, and `terminal.create` has no hidden mode; anything else (an extra port, SSH) would not work
   for every Orca server a store user may have.
