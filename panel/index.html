@@ -1874,6 +1874,12 @@
         rBadge.className = `badge ${runningCount > 0 ? "info" : "neutral"}`;
         rBadge.textContent = `${runningCount} running`;
 
+        if (tasks.length > 0 && tasks[0].id !== window.__lastSeenNewestTaskId) {
+          if (window.__lastSeenNewestTaskId) {
+            selectedTaskId = tasks[0].id;
+          }
+          window.__lastSeenNewestTaskId = tasks[0].id;
+        }
         if (!selectedTaskId && snap.activeTaskOutput?.taskId) {
           selectedTaskId = snap.activeTaskOutput.taskId;
         }
@@ -2274,11 +2280,14 @@
         }
       });
 
+      let pollTickCount = 0;
       setInterval(() => {
-        if (dashboardState?.provisioning?.active) {
-          refreshAll(false);
-        }
-      }, 2500);
+        pollTickCount += 1;
+        const hasActiveSession =
+          (dashboardState?.sessions || []).some((s) => s.state !== "zombie");
+        const includeLive = hasActiveSession && pollTickCount % 5 === 0;
+        refreshAll(includeLive);
+      }, 2000);
 
       onWorkerEvent("colab.oauthUrl", (payload) => {
         if (payload?.authUrl && typeof orcaApi?.shell?.openExternal === "function") {

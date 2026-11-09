@@ -184,6 +184,9 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
   const budgetNotifiedKeys = {};
   let selectedTaskId = null;
   let lastStreamedSnapshot = "";
+  let lastTasksListFingerprint = "";
+  let lastSessionsFingerprint = "";
+  let lastNewestTaskId = null;
   let provisioningState = { active: false, message: null, error: null };
 
   const notifyUser = async (message, tone = "info") => {
@@ -444,6 +447,35 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
   const broadcastTaskStreamIfChanged = () => {
     try {
       const tasks = listTasks(homeDir);
+      const sessions = listSessions(homeDir);
+      const newestId = tasks[0]?.id || null;
+      if (newestId && newestId !== lastNewestTaskId) {
+        if (lastNewestTaskId !== null) {
+          selectedTaskId = newestId;
+        }
+        lastNewestTaskId = newestId;
+      }
+
+      const tasksFp = tasks
+        .map((t) => `${t.id}:${t.status}:${t.exitCode}:${t.finishedAt || ""}`)
+        .join("|");
+      const sessionsFp = sessions
+        .map((s) => `${s.name}:${s.state}:${s.keep ? 1 : 0}`)
+        .join("|");
+
+      if (
+        tasksFp !== lastTasksListFingerprint ||
+        sessionsFp !== lastSessionsFingerprint
+      ) {
+        lastTasksListFingerprint = tasksFp;
+        lastSessionsFingerprint = sessionsFp;
+        buildDashboardSnapshot({ includeLiveMetrics: false })
+          .then((snap) => {
+            orca.panels.post("colab.stateChanged", snap);
+          })
+          .catch(() => {});
+      }
+
       const target =
         (selectedTaskId && tasks.find((t) => t.id === selectedTaskId)) ||
         tasks.find((t) => t.status === "running") ||
