@@ -1,6 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import { CliError, writeJson } from "../lib/cli-output.mjs";
+import {
+  execCommandOverTty,
+  runInteractiveTtySession,
+} from "../lib/colab-api-client.mjs";
 import { withSessionActivity } from "../lib/session-activity.mjs";
 import { resolveSession } from "../lib/session-store.mjs";
 import { buildSshExecArgs } from "../lib/ssh-exec.mjs";
@@ -109,14 +113,53 @@ export async function run(
     attach: opts.attach ?? null,
   });
 
-  const sshArgs = buildSshExecArgs({
-    ip: session.ip,
-    remoteCommand: [remoteScript],
-    homeDir,
-    tty: Boolean(stdinIsTTY && !json && !opts.detach),
-  });
-
   const execute = async () => {
+    if (!session.ip && session.colabRuntime?.baseUrl && session.colabRuntime?.token) {
+      const joinedCmd = cmdArgs.join(" ").trim();
+      const isInteractiveShell =
+        stdinIsTTY &&
+        !json &&
+        !opts.detach &&
+        (joinedCmd === "bash" || joinedCmd === "bash -l" || joinedCmd === "sh");
+
+      if (isInteractiveShell) {
+        return await runInteractiveTtySession({
+          baseUrl: session.colabRuntime.baseUrl,
+          proxyToken: session.colabRuntime.token,
+          cwd: effectiveCwd,
+        });
+      }
+
+      const res = await execCommandOverTty({
+        baseUrl: session.colabRuntime.baseUrl,
+        proxyToken: session.colabRuntime.token,
+        command: remoteScript,
+        cwd: effectiveCwd,
+        onOutput: !json ? (chunk) => stdout.write(chunk) : null,
+      });
+
+      if (json) {
+        writeJson(
+          {
+            ok: res.ok,
+            session: session.name,
+            exitCode: res.exitCode,
+            stdout: res.stdout,
+            stderr: res.stderr,
+          },
+          stdout,
+        );
+      }
+      return res.exitCode;
+    }
+
+    const sshArgs = buildSshExecArgs({
+      ip: session.ip,
+      remoteCommand: [remoteScript],
+      homeDir,
+      tty: Boolean(stdinIsTTY && !json && !opts.detach),
+    });
+
     const res = spawnSsh("ssh", sshArgs, {
       encoding: "utf8",
       stdio: json ? ["ignore", "pipe", "pipe"] : "inherit",

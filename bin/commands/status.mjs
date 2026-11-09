@@ -20,7 +20,9 @@ export async function run(
     sessions.map(async (session) => {
       const probe = session.ip
         ? await probeOnce({ host: session.ip, port: 22, timeoutMs: 3000 })
-        : { ok: false, reason: "no-ip" };
+        : session.colabRuntime?.baseUrl
+          ? { ok: session.state !== "zombie", reason: "colab-tty" }
+          : { ok: false, reason: "no-ip" };
       const createdMs = Date.parse(session.createdAt);
       const ageSeconds = Number.isNaN(createdMs)
         ? 0

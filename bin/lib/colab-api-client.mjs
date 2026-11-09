@@ -502,3 +502,358 @@ export async function runBootstrapOverTty({
     }
   });
 }
+
+export async function execCommandOverTty({
+  baseUrl,
+  proxyToken,
+  command,
+  cwd = null,
+  envVars = {},
+  stdinBase64 = null,
+  timeoutMs = 3_600_000,
+  WebSocketImpl = globalThis.WebSocket,
+  onOutput = null,
+  signal = null,
+} = {}) {
+  const runId = randomBytes(6).toString("hex");
+  const startMarker = `__ORCA_START_${runId}__`;
+  const endPrefix = `__ORCA_END_${runId}:`;
+  const endSuffix = `__`;
+
+  const payload = JSON.stringify({
+    cmd: Array.isArray(command) ? command.join(" ") : String(command || ""),
+    cwd: cwd || null,
+    env: envVars || {},
+    stdinB64: stdinBase64 || null,
+    startMarker,
+    endPrefix,
+    endSuffix,
+  });
+  const payloadB64 = Buffer.from(payload, "utf8").toString("base64");
+
+  const pyRunner = [
+    "import base64, json, os, subprocess, sys",
+    `cfg = json.loads(base64.b64decode("${payloadB64}").decode("utf-8"))`,
+    'if cfg.get("cwd"):',
+    '    os.makedirs(cfg["cwd"], exist_ok=True)',
+    '    os.chdir(cfg["cwd"])',
+    "env = os.environ.copy()",
+    'for k, v in (cfg.get("env") or {}).items():',
+    "    env[str(k)] = str(v)",
+    'sys.stdout.write("\\n" + cfg["startMarker"] + "\\n")',
+    "sys.stdout.flush()",
+    'stdin_bytes = base64.b64decode(cfg["stdinB64"]) if cfg.get("stdinB64") else None',
+    'proc = subprocess.Popen(cfg["cmd"], shell=True, env=env, stdin=subprocess.PIPE if stdin_bytes is not None else subprocess.DEVNULL, stdout=sys.stdout, stderr=sys.stderr)',
+    "if stdin_bytes is not None:",
+    "    proc.stdin.write(stdin_bytes)",
+    "    proc.stdin.close()",
+    "rc = proc.wait()",
+    'sys.stdout.write("\\n" + cfg["endPrefix"] + str(rc) + cfg["endSuffix"] + "\\n")',
+    "sys.stdout.flush()",
+  ].join("\n");
+
+  const pyB64 = Buffer.from(pyRunner, "utf8").toString("base64");
+  const shellLine = `stty -echo 2>/dev/null; python3 -u -c 'import base64; exec(base64.b64decode("${pyB64}").decode("utf-8"))'\n`;
+
+  const wsUrl = new URL("/colab/tty", baseUrl);
+  wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
+
+  return await new Promise((resolve, reject) => {
+    let settled = false;
+    let rawBuffer = "";
+    let started = false;
+    let emittedLen = 0;
+
+    const ws = new WebSocketImpl(wsUrl.toString(), {
+      headers: {
+        ...COLAB_HEADERS,
+        [COLAB_PROXY_TOKEN_HEADER]: proxyToken,
+      },
+    });
+
+    const cleanup = () => {
+      clearTimeout(timer);
+      try {
+        ws.close();
+      } catch {
+        // Ignore close errors.
+      }
+    };
+
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(
+        new Error(
+          `Timed out executing command over /colab/tty after ${Math.round(timeoutMs / 1000)}s.`,
+        ),
+      );
+    }, timeoutMs);
+
+    if (signal) {
+      if (signal.aborted) {
+        settled = true;
+        cleanup();
+        reject(new Error("Command execution aborted."));
+        return;
+      }
+      signal.addEventListener(
+        "abort",
+        () => {
+          if (settled) return;
+          settled = true;
+          try {
+            ws.send(JSON.stringify({ data: "\x03\n" }));
+          } catch {
+            // Ignore.
+          }
+          cleanup();
+          reject(new Error("Command execution aborted."));
+        },
+        { once: true },
+      );
+    }
+
+    const processIncoming = (rawText) => {
+      let chunk = rawText;
+      try {
+        const parsed = JSON.parse(rawText);
+        if (parsed && typeof parsed.data === "string") {
+          chunk = parsed.data;
+        }
+      } catch {
+        // Raw text frame.
+      }
+
+      rawBuffer += chunk;
+
+      if (!started) {
+        const startIdx = rawBuffer.indexOf(startMarker);
+        if (startIdx === -1) {
+          return;
+        }
+        started = true;
+        const afterStart = startIdx + startMarker.length;
+        rawBuffer = rawBuffer.slice(afterStart).replace(/^\r?\n/, "");
+      }
+
+      const endRegex = new RegExp(`${endPrefix}(-?\\d+)${endSuffix}`);
+      const endMatch = rawBuffer.match(endRegex);
+      const cleanUpTo = endMatch ? endMatch.index : Math.max(0, rawBuffer.length - 48);
+
+      if (cleanUpTo > emittedLen) {
+        const delta = rawBuffer.slice(emittedLen, cleanUpTo);
+        emittedLen = cleanUpTo;
+        if (typeof onOutput === "function" && delta) {
+          onOutput(delta);
+        }
+      }
+
+      if (endMatch && !settled) {
+        settled = true;
+        const exitCode = Number.parseInt(endMatch[1], 10);
+        const fullOutput = rawBuffer.slice(0, endMatch.index).replace(/\r?\n$/, "");
+        cleanup();
+        resolve({
+          ok: exitCode === 0,
+          exitCode: Number.isFinite(exitCode) ? exitCode : 1,
+          stdout: fullOutput,
+          stderr: "",
+        });
+      }
+    };
+
+    const onOpen = () => {
+      ws.send(JSON.stringify({ cols: 160, rows: 45 }));
+      ws.send(JSON.stringify({ data: shellLine }));
+    };
+
+    if (typeof ws.addEventListener === "function") {
+      ws.addEventListener("open", onOpen);
+      ws.addEventListener("message", (event) => {
+        const raw =
+          typeof event.data === "string"
+            ? event.data
+            : Buffer.from(event.data).toString("utf8");
+        processIncoming(raw);
+      });
+      ws.addEventListener("error", (err) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(
+          new Error(
+            `Colab /colab/tty WebSocket error: ${err?.message || "connection failed"}`,
+          ),
+        );
+      });
+      ws.addEventListener("close", () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error("Colab /colab/tty WebSocket closed before command finished."));
+      });
+    } else if (typeof ws.on === "function") {
+      ws.on("open", onOpen);
+      ws.on("message", (data) => {
+        processIncoming(typeof data === "string" ? data : data.toString("utf8"));
+      });
+      ws.on("error", (err) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(err);
+      });
+      ws.on("close", () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        reject(new Error("Colab /colab/tty WebSocket closed before command finished."));
+      });
+    }
+  });
+}
+
+export async function queryGpuOverTty({
+  baseUrl,
+  proxyToken,
+  WebSocketImpl = globalThis.WebSocket,
+  signal = null,
+} = {}) {
+  try {
+    const res = await execCommandOverTty({
+      baseUrl,
+      proxyToken,
+      command:
+        "nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits 2>/dev/null || echo 'CPU,0,none'",
+      timeoutMs: 20_000,
+      WebSocketImpl,
+      signal,
+    });
+    const firstLine = (res.stdout || "")
+      .trim()
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .find(Boolean);
+    if (firstLine) {
+      const parts = firstLine.split(",").map((s) => s.trim());
+      if (parts[0] && parts[0] !== "CPU") {
+        return {
+          name: parts[0],
+          memoryTotalMiB: Number.parseInt(parts[1] || "0", 10) || null,
+          driverVersion: parts[2] || null,
+        };
+      }
+    }
+  } catch {
+    // Fall back below.
+  }
+  return {
+    name: "Colab Runtime",
+    memoryTotalMiB: null,
+    driverVersion: null,
+  };
+}
+
+export async function runInteractiveTtySession({
+  baseUrl,
+  proxyToken,
+  cwd = null,
+  WebSocketImpl = globalThis.WebSocket,
+} = {}) {
+  const wsUrl = new URL("/colab/tty", baseUrl);
+  wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
+
+  return await new Promise((resolve) => {
+    const ws = new WebSocketImpl(wsUrl.toString(), {
+      headers: {
+        ...COLAB_HEADERS,
+        [COLAB_PROXY_TOKEN_HEADER]: proxyToken,
+      },
+    });
+
+    const wasRaw = Boolean(process.stdin.isRaw);
+    const cleanup = (code = 0) => {
+      try {
+        if (process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
+          process.stdin.setRawMode(wasRaw);
+        }
+        process.stdin.pause();
+      } catch {
+        // Ignore.
+      }
+      try {
+        ws.close();
+      } catch {
+        // Ignore.
+      }
+      resolve(code);
+    };
+
+    const sendResize = () => {
+      try {
+        ws.send(
+          JSON.stringify({
+            cols: process.stdout.columns || 120,
+            rows: process.stdout.rows || 36,
+          }),
+        );
+      } catch {
+        // Ignore.
+      }
+    };
+
+    const onOpen = () => {
+      sendResize();
+      if (cwd) {
+        ws.send(JSON.stringify({ data: `cd ${JSON.stringify(cwd)} && clear\n` }));
+      }
+      if (process.stdin.isTTY && typeof process.stdin.setRawMode === "function") {
+        process.stdin.setRawMode(true);
+      }
+      process.stdin.resume();
+      process.stdin.on("data", (chunk) => {
+        try {
+          ws.send(JSON.stringify({ data: chunk.toString("utf8") }));
+        } catch {
+          // Ignore.
+        }
+      });
+      process.stdout.on("resize", sendResize);
+    };
+
+    const onMessage = (rawText) => {
+      try {
+        const parsed = JSON.parse(rawText);
+        if (parsed && typeof parsed.data === "string") {
+          process.stdout.write(parsed.data);
+          return;
+        }
+      } catch {
+        // Raw text.
+      }
+      process.stdout.write(rawText);
+    };
+
+    if (typeof ws.addEventListener === "function") {
+      ws.addEventListener("open", onOpen);
+      ws.addEventListener("message", (event) => {
+        const raw =
+          typeof event.data === "string"
+            ? event.data
+            : Buffer.from(event.data).toString("utf8");
+        onMessage(raw);
+      });
+      ws.addEventListener("close", () => cleanup(0));
+      ws.addEventListener("error", () => cleanup(1));
+    } else if (typeof ws.on === "function") {
+      ws.on("open", onOpen);
+      ws.on("message", (data) =>
+        onMessage(typeof data === "string" ? data : data.toString("utf8")),
+      );
+      ws.on("close", () => cleanup(0));
+      ws.on("error", () => cleanup(1));
+    }
+  });
+}

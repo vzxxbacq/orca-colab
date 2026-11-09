@@ -196,13 +196,15 @@ export default async function activate(orca) {
 
         let reachable = s.state !== "zombie";
         let liveMetrics = null;
-        if (includeLiveMetrics && s.ip && s.state !== "zombie") {
-          const probe = await probeSshBannerOnce({
-            host: s.ip,
-            port: 22,
-            timeoutMs: 2500,
-          }).catch(() => ({ ok: false }));
-          reachable = Boolean(probe?.ok);
+        if (includeLiveMetrics && s.state !== "zombie") {
+          if (s.ip) {
+            const probe = await probeSshBannerOnce({
+              host: s.ip,
+              port: 22,
+              timeoutMs: 2500,
+            }).catch(() => ({ ok: false }));
+            reachable = Boolean(probe?.ok);
+          }
 
           if (s.colabRuntime?.baseUrl && s.colabRuntime?.token) {
             try {
@@ -246,11 +248,11 @@ export default async function activate(orca) {
                     : null,
               };
             } catch {
-              // Fall back to SSH nvidia-smi below.
+              // Fall back to SSH nvidia-smi below if IP is present.
             }
           }
 
-          if (!liveMetrics && reachable) {
+          if (!liveMetrics && s.ip && reachable) {
             liveMetrics = queryLiveGpuMetricsViaSsh(s.ip, homeDir);
           }
         }
@@ -671,7 +673,7 @@ export default async function activate(orca) {
 
     provisioningState = {
       active: true,
-      message: `Assigning Colab ${gpu} runtime & bootstrapping Tailscale + sshd...`,
+      message: `Assigning Colab ${gpu} runtime via Google Colab Direct API...`,
       error: null,
     };
     orca.panels.post("colab.stateChanged", await buildDashboardSnapshot());

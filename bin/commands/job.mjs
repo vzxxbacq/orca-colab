@@ -10,6 +10,7 @@ import {
   log,
   writeJson,
 } from "../lib/cli-output.mjs";
+import { execCommandOverTty } from "../lib/colab-api-client.mjs";
 import { withSessionActivity } from "../lib/session-activity.mjs";
 import { readSession, resolveSession } from "../lib/session-store.mjs";
 import { buildSshExecArgs, execSshCapture } from "../lib/ssh-exec.mjs";
@@ -121,70 +122,105 @@ export async function executeTaskInline(
       envVars: envPairs,
     });
 
-    const sshArgs = buildSshExecArgs({
-      ip: session.ip,
-      remoteCommand: [remoteScript],
-      homeDir,
-      tty: false,
-    });
-
     appendTaskLog(
       task.id,
       `[task ${task.id}] started at ${new Date().toISOString()} on ${session.name} (${session.gpu?.name || "GPU"})\n$ ${task.command.join(" ")}\n`,
       homeDir,
     );
 
-    const exitCode = await new Promise((resolve) => {
-      const child = spawnChild("ssh", sshArgs, {
-        stdio: ["ignore", "pipe", "pipe"],
-        env,
-      });
-
+    let exitCode;
+    if (!session.ip && session.colabRuntime?.baseUrl && session.colabRuntime?.token) {
       writeTask(
         {
           ...task,
           cwd: effectiveCwd,
-          localPid: child.pid || process.pid,
+          localPid: process.pid,
           status: "running",
         },
         homeDir,
       );
-
-      child.stdout?.on("data", (chunk) => {
-        const text = chunk.toString("utf8");
-        appendTaskLog(task.id, text, homeDir);
-        if (streamToStdout) {
-          stdout.write(text);
-        }
-      });
-
-      child.stderr?.on("data", (chunk) => {
-        const text = chunk.toString("utf8");
-        appendTaskLog(task.id, text, homeDir);
-        if (streamToStdout) {
-          stderr.write(text);
-        }
-      });
-
-      child.on("error", (err) => {
+      try {
+        const ttyRes = await execCommandOverTty({
+          baseUrl: session.colabRuntime.baseUrl,
+          proxyToken: session.colabRuntime.token,
+          command: remoteScript,
+          cwd: effectiveCwd,
+          onOutput: (chunk) => {
+            appendTaskLog(task.id, chunk, homeDir);
+            if (streamToStdout) {
+              stdout.write(chunk);
+            }
+          },
+        });
+        exitCode = ttyRes.exitCode;
+      } catch (err) {
         appendTaskLog(
           task.id,
-          `\n[task ${task.id}] ssh error: ${err.message}\n`,
+          `\n[task ${task.id}] colab-tty error: ${err instanceof Error ? err.message : String(err)}\n`,
           homeDir,
         );
-        resolve(1);
+        exitCode = 1;
+      }
+    } else {
+      const sshArgs = buildSshExecArgs({
+        ip: session.ip,
+        remoteCommand: [remoteScript],
+        homeDir,
+        tty: false,
       });
 
-      child.on("close", (code, sig) => {
-        if (typeof code === "number") {
-          resolve(code);
-        } else if (sig) {
-          resolve(143);
-        } else {
+      exitCode = await new Promise((resolve) => {
+        const child = spawnChild("ssh", sshArgs, {
+          stdio: ["ignore", "pipe", "pipe"],
+          env,
+        });
+
+        writeTask(
+          {
+            ...task,
+            cwd: effectiveCwd,
+            localPid: child.pid || process.pid,
+            status: "running",
+          },
+          homeDir,
+        );
+
+        child.stdout?.on("data", (chunk) => {
+          const text = chunk.toString("utf8");
+          appendTaskLog(task.id, text, homeDir);
+          if (streamToStdout) {
+            stdout.write(text);
+          }
+        });
+
+        child.stderr?.on("data", (chunk) => {
+          const text = chunk.toString("utf8");
+          appendTaskLog(task.id, text, homeDir);
+          if (streamToStdout) {
+            stderr.write(text);
+          }
+        });
+
+        child.on("error", (err) => {
+          appendTaskLog(
+            task.id,
+            `\n[task ${task.id}] ssh error: ${err.message}\n`,
+            homeDir,
+          );
           resolve(1);
-        }
+        });
+
+        child.on("close", (code, sig) => {
+          if (typeof code === "number") {
+            resolve(code);
+          } else if (sig) {
+            resolve(143);
+          } else {
+            resolve(1);
+          }
+        });
       });
-    });
+    }
 
     const latest = readTask(task.id, homeDir, { reconcile: false }) || task;
     if (latest.status === "stopped") {
@@ -353,6 +389,13 @@ export function stopTaskById(
     } catch {
       // Ignore remote pkill failure if session already closed.
     }
+  } else if (session?.colabRuntime?.baseUrl && session?.colabRuntime?.token) {
+    execCommandOverTty({
+      baseUrl: session.colabRuntime.baseUrl,
+      proxyToken: session.colabRuntime.token,
+      command: `pkill -TERM -f "ORCA_TASK_ID=${task.id}" || true`,
+      timeoutMs: 6000,
+    }).catch(() => {});
   }
 
   if (task.localPid && task.localPid !== process.pid) {

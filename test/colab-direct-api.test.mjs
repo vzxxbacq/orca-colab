@@ -10,6 +10,7 @@ import { run as runUp } from "../bin/commands/up.mjs";
 import {
   assignRuntime,
   deleteRuntime,
+  execCommandOverTty,
   getConsumptionUserInfo,
   normalizeRuntimeSpec,
   runBootstrapOverTty,
@@ -346,6 +347,95 @@ test("up and down use Direct API without opening a browser when OAuth is connect
     assert.equal(credCode, 0);
     const credJson = JSON.parse(credIo.stdoutText);
     assert.equal(credJson.estimatedBalanceCu, 74.25);
+  } finally {
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+});
+
+test("Tailscale-free mode: up and execCommandOverTty work with only Google OAuth and no Tailscale config", async () => {
+  const homeDir = makeTempHome();
+  try {
+    saveOAuthCredentials(
+      "default",
+      {
+        refreshToken: "ref-ts-free",
+        accessToken: "valid-ts-free-token",
+        expiryDate: Date.now() + 3600_000,
+        email: "notailscale@example.com",
+      },
+      homeDir,
+    );
+
+    const upIo = makeBuffers();
+    const upCode = await runUp(["--gpu", "T4", "--name", "notail"], {
+      json: true,
+      stdout: upIo.stdout,
+      stderr: upIo.stderr,
+      env: {},
+      homeDir,
+      assignRuntimeFn: async () => ({
+        id: "rt-notail-01",
+        endpoint: "ep-notail-01",
+        baseUrl: "https://8080-rt-notail-01.colab.dev",
+        token: "proxy-tok-notail",
+        tokenExpiry: "2026-11-09T22:00:00Z",
+      }),
+      queryGpuTtyFn: async () => ({
+        name: "Tesla T4",
+        memoryTotalMiB: 15360,
+        driverVersion: "550.54.15",
+      }),
+      nowIso: () => "2026-11-09T12:30:00.000Z",
+    });
+
+    assert.equal(upCode, 0);
+    const sessionJson = JSON.parse(upIo.stdoutText);
+    assert.equal(sessionJson.name, "orca-colab-notail");
+    assert.equal(sessionJson.ip, "");
+    assert.equal(sessionJson.transport, "colab-tty");
+    assert.equal(sessionJson.gpu.name, "Tesla T4");
+    assert.equal(sessionJson.cuPerHour, 1.96);
+
+    const chunks = [];
+    class FakeExecWebSocket {
+      constructor() {
+        this.listeners = {};
+        setTimeout(() => this.listeners.open?.({}), 5);
+      }
+      addEventListener(ev, fn) {
+        this.listeners[ev] = fn;
+      }
+      send(raw) {
+        const frame = JSON.parse(raw);
+        if (typeof frame.data === "string" && frame.data.includes("python3 -u -c")) {
+          const b64Match = frame.data.match(/b64decode\("([^"]+)"\)/);
+          const pyCode = Buffer.from(b64Match[1], "base64").toString("utf8");
+          const cfgMatch = pyCode.match(/b64decode\("([^"]+)"\)/);
+          const cfg = JSON.parse(Buffer.from(cfgMatch[1], "base64").toString("utf8"));
+          setTimeout(() => {
+            this.listeners.message?.({
+              data: JSON.stringify({
+                data: `\n${cfg.startMarker}\nEpoch 1/1: loss=0.042\n${cfg.endPrefix}0${cfg.endSuffix}\n`,
+              }),
+            });
+          }, 5);
+        }
+      }
+      close() {}
+    }
+
+    const execRes = await execCommandOverTty({
+      baseUrl: "https://8080-rt-notail-01.colab.dev",
+      proxyToken: "proxy-tok-notail",
+      command: "python3 train.py",
+      WebSocketImpl: FakeExecWebSocket,
+      onOutput: (c) => chunks.push(c),
+    });
+
+    assert.equal(execRes.ok, true);
+    assert.equal(execRes.exitCode, 0);
+    assert.equal(execRes.stdout, "Epoch 1/1: loss=0.042");
+    assert.equal(chunks.join("").trim(), "Epoch 1/1: loss=0.042");
   } finally {
     rmSync(homeDir, { recursive: true, force: true });
   }

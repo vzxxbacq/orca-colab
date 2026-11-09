@@ -56,6 +56,10 @@ export function normalizeSession(input) {
     forwards: Array.isArray(input.forwards) ? input.forwards : [],
   };
 
+  if (typeof input.transport === "string" && input.transport) {
+    normalized.transport = input.transport;
+  }
+
   if (input.colabRuntime && typeof input.colabRuntime === "object") {
     normalized.colabRuntime = {
       id: typeof input.colabRuntime.id === "string" ? input.colabRuntime.id : "",

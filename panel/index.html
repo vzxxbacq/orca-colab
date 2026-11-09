@@ -811,159 +811,155 @@
 
       <!-- ================================================================= -->
       <!-- VIEW 1: STEP-BY-STEP SETUP HELPER WIZARD                          -->
-      <!-- Shown automatically on first run (!doctor.checks.config.ok)       -->
+      <!-- Shown automatically on first run (!oauthOk && !config.ok)         -->
       <!-- ================================================================= -->
       <div id="viewWizard" style="display: flex; flex-direction: column; gap: 10px">
         <div class="wizard-hero">
           <h2>Welcome to Colab GPU Helper</h2>
           <p>
-            Complete this one-time setup to turn Google Colab into a local-feeling
-            SSH &amp; task compute backend.
+            Sign in with your Google account to provision Colab GPUs and run
+            algorithm tasks directly—no Tailscale required.
           </p>
         </div>
 
-        <!-- 3-Step Progress Strip -->
-        <div class="stepper">
-          <div id="stepPill1" class="step-pill">
-            <span class="step-num" id="stepNum1">1</span>
-            <span>Environment</span>
+        <!-- 2-Mode Progress Strip -->
+        <div class="stepper" style="grid-template-columns: repeat(2, 1fr)">
+          <div id="stepPill3" class="step-pill current">
+            <span class="step-num" id="stepNum3">1</span>
+            <span>Google Colab Sign-In (Required)</span>
           </div>
           <div id="stepPill2" class="step-pill">
             <span class="step-num" id="stepNum2">2</span>
-            <span>Tailscale Key</span>
-          </div>
-          <div id="stepPill3" class="step-pill">
-            <span class="step-num" id="stepNum3">3</span>
-            <span>Google Sign-In</span>
+            <span>Tailscale P2P SSH (Optional)</span>
           </div>
         </div>
 
-        <!-- Step 1: Environment Check -->
-        <div class="card">
+        <!-- Primary Step: Google Account Sign-In -->
+        <div class="card" style="border-color: var(--accent-border)">
           <div class="card-header">
-            <div class="card-title">Step 1 · Local Prerequisites</div>
-            <span id="step1Badge" class="badge neutral">Checking</span>
-          </div>
-          <div class="env-grid">
-            <div class="env-item">
-              <div class="env-item-label">
-                <span>Tailscale</span>
-                <span id="envTsIcon">•</span>
-              </div>
-              <div class="env-item-val" id="envTsVal">--</div>
+            <div class="card-title" style="font-size: 13px">
+              Step 1 · Connect Google Colab Account
             </div>
-            <div class="env-item">
-              <div class="env-item-label">
-                <span>OpenSSH</span>
-                <span id="envSshIcon">•</span>
-              </div>
-              <div class="env-item-val" id="envSshVal">--</div>
-            </div>
-            <div class="env-item">
-              <div class="env-item-label">
-                <span>Workspace Sync</span>
-                <span id="envRsyncIcon">•</span>
-              </div>
-              <div class="env-item-val" id="envRsyncVal">--</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Step 2: Tailscale Auth Key & SSH Keypair -->
-        <div class="card">
-          <div class="card-header">
-            <div class="card-title">Step 2 · Tailscale Auth Key &amp; SSH Key</div>
-            <span id="step2Badge" class="badge warn">Required</span>
+            <span id="step3Badge" class="badge warn">Required</span>
           </div>
           <div class="card-subtitle">
-            Each Colab GPU VM uses this key to join your private tailnet so Orca
-            can reach it over direct SSH.
+            Sign in once in your default browser (Passkey supported). Orca uses
+            the official Colab VS Code extension API to assign GPUs, sync your
+            workspace, and stream task logs directly over HTTPS/WebSocket
+            (<span class="mono">/colab/tty</span>)—zero Tailscale setup needed.
           </div>
-
-          <details class="helper-details">
-            <summary>How do I get a Tailscale / Headscale Auth Key?</summary>
-            <div style="margin-top: 6px; line-height: 1.5">
-              • <strong>Official Tailscale</strong>: Open
-              <span class="mono">Settings → Keys → Generate auth key</span>
-              (enable <em>Reusable</em> + <em>Ephemeral</em>). Starts with
-              <span class="mono">tskey-auth-...</span><br />
-              • <strong>Self-hosted Headscale</strong>: Generate a pre-auth key on
-              your Headscale server (e.g.
-              <span class="mono">headscale preauthkeys create --reusable --ephemeral -u &lt;user&gt;</span>)
-              and fill in your Login Server URL below.
+          <div
+            style="
+              background: var(--surface-2);
+              border: 1px solid var(--border);
+              border-radius: var(--radius-sm);
+              padding: 9px 10px;
+              margin-bottom: 10px;
+            "
+          >
+            <div id="wizardOAuthText" style="font-weight: 600; font-size: 11.5px">
+              Not signed in yet — click below to sign in with your browser
             </div>
-          </details>
-
-          <div class="form-group">
-            <label class="form-label">
-              <span>Pre-Auth Key</span>
-              <span id="sshKeyStatusText" class="muted" style="font-weight: 400"></span>
-            </label>
-            <input
-              id="setupAuthKeyInput"
-              type="password"
-              placeholder="Paste tskey-auth-... or Headscale hex pre-auth key"
-            />
           </div>
-
-          <div class="form-group">
-            <label class="form-label">
-              <span>Login Server (for Headscale / custom control plane)</span>
-              <span class="row" style="gap: 4px">
-                <span
-                  id="useFeihaoServerChip"
-                  class="chip"
-                  style="padding: 1px 6px; font-size: 10px"
-                >
-                  hs.feihao.xyz
-                </span>
-                <span
-                  id="useDetectedServerChip"
-                  class="chip hidden"
-                  style="padding: 1px 6px; font-size: 10px"
-                >
-                  Detected
-                </span>
-              </span>
-            </label>
-            <input
-              id="setupLoginServerInput"
-              type="text"
-              placeholder="Leave empty for official Tailscale, or https://hs.feihao.xyz"
-            />
-          </div>
-
-          <button id="saveSetupBtn" class="primary" style="width: 100%">
-            Save Auth Key &amp; Generate SSH Keypair
-          </button>
-        </div>
-
-        <!-- Step 3: Google Account Sign-In -->
-        <div class="card">
-          <div class="card-header">
-            <div class="card-title">Step 3 · Google Colab Account</div>
-            <span id="step3Badge" class="badge neutral">Optional</span>
-          </div>
-          <div class="card-subtitle">
-            Sign in once in your default browser (Passkey supported). Allows
-            Orca to assign Colab GPUs headlessly in the background—just like the
-            official Colab VS Code extension.
-          </div>
-          <div class="row-between">
-            <span id="wizardOAuthText" class="muted">Not signed in yet</span>
-            <div class="row">
-              <button id="wizardLoginBtn" class="primary">
-                Sign in with Google
-              </button>
-              <button id="wizardLogoutBtn" class="ghost hidden">Sign out</button>
-            </div>
+          <div class="row">
+            <button id="wizardLoginBtn" class="primary cta-large">
+              🔑 Sign in with Google (Default Browser)
+            </button>
+            <button id="wizardLogoutBtn" class="ghost hidden">Sign out</button>
           </div>
         </div>
 
-        <!-- Continue Button when Config is Ready -->
+        <!-- Continue Button when Ready -->
         <button id="finishWizardBtn" class="primary cta-large hidden">
           Continue to GPU Launch Helper →
         </button>
+
+        <!-- Optional Advanced Section: Tailscale / Headscale P2P SSH -->
+        <details class="helper-details" style="padding: 10px 12px">
+          <summary style="display: flex; align-items: center; justify-content: space-between">
+            <span>Advanced (Optional) · Configure Tailscale P2P SSH</span>
+            <span id="step2Badge" class="badge neutral">Optional</span>
+          </summary>
+
+          <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 10px">
+            <div class="muted" style="font-size: 11px">
+              Only needed if you also want the Colab container to join your
+              Tailscale / Headscale tailnet with a dedicated <span class="mono">100.x.y.z</span> IP.
+            </div>
+
+            <div class="row-between">
+              <span style="font-weight: 600; font-size: 11px">Local Prerequisites</span>
+              <span id="step1Badge" class="badge neutral">Checking</span>
+            </div>
+            <div id="stepPill1" class="hidden"><span id="stepNum1"></span></div>
+            <div class="env-grid">
+              <div class="env-item">
+                <div class="env-item-label">
+                  <span>Tailscale</span>
+                  <span id="envTsIcon">•</span>
+                </div>
+                <div class="env-item-val" id="envTsVal">--</div>
+              </div>
+              <div class="env-item">
+                <div class="env-item-label">
+                  <span>OpenSSH</span>
+                  <span id="envSshIcon">•</span>
+                </div>
+                <div class="env-item-val" id="envSshVal">--</div>
+              </div>
+              <div class="env-item">
+                <div class="env-item-label">
+                  <span>Workspace Sync</span>
+                  <span id="envRsyncIcon">•</span>
+                </div>
+                <div class="env-item-val" id="envRsyncVal">--</div>
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 4px">
+              <label class="form-label">
+                <span>Tailscale / Headscale Pre-Auth Key</span>
+                <span id="sshKeyStatusText" class="muted" style="font-weight: 400"></span>
+              </label>
+              <input
+                id="setupAuthKeyInput"
+                type="password"
+                placeholder="Optional: tskey-auth-... or Headscale pre-auth key"
+              />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">
+                <span>Login Server (Headscale)</span>
+                <span class="row" style="gap: 4px">
+                  <span
+                    id="useFeihaoServerChip"
+                    class="chip"
+                    style="padding: 1px 6px; font-size: 10px"
+                  >
+                    hs.feihao.xyz
+                  </span>
+                  <span
+                    id="useDetectedServerChip"
+                    class="chip hidden"
+                    style="padding: 1px 6px; font-size: 10px"
+                  >
+                    Detected
+                  </span>
+                </span>
+              </label>
+              <input
+                id="setupLoginServerInput"
+                type="text"
+                placeholder="Optional: https://hs.feihao.xyz"
+              />
+            </div>
+
+            <button id="saveSetupBtn" style="width: 100%">
+              Save Optional Tailscale Key &amp; SSH Keypair
+            </button>
+          </div>
+        </details>
       </div>
 
       <!-- ================================================================= -->
@@ -1105,8 +1101,7 @@
               Requesting runtime assignment from Colab...
             </div>
             <div class="muted" style="font-size: 10.5px">
-              Takes ~25–45 seconds while Tailscale &amp; OpenSSH bootstrap inside
-              the container.
+              Assigning Colab GPU container via Google Colab Direct API (~5–15 seconds)...
             </div>
           </div>
 
@@ -1520,6 +1515,7 @@
         const checks = doc?.checks || {};
         const configOk = Boolean(checks.config?.ok);
         const oauthOk = Boolean(snap.auth?.authenticated);
+        const readyToLaunch = oauthOk || configOk;
         const activeSessions = (snap.sessions || []).filter(
           (s) => s.state !== "zombie",
         );
@@ -1527,25 +1523,25 @@
         // Update Top Status Bar
         const dot = document.getElementById("topStatusDot");
         const statusTxt = document.getElementById("topStatusText");
-        if (!configOk) {
+        if (!readyToLaunch) {
           dot.className = "status-dot warn";
-          statusTxt.textContent = "Setup Required";
+          statusTxt.textContent = "Sign-In Required";
         } else if (activeSessions.length === 0) {
           dot.className = "status-dot";
           statusTxt.textContent = oauthOk
-            ? "Ready · No Active GPU"
-            : "Configured · No Active GPU";
+            ? "Google Connected · No Active GPU"
+            : "Tailscale Ready · No Active GPU";
         } else {
           const s0 = activeSessions[0];
           const gpuName =
             s0.rateKey && s0.rateKey !== "unknown" ? s0.rateKey : "GPU";
           dot.className = "status-dot ok";
-          statusTxt.textContent = `${gpuName} Active · ${s0.ip || s0.name}`;
+          statusTxt.textContent = `${gpuName} Active · ${s0.ip || "Direct API"}`;
         }
 
         // Decide which view to show if not explicitly overridden by user navigation
         if (!userForcedView) {
-          if (!configOk) {
+          if (!readyToLaunch) {
             switchView("wizard");
           } else if (activeSessions.length === 0) {
             switchView("launcher");
@@ -1560,6 +1556,15 @@
           // Automatically transition from launcher to workspace once a session starts!
           userForcedView = null;
           switchView("workspace");
+        } else if (
+          userForcedView === "wizard" &&
+          readyToLaunch &&
+          activeSessions.length === 0 &&
+          oauthOk
+        ) {
+          // After signing in from wizard, jump straight to GPU launcher
+          userForcedView = null;
+          switchView("launcher");
         }
 
         // -------------------------------------------------------------------
@@ -1570,18 +1575,18 @@
         const rsyncOk = Boolean(checks.rsync?.ok);
         const step1Ok = tsOk && sshOk;
 
-        document.getElementById("envTsIcon").textContent = tsOk ? "✓" : "!";
+        document.getElementById("envTsIcon").textContent = tsOk ? "✓" : "•";
         document.getElementById("envTsIcon").style.color = tsOk
           ? "#56d364"
-          : "#f85149";
+          : "#8b95a7";
         document.getElementById("envTsVal").textContent = tsOk
           ? checks.tailscale.selfHostName || "Connected"
-          : checks.tailscale?.backendState || "Offline";
+          : checks.tailscale?.backendState || "Optional";
 
-        document.getElementById("envSshIcon").textContent = sshOk ? "✓" : "!";
+        document.getElementById("envSshIcon").textContent = sshOk ? "✓" : "•";
         document.getElementById("envSshIcon").style.color = sshOk
           ? "#56d364"
-          : "#f85149";
+          : "#8b95a7";
         document.getElementById("envSshVal").textContent = sshOk
           ? "Ready"
           : "Missing";
@@ -1594,20 +1599,20 @@
           : "#e3b341";
         document.getElementById("envRsyncVal").textContent = rsyncOk
           ? "rsync ready"
-          : "tar fallback";
+          : "tar stream";
 
         const step1Badge = document.getElementById("step1Badge");
-        step1Badge.className = `badge ${step1Ok ? "ok" : "danger"}`;
-        step1Badge.textContent = step1Ok ? "Ready" : "Action Needed";
+        step1Badge.className = `badge ${step1Ok ? "ok" : "neutral"}`;
+        step1Badge.textContent = step1Ok ? "Ready" : "Optional";
 
         const step2Badge = document.getElementById("step2Badge");
-        step2Badge.className = `badge ${configOk ? "ok" : "warn"}`;
-        step2Badge.textContent = configOk ? "Configured" : "Required";
+        step2Badge.className = `badge ${configOk ? "ok" : "neutral"}`;
+        step2Badge.textContent = configOk ? "Configured" : "Optional";
 
         document.getElementById("sshKeyStatusText").textContent = checks.config
           ?.sshKeyPresent
           ? "SSH key: ~/.orca-colab/id_ed25519 ✓"
-          : "SSH key will be generated automatically";
+          : "SSH key generated on save";
 
         const loginSrvInput = document.getElementById("setupLoginServerInput");
         const detectedServer =
@@ -1624,34 +1629,30 @@
         }
 
         const step3Badge = document.getElementById("step3Badge");
-        step3Badge.className = `badge ${oauthOk ? "ok" : "info"}`;
-        step3Badge.textContent = oauthOk ? "Connected" : "Recommended";
+        step3Badge.className = `badge ${oauthOk ? "ok" : "warn"}`;
+        step3Badge.textContent = oauthOk ? "Connected" : "Required";
 
         document.getElementById("wizardOAuthText").textContent = oauthOk
-          ? "Signed in to Google Colab API (Passkey / OAuth token stored)"
-          : "Not signed in yet — click to sign in with your system browser";
+          ? "✓ Signed in to Google Colab API (Direct GPU mode ready)"
+          : "Not signed in yet — click below to sign in with your system browser";
         document
           .getElementById("wizardLogoutBtn")
           .classList.toggle("hidden", !oauthOk);
         document.getElementById("wizardLoginBtn").textContent = oauthOk
-          ? "Switch Account"
-          : "Sign in with Google";
+          ? "Switch Google Account"
+          : "🔑 Sign in with Google (Default Browser)";
 
         // Stepper pills
-        document.getElementById("stepPill1").className =
-          `step-pill ${step1Ok ? "done" : "current"}`;
-        document.getElementById("stepNum1").textContent = step1Ok ? "✓" : "1";
+        document.getElementById("stepPill3").className =
+          `step-pill ${oauthOk ? "done" : "current"}`;
+        document.getElementById("stepNum3").textContent = oauthOk ? "✓" : "1";
 
         document.getElementById("stepPill2").className =
-          `step-pill ${configOk ? "done" : step1Ok ? "current" : ""}`;
+          `step-pill ${configOk ? "done" : ""}`;
         document.getElementById("stepNum2").textContent = configOk ? "✓" : "2";
 
-        document.getElementById("stepPill3").className =
-          `step-pill ${oauthOk ? "done" : configOk ? "current" : ""}`;
-        document.getElementById("stepNum3").textContent = oauthOk ? "✓" : "3";
-
         const finishBtn = document.getElementById("finishWizardBtn");
-        finishBtn.classList.toggle("hidden", !configOk);
+        finishBtn.classList.toggle("hidden", !readyToLaunch);
         finishBtn.textContent =
           activeSessions.length > 0
             ? "Return to Active GPU Workspace →"
@@ -1732,8 +1733,8 @@
                 ${s.keep ? `<span class="badge info">KEEP</span>` : ""}
               </div>
               <div class="row">
-                <button onclick="window.__openSsh('${esc(s.name)}')" title="Open interactive SSH shell">
-                  &gt;_ SSH
+                <button onclick="window.__openSsh('${esc(s.name)}')" title="Open interactive Colab shell">
+                  &gt;_ Terminal
                 </button>
                 <button onclick="window.__toggleKeep('${esc(s.name)}')">
                   ${s.keep ? "Unkeep" : "Keep"}
@@ -1744,7 +1745,7 @@
               </div>
             </div>
             <div class="runtime-meta">
-              <span class="mono">${esc(s.ip || s.name)}</span>
+              <span class="mono">${esc(s.ip || "Direct API (/colab/tty)")}</span>
               <span>Uptime: ${formatDuration(s.ageSeconds)}</span>
               <span>Burn: ≈ ${s.costSoFarCu ?? 0} CU (${s.cuPerHour ?? 0} CU/h)</span>
               ${gpuUtil !== null ? `<span>GPU Load: <strong>${gpuUtil}%</strong></span>` : ""}
@@ -1833,10 +1834,10 @@
                 <div class="card">
                   <div class="card-header">
                     <div class="card-title">${esc(s.name)} · ${esc(s.gpu?.name || s.rateKey)}</div>
-                    <span class="badge ok">SSH Connected</span>
+                    <span class="badge ok">${s.ip ? "SSH Connected" : "Direct API Connected"}</span>
                   </div>
                   <div class="muted mono" style="font-size:11px;margin-bottom:8px">
-                    ssh -i ~/.orca-colab/id_ed25519 root@${esc(s.ip)}
+                    ${s.ip ? `ssh -i ~/.orca-colab/id_ed25519 root@${esc(s.ip)}` : `orca-colab run --session ${esc(s.name)} -- bash -l`}
                   </div>
                   <div class="row-between" style="font-size:11px;margin-bottom:4px">
                     <span class="muted">GPU Load</span>
@@ -1899,7 +1900,11 @@
 
       // Navigation Handlers
       document.getElementById("navWizardBtn").addEventListener("click", () => {
-        if (currentView === "wizard" && dashboardState?.doctor?.checks?.config?.ok) {
+        const isReady = Boolean(
+          dashboardState?.auth?.authenticated ||
+            dashboardState?.doctor?.checks?.config?.ok,
+        );
+        if (currentView === "wizard" && isReady) {
           userForcedView = null;
           renderAll(dashboardState);
         } else {
