@@ -10,6 +10,11 @@ import {
 } from "../lib/cli-output.mjs";
 import { copyToClipboard } from "../lib/clipboard.mjs";
 import {
+  detectRunningSystemBrowser,
+  locateOrcaBinary,
+  stepSystemBrowserColab,
+} from "../lib/colab-browser-automation.mjs";
+import {
   getColabPaths,
   isValidAuthKey,
   readConfig,
@@ -18,11 +23,12 @@ import {
 import { recordSessionStartEvent } from "../lib/credit-ledger.mjs";
 import { BOOTSTRAP_NOTEBOOK_COLAB_URL, openUrl } from "../lib/open-url.mjs";
 import { resolveGpuRate as resolveRateFromTable } from "../lib/rate-table.mjs";
-import { writeSession } from "../lib/session-store.mjs";
+import { listSessions, writeSession } from "../lib/session-store.mjs";
 import { waitForSshBanner } from "../lib/ssh-banner-probe.mjs";
 import { queryRemoteGpu } from "../lib/ssh-exec.mjs";
 import { getTailscaleStatus } from "../lib/tailscale-cli.mjs";
 import {
+  findNewColabPeer,
   snapshotOnlinePeers,
   waitForColabPeer,
 } from "../lib/tailscale-peer-wait.mjs";
@@ -123,9 +129,19 @@ export async function run(
   }
 
   const deadlineMs = nowMs() + timeoutSeconds * 1000;
-  const baselinePeers = snapshotOnlinePeers(initialStatus.peers ?? []);
+  const existingSessions = listSessions(homeDir).filter((s) => s?.state !== "zombie");
+  const trackedHosts = new Set(existingSessions.map((s) => s.hostname || s.name));
+  const baselinePeers = fetchTailscaleStatus
+    ? snapshotOnlinePeers(initialStatus.peers ?? [])
+    : snapshotOnlinePeers(
+        (initialStatus.peers ?? []).filter((p) => trackedHosts.has(p.hostName)),
+      );
   const account = resolveAccount(config, opts.account);
   const publicKey = readFileSync(paths.publicKeyPath, "utf8").trim();
+
+  const alreadyOnlinePeer = !fetchTailscaleStatus
+    ? findNewColabPeer(initialStatus.peers ?? [], baselinePeers, opts.name ?? null)
+    : null;
 
   const pasteLine = config.loginServer
     ? `${config.authKey} ${config.loginServer} ${publicKey}`
@@ -137,49 +153,87 @@ export async function run(
       !account.notebookUrl.includes("colab.research.google.com/github/"),
   );
 
-  if (hasPersonalDriveCopy) {
-    if (!opts["no-open"]) {
-      openBrowser(account.notebookUrl, {
-        env,
-        systemBrowser: Boolean(opts["system-browser"]),
-      });
-    }
-    log(
-      `Opened notebook for account '${account.label}'. Choose a GPU runtime if needed and press Run.`,
-      stderr,
-    );
-  } else {
-    if (!opts["no-open"]) {
-      openBrowser(BOOTSTRAP_NOTEBOOK_COLAB_URL, {
-        env,
-        systemBrowser: Boolean(opts["system-browser"]),
-      });
-    }
-    if (clip.copied) {
+  const orcaBin = !fetchTailscaleStatus ? locateOrcaBinary(env) : null;
+  const systemBrowserApp =
+    !fetchTailscaleStatus && orcaBin
+      ? detectRunningSystemBrowser({ orcaBin, env })
+      : null;
+  const useSystemBrowser = Boolean(opts["system-browser"] || systemBrowserApp);
+
+  if (!alreadyOnlinePeer) {
+    if (hasPersonalDriveCopy) {
+      if (!opts["no-open"]) {
+        openBrowser(account.notebookUrl, {
+          env,
+          systemBrowser: useSystemBrowser,
+        });
+      }
       log(
-        config.loginServer
-          ? "Opened bootstrap notebook and copied '<authkey> <loginServer> <pubkey>' to clipboard for the PASTE field. Choose a GPU runtime and press Run."
-          : "Opened bootstrap notebook and copied '<authkey> <pubkey>' to clipboard for the PASTE field. Choose a GPU runtime and press Run.",
+        `Opened notebook for account '${account.label}'. Choose a GPU runtime if needed and press Run.`,
         stderr,
       );
     } else {
-      log(
-        "Opened bootstrap notebook (clipboard unavailable; fill the form cell using ~/.orca-colab/config.json and ~/.orca-colab/id_ed25519.pub).",
-        stderr,
-      );
+      if (!opts["no-open"]) {
+        openBrowser(BOOTSTRAP_NOTEBOOK_COLAB_URL, {
+          env,
+          systemBrowser: useSystemBrowser,
+        });
+      }
+      if (clip.copied) {
+        log(
+          config.loginServer
+            ? "Opened bootstrap notebook and copied '<authkey> <loginServer> <pubkey>' to clipboard for the PASTE field. Choose a GPU runtime and press Run."
+            : "Opened bootstrap notebook and copied '<authkey> <pubkey>' to clipboard for the PASTE field. Choose a GPU runtime and press Run.",
+          stderr,
+        );
+      } else {
+        log(
+          "Opened bootstrap notebook (clipboard unavailable; fill the form cell using ~/.orca-colab/config.json and ~/.orca-colab/id_ed25519.pub).",
+          stderr,
+        );
+      }
     }
   }
 
+  let autoState = { filled: false, clickedRun: false, clickedConfirm: false, done: false };
+  const pollStatusWithAutomation = async () => {
+    if (!alreadyOnlinePeer && systemBrowserApp && !autoState.done) {
+      try {
+        const next = stepSystemBrowserColab({
+          orcaBin,
+          appName: systemBrowserApp,
+          authKey: config.authKey,
+          publicKey,
+          loginServer: config.loginServer ?? "",
+          hostSuffix: opts.name ?? "",
+          state: autoState,
+          env,
+        });
+        if (next.status === "filled-and-clicked-run" && !autoState.filled) {
+          log(`Auto-filled credentials and clicked Run in ${systemBrowserApp}.`, stderr);
+        } else if (next.status === "clicked-confirm" && !autoState.clickedConfirm) {
+          log(`Confirmed 'Run anyway' dialog in ${systemBrowserApp}.`, stderr);
+        }
+        autoState = next;
+      } catch {
+        // Non-fatal: manual Run in the browser still works.
+      }
+    }
+    return getStatus();
+  };
+
   log("Waiting for a new online orca-colab-* peer on your tailnet...", stderr);
-  const peer = await waitForColabPeer({
-    fetchStatus: getStatus,
-    baselinePeers,
-    expectedName: opts.name ?? null,
-    deadlineMs,
-    signal,
-    now: nowMs,
-    ...(sleep ? { sleep } : {}),
-  });
+  const peer =
+    alreadyOnlinePeer ??
+    (await waitForColabPeer({
+      fetchStatus: pollStatusWithAutomation,
+      baselinePeers,
+      expectedName: opts.name ?? null,
+      deadlineMs,
+      signal,
+      now: nowMs,
+      ...(sleep ? { sleep } : {}),
+    }));
 
   log(
     `Discovered peer ${peer.hostName} (${peer.ipv4}); probing SSH banner...`,
