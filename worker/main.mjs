@@ -435,6 +435,7 @@ class TerminalBridge {
     this.environment = null;
     this.environmentName = null;
     this.environmentResolved = false;
+    this.autoBridge = true;
     this.storageKey = `bridgeTerminal:${workspace.workspaceId || `name:${workspace.workspaceName}`}`;
   }
 
@@ -458,8 +459,9 @@ class TerminalBridge {
       lastFrameAt: this.lastFrameAt || null,
       error: this.lastError,
       remoteCli: this.remoteCli,
-      needsManualTerminal: !connected && !this.canCreateTerminal && !this.helperCanCreate,
+      needsManualTerminal: !connected && (!this.autoBridge || (!this.canCreateTerminal && !this.helperCanCreate)),
       manualCommand: this.manualCommand,
+      autoBridge: this.autoBridge,
       transport: this.transport,
       helper: this.helper
         ? {
@@ -609,6 +611,10 @@ class TerminalBridge {
       return null;
     }
     for (const selector of this.workspaceSelectors()) {
+      if (!this.autoBridge) {
+        this.lastHelperError = null;
+        return null;
+      }
       if (Date.now() - this.lastCreateAt < 30_000) {
         return null;
       }
@@ -752,9 +758,15 @@ class TerminalBridge {
         this.sendRaw("snap");
         return viaHelper;
       }
-      this.lastError = this.lastHelperError
-        ? `${this.lastHelperError}. Open a terminal in this workspace and run: ${this.manualCommand}`
-        : `Open a terminal in this workspace and run: ${this.manualCommand}`;
+      this.lastError = !this.autoBridge
+        ? `Automatic bridging is off. Open a terminal in a workspace on this server and run: ${this.manualCommand}`
+        : this.lastHelperError
+          ? `${this.lastHelperError}. Open a terminal in this workspace and run: ${this.manualCommand}`
+          : `Open a terminal in this workspace and run: ${this.manualCommand}`;
+      return null;
+    }
+    if (!this.autoBridge) {
+      this.lastError = `Automatic bridging is off. Open a terminal in this workspace and run: ${this.manualCommand}`;
       return null;
     }
     if (Date.now() - this.lastCreateAt < 30_000) {
@@ -1077,6 +1089,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
       const autoStopIdleMinutes = Number(
         await readSetting(orca, "autoStopIdleMinutes", DEFAULT_AUTO_STOP_IDLE_MINUTES),
       );
+      const autoBridge = await readSetting(orca, "autoBridge", true);
       bridge = new TerminalBridge({
         orca,
         workspace: info,
@@ -1104,6 +1117,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
           }
         },
       });
+      bridge.autoBridge = autoBridge !== false;
       remoteBridges.set(bridgeKey, bridge);
       bridge.start();
     } else {
@@ -1112,6 +1126,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
       } else {
         bridge.workspace = { ...bridge.workspace, terminals: info.terminals, workspaceName: info.workspaceName, branch: info.branch };
       }
+      bridge.autoBridge = (await readSetting(orca, "autoBridge", true)) !== false;
       const remoteCli = await resolveCliCommand(orca, { remote: true });
       if (remoteCli !== bridge.remoteCli) {
         bridge.remoteCli = remoteCli;

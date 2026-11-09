@@ -63,6 +63,13 @@
         "description": "Used inside workspaces that live on a remote Orca server (the panel then shows that server's Colab state). Needs an orca-colab with the 'watch' command; defaults to the current development branch until the next release. For a checkout on the server: node /path/to/orca-colab/bin/orca-colab.mjs",
         "type": "string",
         "default": ""
+      },
+      {
+        "key": "autoBridge",
+        "title": "Open the bridge terminal on remote servers automatically",
+        "description": "For projects on a remote Orca server the panel needs one terminal per server running `orca-colab watch`; by default the plugin opens it in the first project that needs it. Turn off to start that terminal yourself.",
+        "type": "boolean",
+        "default": true
       }
     ]
   },

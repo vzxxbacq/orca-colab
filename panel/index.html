@@ -849,7 +849,7 @@
           <div class="card-title" style="font-size: 13px">Connect this panel to the server</div>
           <span class="badge info">Remote</span>
         </div>
-        <div class="card-subtitle">
+        <div id="bridgeHintText" class="card-subtitle">
           This project lives on an Orca server. The plugin first tries to open the bridge terminal there by
           itself through the local <span class="mono">orca</span> CLI; that did not work here (see the status
           line above), so open a terminal in this project yourself and run the command below once. The panel
@@ -1677,6 +1677,10 @@
           if (snap.bridge?.needsManualTerminal) {
             hintBox.classList.remove("hidden");
             document.getElementById("bridgeHintCmd").textContent = snap.bridge.manualCommand || "orca-colab watch";
+            document.getElementById("bridgeHintText").textContent =
+              snap.bridge.autoBridge === false
+                ? "Automatic bridging is turned off in the plugin settings. Open a terminal in any project on this server and run the command below once; the panel adopts it within a few seconds. One terminal serves every project on the server."
+                : "This project lives on an Orca server. The plugin tried to open the bridge terminal there by itself through the local orca CLI; that did not work here (see the status line above), so open a terminal in this project and run the command below once. The panel adopts it automatically within a few seconds; leave it running.";
           } else {
             hintBox.classList.add("hidden");
           }
