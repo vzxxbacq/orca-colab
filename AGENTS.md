@@ -74,3 +74,17 @@ exactly what the human must do in the TODO item.
   `version` in `package.json` (and `orca-plugin.json` once it exists) in the same commit; the skill and
   the plugin pin that tag in their `npx` commands.
 - Commit messages: `area: what changed` (`up: wait for tailscale peer before probing ssh`).
+
+## Releases: what needs the owner's approval
+
+- **Patch and minor releases** (`vX.Y.Z` → `vX.Y.Z+1` or `vX.Y+1.0`) may be tagged and pushed without
+  asking, after `node --test` and `orca plugin validate .` pass.
+- **Major releases** (`vX.0.0`) need the owner's explicit approval first. Propose the version, the reason
+  and the changelog, then stop and wait. Never tag or push a major version on your own.
+- **Breaking changes need advance warning**, in the same message that proposes the work, before any code
+  is written: anything that renames or removes a CLI command, flag, `--json` field, exit code, plugin
+  setting key or capability; changes the session, task or ledger file formats under `~/.orca-colab`;
+  changes the `watch` frame protocol; or raises `engines.orca`. State what breaks, who is affected
+  (skill, plugin, remote `watch` of an older version) and the migration, and wait for a go-ahead.
+- A tag listed in the Orca community catalog can never move. Ship fixes as a new tag.
+
