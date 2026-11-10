@@ -344,6 +344,31 @@ export async function getValidAccessToken({
   return refreshed.accessToken;
 }
 
+// Which store entry a fresh sign-in lands in: the entry that already holds this email, else the
+// requested label, else the email itself when adding or when "default" belongs to someone else.
+export function resolveTargetAccount({ store, account = "default", addAccount = false, email = null }) {
+  let targetAccount = account || "default";
+  if (!email) {
+    return targetAccount === "auto" ? "default" : targetAccount;
+  }
+  const existingMatch = Object.entries(store?.accounts || {}).find(
+    ([, entry]) => typeof entry?.email === "string" && entry.email.toLowerCase() === email.toLowerCase(),
+  );
+  if (existingMatch && (targetAccount === "default" || targetAccount === "auto" || addAccount)) {
+    return existingMatch[0];
+  }
+  if (
+    addAccount ||
+    targetAccount === "auto" ||
+    (targetAccount === "default" &&
+      store?.accounts?.default?.email &&
+      store.accounts.default.email.toLowerCase() !== email.toLowerCase())
+  ) {
+    return email;
+  }
+  return targetAccount;
+}
+
 export async function runLoopbackOAuthFlow({
   account = "default",
   addAccount = false,
@@ -353,6 +378,7 @@ export async function runLoopbackOAuthFlow({
   fetchImpl = fetch,
   onAuthUrl,
   signal,
+  persist = true,
 } = {}) {
   const nonce = randomUUID();
   const { codeVerifier, codeChallenge } = generatePkcePair();
@@ -464,35 +490,18 @@ export async function runLoopbackOAuthFlow({
       fetchImpl,
     });
     const profile = await fetchGoogleUserProfile(tokens.accessToken, { fetchImpl });
-    const store = readOAuthStore(homeDir);
-    let targetAccount = account || "default";
-    if (profile.email) {
-      const existingMatch = Object.entries(store.accounts || {}).find(
-        ([, entry]) =>
-          typeof entry?.email === "string" &&
-          entry.email.toLowerCase() === profile.email.toLowerCase(),
-      );
-      if (existingMatch && (targetAccount === "default" || targetAccount === "auto" || addAccount)) {
-        targetAccount = existingMatch[0];
-      } else if (
-        addAccount ||
-        targetAccount === "auto" ||
-        (targetAccount === "default" &&
-          store.accounts?.default?.email &&
-          store.accounts.default.email.toLowerCase() !== profile.email.toLowerCase())
-      ) {
-        targetAccount = profile.email;
-      }
+    const credentials = { ...tokens, email: profile.email, name: profile.name };
+    if (!persist) {
+      // The caller stores these elsewhere (for example on a remote Orca server).
+      return { persisted: false, account, addAccount, email: profile.email, name: profile.name, credentials };
     }
-    return saveOAuthCredentials(
-      targetAccount,
-      {
-        ...tokens,
-        email: profile.email,
-        name: profile.name,
-      },
-      homeDir,
-    );
+    const targetAccount = resolveTargetAccount({
+      store: readOAuthStore(homeDir),
+      account,
+      addAccount,
+      email: profile.email,
+    });
+    return saveOAuthCredentials(targetAccount, credentials, homeDir);
   } finally {
     clearTimeout(timer);
     server.close();

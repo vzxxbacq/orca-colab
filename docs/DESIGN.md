@@ -38,6 +38,7 @@ Three deliverables, one repo:
 | D15 | **Several Google accounts = several credit pools.** `config.json` holds the static part, `accounts: [{ label, notebookUrl }]` and `defaultAccount`; OAuth tokens live in `google-oauth.json` (`0600`) keyed by account label; every money fact (calibrations, budgets, session costs) lives only in `ledger.jsonl`, keyed by account label. `up --account` picks one; the panel shows each pool. | Users with Pro on one account and pay-as-you-go on another need to choose where a session's cost lands. |
 | D16 | **Browser fallback & security boundaries.** When OAuth is used (`auth login`), one PKCE loopback login in the system browser is all that is ever needed; no browser is opened during `up`. When the notebook fallback (`up --browser`) is used inside an Orca terminal (`ORCA_WORKTREE_ID || ORCA_WORKSPACE_ID || ORCA_PANE_KEY`), it can open in Orca's browser or the system browser. The plugin never reads or exports browser cookie databases. | Keeps authentication clean, Passkey-compatible, and free of browser-cookie scraping. |
 | D17 | **First-class Task Management (`job` CLI + Plugin Task Manager & Live Output Console).** Submitted algorithm/compute tasks (`orca-colab job submit`) are persisted in `~/.orca-colab/tasks/<id>.json` with real-time stdout/stderr streamed to `~/.orca-colab/tasks/<id>.log`. Commands can optionally sync the workspace first (`--sync`), run detached in the background (default) or foreground (`--wait`), be stopped (`job stop <id>`), and have their live output streamed in the Orca plugin panel. | Treating Colab as an algorithm compute backend requires queuing/running training jobs, monitoring their live stdout/stderr in the panel without keeping an interactive SSH shell open, and inspecting exit codes and durations after completion. |
+| D18 | **Remote Orca servers: the panel follows the workspace, through its terminal.** Orca runs plugin workers in the desktop client, but a remote workspace's terminals, agents and `~/.orca-colab` live on the server. When the focused workspace has a `hostId`, the worker opens one background terminal there (`Colab Bridge`) running `orca-colab watch` and talks to it with `terminal.send` / `terminal.read`; state arrives as gzip+base64 frames, actions are typed in as `call <id> <action> <base64 json>` lines, and the same `bin/lib/panel-actions.mjs` runs on either side. Google sign-in runs on the desktop (its own browser, its own loopback) with `persist: false`; the tokens are sealed to the X25519 key the server's `watch` publishes in every snapshot (`origin.sealKey`, AES-256-GCM via `bin/lib/credential-envelope.mjs`) and imported there with `authImport`, so the terminal scrollback only ever carries ciphertext and the client keeps nothing. `auth login --no-browser` + `auth redirect <url>` remain for headless CLI use and for a `watch` too old to publish a key. Local workspaces keep the direct `fs` path. | Reuses the connection the user already has to the server, so no SSH, no daemon, no extra token and no new network path. The price is a visible terminal per remote workspace, a 2000-line read window (frames are self-contained, so lost ones are harmless), roughly 1.5 s latency, and no bridge from browser clients, which run no plugin worker at all. |
 
 ## The user's experience
 
@@ -251,6 +252,34 @@ No outputs committed. No pip packages.
      - Real-time terminal log viewer for the active or selected task (`~/.orca-colab/tasks/<id>.log`), with status badge, auto-scroll (`Follow`) toggle, **Copy Output**, and **Refresh**.
   5. **Credits & Budget Stewardship**: Estimated balance, live burn rate, remaining hours projection, **Sync CCU** (Direct API / Browser), manual balance & monthly budget controls, and skill install snippet.
   Inline assets only; Orca frame CSS variables.
+  6. **Origin badge**: `Local` or `Server · <workspace>` in the top bar, so the user always knows whose
+     `~/.orca-colab` is on screen; a paste box for the redirect URL appears during a remote sign-in.
+- Remote workspaces (D18): `worker/main.mjs` holds one `LocalBridge` plus one `TerminalBridge` per remote
+  workspace and switches between them as the focused workspace changes. A workspace is remote when its
+  `workspace.list` row has a `hostId` other than `local`, or when `readContext` names a workspace that
+  `workspace.list` does not contain at all (what the desktop client reports for server-hosted projects).
+  Finding or starting the bridge terminal, in order: a terminal from `readContext.terminals` that already
+  prints frames; `terminal.create` when the host API has the workspace id; otherwise the local `orca` CLI
+  (`bin/lib/orca-remote-helper.mjs`: `worktree show --worktree active`, `terminal list/create/read/send`)
+  through the same client↔server connection, switching the bridge to the CLI transport when the host API
+  does not know the handle; only when all of that fails does the panel show the exact command to run by
+  hand. The bridge terminal runs `<remoteCliCommand> watch --auto-stop-idle-minutes N`; `watch` also
+  carries the token refresh and the idle watchdog for that server. One bridge terminal per server, opened
+  in the first project that needs it and shared by every other project on that server; `autoBridge: false`
+  stops the plugin from opening it and the panel shows the `watch` command to run by hand. Settings:
+  `remoteCliCommand` (empty → `cliCommand`), `autoBridge` (default true). Capability `terminal:read` added.
+  Protocol (v2): every control line ends in `;;` so lines merged by two clients typing into the same
+  terminal split cleanly; `batch <id> <b64 {ops, select?, live?}>` carries every queued operation in one
+  round trip and answers with one frame; snapshots carry `origin.protocol`, and a client talking to an
+  older `watch` falls back to one `call` per operation. The worker queues operations, flushes at once
+  when idle and otherwise every 2 s, coalesces repeated settings and paired toggles, and applies
+  deterministic operations (policy, budget, balance, keep, clear history, account switch) to the shown
+  snapshot immediately; a server-side failure surfaces as `colab.actionFailed`. CLI calls run in two
+  lanes (one writer, one reader), reads are cursor-based and adaptive (2 s while the panel is open or an
+  answer is due, 10 s otherwise).
+  A fully hidden bridge is not possible today: terminals are the only channel Orca gives a plugin to a
+  remote host, and `terminal.create` has no hidden mode; anything else (an extra port, SSH) would not work
+  for every Orca server a store user may have.
 - Install identity `vzxxbacq.colab` (publisher derived from the repo owner).
 
 ## Optional remote-workspace mode (not scheduled)
@@ -285,3 +314,7 @@ recipe for users who *do* want agents on the GPU box. Facts for it are kept in
   have Colab download those directly.
 - Local Tailscale must be installed and signed in; `rsync` recommended (Windows: use WSL's or the tar
   fallback).
+- With a remote Orca server, the panel shows the server's state only from the desktop app (browser clients
+  load no plugin worker), through a visible `Colab Bridge` terminal that Orca's API cannot close, with
+  about 1.5 s of latency and the last 120 log lines of the selected task; full logs stay in the server's
+  `~/.orca-colab/tasks/`. `orca-colab` must be runnable on the server (`remoteCliCommand`).

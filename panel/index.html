@@ -830,7 +830,7 @@
       </div>
       <div class="topbar-actions">
         <button id="navWizardBtn" class="ghost" title="Open Setup Helper">
-          ⚙ Setup
+          <span id="originBadge" class="badge neutral">⚙ Local</span>
         </button>
         <button id="refreshBtn" class="ghost" title="Refresh state">↻</button>
       </div>
@@ -843,6 +843,42 @@
         <button id="closeNoticeBtn" class="ghost" style="padding: 0 4px">
           ✕
         </button>
+      </div>
+      <div id="bridgeHintBox" class="card hidden" style="border-color: var(--accent-border)">
+        <div class="card-header">
+          <div class="card-title" style="font-size: 13px">Connect this panel to the server</div>
+          <span class="badge info">Remote</span>
+        </div>
+        <div id="bridgeHintText" class="card-subtitle">
+          This project lives on an Orca server. The plugin first tries to open the bridge terminal there by
+          itself through the local <span class="mono">orca</span> CLI; that did not work here (see the status
+          line above), so open a terminal in this project yourself and run the command below once. The panel
+          adopts it automatically within a few seconds; leave it running.
+        </div>
+        <div class="row" style="gap: 6px; align-items: center">
+          <code id="bridgeHintCmd" class="mono" style="flex: 1; overflow: auto; white-space: nowrap">orca-colab watch</code>
+          <button id="bridgeHintCopyBtn" class="ghost">Copy</button>
+        </div>
+      </div>
+      <div id="oauthManualBox" class="card hidden" style="border-color: var(--accent-border)">
+        <div class="card-header">
+          <div class="card-title" style="font-size: 13px">Finish Google sign-in on the server</div>
+          <span class="badge info">Remote</span>
+        </div>
+        <div class="card-subtitle">
+          The sign-in runs on the Orca server, so your browser cannot reach its callback. Open the link,
+          approve access, then paste the <span class="mono">http://127.0.0.1:…</span> address your browser lands on.
+        </div>
+        <div class="row" style="gap: 6px; margin-bottom: 8px">
+          <button id="oauthOpenBtn" class="primary">Open sign-in link</button>
+          <button id="oauthCopyBtn" class="ghost">Copy link</button>
+          <button id="oauthCancelBtn" class="ghost">Hide</button>
+        </div>
+        <input id="oauthRedirectInput" type="text" placeholder="Paste the redirected http://127.0.0.1:PORT/?state=…&code=… URL here" />
+        <div class="row" style="gap: 6px; margin-top: 8px">
+          <button id="oauthCompleteBtn" class="primary">Complete sign-in</button>
+          <span id="oauthManualStatus" class="muted" style="font-size: 11px"></span>
+        </div>
       </div>
 
       <!-- ================================================================= -->
@@ -1621,20 +1657,56 @@
         // Update Top Status Bar
         const dot = document.getElementById("topStatusDot");
         const statusTxt = document.getElementById("topStatusText");
-        if (!readyToLaunch) {
+        const originBadge = document.getElementById("originBadge");
+        const isRemote = snap.origin?.kind === "remote";
+        originBadge.className = `badge ${isRemote ? "info" : "neutral"}`;
+        originBadge.textContent = isRemote
+          ? `⚙ Server · ${snap.origin.host || snap.origin.workspaceName || snap.origin.hostId || "remote"}`
+          : `⚙ Local · ${snap.origin?.host || "this computer"}`;
+        originBadge.parentElement.title = isRemote
+          ? `Colab state of the Orca server "${snap.origin.host || snap.origin.hostId}" that hosts workspace "${snap.origin.workspaceName || ""}" (bridge terminal "Colab Bridge"${snap.bridge?.remoteCli ? `, ${snap.bridge.remoteCli}` : ""}). Click for Setup.`
+          : "Colab state of this computer. Click for Setup.";
+        const hintBox = document.getElementById("bridgeHintBox");
+        if (isRemote && !snap.bridge?.connected) {
+          dot.className = "status-dot warn";
+          statusTxt.textContent = snap.bridge?.needsManualTerminal
+            ? `Waiting for the bridge terminal on the server${snap.bridge?.helper?.error ? ` (${snap.bridge.helper.error})` : ""}`
+            : snap.bridge?.error
+              ? `Server bridge unavailable: ${snap.bridge.error}`
+              : "Connecting to the Colab bridge on the server...";
+          if (snap.bridge?.needsManualTerminal) {
+            hintBox.classList.remove("hidden");
+            document.getElementById("bridgeHintCmd").textContent = snap.bridge.manualCommand || "orca-colab watch";
+            document.getElementById("bridgeHintText").textContent =
+              snap.bridge.autoBridge === false
+                ? "Automatic bridging is turned off in the plugin settings. Open a terminal in any project on this server and run the command below once; the panel adopts it within a few seconds. One terminal serves every project on the server."
+                : "This project lives on an Orca server. The plugin tried to open the bridge terminal there by itself through the local orca CLI; that did not work here (see the status line above), so open a terminal in this project and run the command below once. The panel adopts it automatically within a few seconds; leave it running.";
+          } else {
+            hintBox.classList.add("hidden");
+          }
+        } else if (!readyToLaunch) {
+          hintBox.classList.add("hidden");
           dot.className = "status-dot warn";
           statusTxt.textContent = "Sign-In Required";
         } else if (activeSessions.length === 0) {
+          hintBox.classList.add("hidden");
           dot.className = "status-dot";
           statusTxt.textContent = oauthOk
             ? "Google Connected · No Active GPU"
             : "Tailscale Ready · No Active GPU";
         } else {
+          hintBox.classList.add("hidden");
           const s0 = activeSessions[0];
           const gpuName =
             s0.rateKey && s0.rateKey !== "unknown" ? s0.rateKey : "GPU";
           dot.className = "status-dot ok";
           statusTxt.textContent = `${gpuName} Active · ${s0.ip || "Direct API"}`;
+        }
+        if (snap.bridge?.pendingOps > 0) {
+          statusTxt.textContent += " · syncing…";
+        }
+        if (snap.bridge?.outdatedWatch) {
+          statusTxt.textContent += " · bridge runs an older orca-colab, close its terminal to restart it";
         }
 
         // Decide which view to show if not explicitly overridden by user navigation
@@ -2392,7 +2464,9 @@
         btnEl.disabled = true;
         btnEl.textContent = "Waiting for browser login...";
         showNotice(
-          "Opened your default browser for Google Sign-In (select any Google account). Complete sign-in to return here automatically.",
+          dashboardState?.origin?.kind === "remote"
+            ? "Opened your default browser for Google Sign-In. The account will be stored on the Orca server that hosts this project."
+            : "Opened your default browser for Google Sign-In (select any Google account). Complete sign-in to return here automatically.",
           "info",
         );
         try {
@@ -2652,11 +2726,105 @@
         refreshAll(includeLive);
       }, 2000);
 
-      onWorkerEvent("colab.oauthUrl", (payload) => {
-        if (payload?.authUrl && typeof orcaApi?.shell?.openExternal === "function") {
-          // System browser is already opened by the worker via `open`; keep URL available.
-          window.__lastOAuthUrl = payload.authUrl;
+      // Focus changes: ask the worker to re-resolve right away instead of waiting for the next poll.
+      async function onFocusMaybeChanged() {
+        try {
+          const snap = await callWorker("colab.focusChanged", {}, { timeoutMs: 8000 });
+          renderAll(snap);
+        } catch {
+          // The regular poll picks it up.
         }
+      }
+      for (const eventName of ["workspace.changed", "workspace.created", "workspace.removed"]) {
+        try {
+          orcaApi?.host?.call?.("events.subscribe", { event: eventName }).catch(() => {});
+          orcaApi?.on?.(eventName, onFocusMaybeChanged);
+        } catch {
+          // Events unavailable in this host.
+        }
+      }
+      window.addEventListener("focus", onFocusMaybeChanged);
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") onFocusMaybeChanged();
+      });
+
+      onWorkerEvent("colab.oauthUrl", (payload) => {
+        if (!payload?.authUrl) return;
+        window.__lastOAuthUrl = payload.authUrl;
+        if (payload.manual) {
+          showOAuthManualBox(payload.authUrl);
+        }
+      });
+
+      function showOAuthManualBox(authUrl) {
+        const box = document.getElementById("oauthManualBox");
+        box.classList.remove("hidden");
+        document.getElementById("oauthRedirectInput").value = "";
+        document.getElementById("oauthManualStatus").textContent = "";
+        box.dataset.authUrl = authUrl;
+        box.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+
+      document.getElementById("bridgeHintCopyBtn").addEventListener("click", async (e) => {
+        const cmd = document.getElementById("bridgeHintCmd").textContent;
+        try {
+          await navigator.clipboard.writeText(cmd);
+          e.currentTarget.textContent = "Copied";
+          setTimeout(() => (e.target.textContent = "Copy"), 1500);
+        } catch {
+          showNotice(cmd, "info");
+        }
+      });
+
+      document.getElementById("oauthOpenBtn").addEventListener("click", () => {
+        const url = document.getElementById("oauthManualBox").dataset.authUrl;
+        if (!url) return;
+        if (typeof orcaApi?.shell?.openExternal === "function") {
+          orcaApi.shell.openExternal(url);
+        } else {
+          document.getElementById("oauthManualStatus").textContent =
+            "Cannot open a browser from here; use Copy link.";
+        }
+      });
+      document.getElementById("oauthCopyBtn").addEventListener("click", async () => {
+        const url = document.getElementById("oauthManualBox").dataset.authUrl;
+        const status = document.getElementById("oauthManualStatus");
+        try {
+          await navigator.clipboard.writeText(url);
+          status.textContent = "Link copied.";
+        } catch {
+          status.textContent = url;
+        }
+      });
+      document.getElementById("oauthCancelBtn").addEventListener("click", () => {
+        document.getElementById("oauthManualBox").classList.add("hidden");
+      });
+      document.getElementById("oauthCompleteBtn").addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        const status = document.getElementById("oauthManualStatus");
+        const redirectUrl = document.getElementById("oauthRedirectInput").value.trim();
+        if (!redirectUrl) {
+          status.textContent = "Paste the redirected URL first.";
+          return;
+        }
+        btn.disabled = true;
+        status.textContent = "Delivering to the server...";
+        try {
+          await callWorker("colab.oauthReplay", { redirectUrl }, { timeoutMs: 30000 });
+          status.textContent = "Delivered. Finishing sign-in...";
+          document.getElementById("oauthManualBox").classList.add("hidden");
+        } catch (err) {
+          status.textContent = err?.message || String(err);
+        } finally {
+          btn.disabled = false;
+        }
+      });
+
+      onWorkerEvent("colab.actionFailed", (payload) => {
+        showNotice(
+          `${payload?.action || "Change"} was not applied on the server: ${payload?.error || "unknown error"}`,
+          "error",
+        );
       });
 
       onWorkerEvent("colab.taskOutput", (payload) => {

@@ -40,6 +40,36 @@ it conflicts with the current Orca source, fix this file.
 - `node:` builtins resolve as in plain Node. `import type … from 'orca/worker'` for typings only.
 - Logs: `orca plugin logs`; fire a handler without a panel: `orca plugin dev request . <name> --data '{}'`.
 
+## Remote Orca servers and plugin workers (verified 2026-11-09 against the public docs)
+
+- `docs/site/content/docs/remote-servers.mdx`: "The server keeps the projects, worktrees, terminals,
+  tabs, provider accounts, and agent sessions"; "Remote sessions use the server's `PATH`, home directory,
+  and credentials—not the client's." The plugin worker, by contrast, is a Node process started by the
+  desktop app (`plugin-authoring.md`: "A worker's `main` runs in a separate Node process"), so a worker's
+  `fs` reads see the laptop's home, never the server's. Observed in practice: the panel showed an empty
+  task list while the agent's `orca-colab job submit` ran on the server.
+- Host API (`plugin-host-api.md`): `terminal.create({ workspaceId, title?, command? }) → { terminalId }`
+  ("in the background" = unfocused, still visible; nothing closes a terminal),
+  `terminal.send({ terminalId, text, enter? })`, `terminal.read({ terminalId, maxLines? }) → { lines,
+  truncated }` capped at 2000 lines, `workspace.list` rows carry `hostId: string | null`. There is no
+  file-read or run-command method for a workspace; the terminal is the only channel to a remote host.
+  `events.subscribe` carries lifecycle events only, no terminal output.
+- Browser clients: `orca.shell` and `orca.files` are undefined and no worker runs there.
+- Desktop client connected to a server (observed 2026-11-09): `workspace.list` returns `[]` for the
+  server's workspaces while `readContext` still returns the focused one with an empty `terminals` list,
+  so `terminal.create` is impossible from the host API. The local `orca` CLI does see them:
+  `orca worktree show --worktree active --json` → `result.worktree { id, hostId, displayName, path }`,
+  `orca terminal list --worktree <sel> --json` → `result.terminals[] { handle, title, preview }`,
+  `orca terminal create --worktree <sel> --title T --command C --json` → `result.terminal.handle`,
+  `orca terminal read --terminal H --screen --json` → `result.terminal.tail[]`,
+  `orca terminal send --terminal H --text X --enter --json`, `orca terminal close --terminal H --json`.
+  Handles are `term_<uuid>` in both the CLI and the host API.
+- Observed on 1.4.254 through `orca plugin dev request`: `workspace.list` reports the machine Orca runs
+  on as `hostId: "local"`, not `null`; only `terminal.sendText` exists (`terminal.send` → "unknown host
+  method"). A dev plugin whose capabilities changed shows as `pending` in `orca plugin list` and runs
+  nothing until `orca plugin dev reload . --approve <fingerprint>`; the panel then silently shows stale
+  or empty data, which looks exactly like a client/server mismatch.
+
 ## Panel frame (`panel/index.html`)
 
 - Orca injects a frozen `window.orca` before scripts run: `orca.host.call`, `orca.plugin.request(name,

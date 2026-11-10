@@ -26,6 +26,7 @@ const COMMANDS = new Set([
   "credits",
   "ledger",
   "rates",
+  "watch",
 ]);
 
 const HELP_TEXT = `Usage: orca-colab <command> [options]
@@ -46,6 +47,7 @@ Commands:
   credits    Show estimated compute-unit balance, burn rate and budget
   ledger     Show session and calibration history
   rates      View or update the GPU compute-unit rate table
+  watch      Stream panel state for the Orca plugin (runs inside an Orca terminal on a remote server)
 
 Global options:
   --json     Emit a single JSON object on stdout (logs go to stderr)

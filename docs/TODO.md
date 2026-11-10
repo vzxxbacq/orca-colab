@@ -62,6 +62,25 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
 - [x] **M2.2 Task Manager (`job` CLI).** `bin/lib/task-store.mjs` and `bin/commands/job.mjs` (`job submit`, `job ls`, `job logs`, `job stop`) storing task state in `~/.orca-colab/tasks/<id>.json` and streaming live output to `~/.orca-colab/tasks/<id>.log`. — Done: implemented foreground/detached task submission, live log streaming, and remote process termination (`test/task-manager.test.mjs`).
 - [x] **M2.3 Orca Plugin + Enhanced Task & Output Panel.** `orca-plugin.json` per DESIGN, `worker/main.mjs` (sessions + tasks + live task output streaming + ledger watch, status bar text and tone, `colab.up`/`colab.down`, idle watchdog), `panel/index.html` with GPU runtime control, Task Manager, Live Task Output Console, and Credit stewardship. `orca plugin validate .` → 0. — Done: implemented `orca-plugin.json`, `worker/main.mjs`, and `panel/index.html`; verified `orca plugin validate .` exits 0.
 - [x] **M2.4 Idle watchdog (D14) & Budget alerts.** Worker reads `lastActivityAt`/`activePids` and running tasks, samples GPU utilisation over SSH every 5 min, requires three consecutive <5 % samples **and** no activity/live pid for `autoStopIdleMinutes`, then notify → 5-min grace → `down`; `up --keep` exemption; budget alerts at 80 % / 100 %. Test the decision function with hardcoded sample sequences. — Done: implemented `bin/lib/idle-watchdog.mjs` and verified 40-min single-low-sample exemption and budget alerts (`test/idle-watchdog-and-plugin.test.mjs`).
+- [~] claude **M2.5 Remote-host bridge (D18).** When the focused Orca workspace lives on a remote Orca server
+      (`workspace.list` row has a `hostId`), the worker in the desktop client stops reading its own
+      `~/.orca-colab/` and instead drives `orca-colab watch` inside one background terminal of that
+      workspace (`terminal.create` / `terminal.send` / `terminal.read`), so sessions, tasks, live output,
+      credits and Google sign-in all reflect and land on the server. Local workspaces keep the fs path.
+      `bin/lib/bridge-frames.mjs` (gzip+base64 chunked frames that survive pty wrapping and the 2000-line
+      read window), `bin/lib/dashboard-snapshot.mjs` and `bin/lib/panel-actions.mjs` (shared by worker and
+      `watch`), `bin/commands/watch.mjs`, `auth login --no-browser` + redirect-URL replay for sign-in on the
+      server, `terminal:read` capability, `remoteCliCommand` setting, panel mode badge and paste box.
+      Verified locally: `node --test` (41), `orca plugin validate .` → 0, `watch` round trip over stdin.
+      Human steps: (1) in the desktop Orca, reload the plugin from this branch and approve the new
+      fingerprint (it now asks to read terminals); (2) set the plugin setting "orca-colab command on
+      remote Orca servers" to `node /Users/user/orca/projects/orca-colab/bin/orca-colab.mjs`; (3) focus
+      the server-hosted project: the top bar should show `Server · <host>`, a `Colab Bridge` terminal
+      should appear in that workspace within a few seconds (created through the local `orca` CLI), and
+      the Agent Runs list should show the server's tasks; if instead a card asks you to run `watch` by
+      hand, send the output of `orca plugin dev request . colab.debugWorkspace --data '{}'`;
+      (4) click Sign in with Google, open the link, approve, paste the redirected URL, confirm the
+      account appears; (5) switch to a local project and confirm the badge says `Local`.
 - [ ] Orca browser research (D16): confirm Google sign-in and Colab cell execution work inside Orca's
       embedded browser (`orca tab create --url`), note any UA or popup issues, and record how `up` should
       detect "running inside Orca" (`ORCA_WORKTREE_ID || ORCA_WORKSPACE_ID || ORCA_PANE_KEY`). Then switch `up` to open the notebook there (`--system-browser` to
