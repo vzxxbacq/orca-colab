@@ -195,7 +195,9 @@ function workspaceRows(listRes) {
 }
 
 // readContext has no id, so the focused workspace is matched against the list by name and branch.
-async function resolveWorkspaceInfo(orca, { isLocalTerminalSet = null, stickyRemote = null } = {}) {
+// Several local checkouts may share a name such as `main`; the focused workspace's terminals decide
+// between them, and a focused workspace whose terminals no local worktree owns lives on a server.
+export async function resolveWorkspaceInfo(orca, { locateTerminals = null, stickyRemote = null } = {}) {
   try {
     const [ctx, listRes] = await Promise.all([
       orca.host.call("workspace.readContext", {}).catch(() => null),
@@ -203,18 +205,20 @@ async function resolveWorkspaceInfo(orca, { isLocalTerminalSet = null, stickyRem
     ]);
     const rows = workspaceRows(listRes);
     const terminals = Array.isArray(ctx?.terminals) ? ctx.terminals : [];
-    let matched = rows.find(
-      (w) =>
-        (ctx?.displayName && w.name === ctx.displayName) ||
-        (ctx?.branch && w.branch === ctx.branch),
-    );
-    // A local row with the same name and branch may still be a different checkout of the project that
-    // is focused on a server. The focused workspace's terminal ids settle it when there are any.
-    if (matched && ctx?.displayName && typeof isLocalTerminalSet === "function") {
-      const verdict = await isLocalTerminalSet(terminals, matched);
-      if (verdict === false) {
+    const byName = (w) => Boolean(ctx?.displayName) && w.name === ctx.displayName;
+    const byBranch = (w) => Boolean(ctx?.branch) && w.branch === ctx.branch;
+    const candidates = [
+      ...rows.filter((w) => byName(w) && byBranch(w)),
+      ...rows.filter((w) => byName(w) !== byBranch(w)),
+    ];
+    let matched = candidates[0] || null;
+    if (ctx?.displayName && terminals.length && typeof locateTerminals === "function") {
+      const located = await locateTerminals(terminals);
+      if (located === false) {
         matched = null;
-      } else if (verdict === null && stickyRemote?.has(`${ctx.displayName}|${ctx.branch || ""}`)) {
+      } else if (located?.path) {
+        matched = rows.find((w) => w.path === located.path) || matched;
+      } else if (located === null && matched && stickyRemote?.has(`${ctx.displayName}|${ctx.branch || ""}`)) {
         matched = null;
       }
     }
@@ -1346,26 +1350,21 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
 
   // Which bridge serves the panel follows the focused workspace: a `hostId` means the workspace, its
   // terminals and its ~/.orca-colab live on a remote Orca server.
-  // Terminal handles of the focused workspace that the local Orca also lists mean the workspace is
-  // local; handles it does not know mean remote; no handles at all leave the question open.
-  let localTerminalCache = { at: 0, handles: new Set() };
-  const isLocalTerminalSet = async (terminals, localRow) => {
+  // A focused terminal that the local Orca lists pins the workspace to that terminal's worktree; focused
+  // terminals it does not know mean the workspace is on a server; no terminals leave the question open.
+  let localTerminalCache = { at: 0, byHandle: new Map() };
+  const locateTerminals = async (terminals) => {
     const ids = (terminals || []).map((t) => t?.id).filter(Boolean);
     if (ids.length === 0 || !remoteHelper.available) {
       return null;
     }
     if (Date.now() - localTerminalCache.at > 30_000) {
-      // workspace.list ids already are `identity:<key>` selectors; anything else is a repo::path id.
-      const selector = String(localRow.id).startsWith("identity:") ? localRow.id : `id:${localRow.id}`;
-      const listed = await remoteHelper.listTerminals(selector);
-      const all = listed.ok ? listed.data : [];
-      localTerminalCache = { at: Date.now(), handles: new Set(all.map((t) => t.handle)) };
-      if (!listed.ok) {
-        const allLocal = await remoteHelper.listTerminals(undefined);
-        if (allLocal.ok) localTerminalCache.handles = new Set(allLocal.data.map((t) => t.handle));
-      }
+      const listed = await remoteHelper.listTerminals(undefined);
+      if (!listed.ok) return null;
+      localTerminalCache = { at: Date.now(), byHandle: new Map(listed.data.map((t) => [t.handle, t])) };
     }
-    return ids.some((id) => localTerminalCache.handles.has(id));
+    const owned = ids.map((id) => localTerminalCache.byHandle.get(id)).find(Boolean);
+    return owned ? { path: owned.worktreePath || null } : false;
   };
   const stickyRemote = new Set();
 
@@ -1374,7 +1373,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
       return activeBridge;
     }
     lastResolveAt = Date.now();
-    const info = await resolveWorkspaceInfo(orca, { isLocalTerminalSet, stickyRemote });
+    const info = await resolveWorkspaceInfo(orca, { locateTerminals, stickyRemote });
     if (info.hostId) {
       stickyRemote.add(`${info.workspaceName}|${info.branch || ""}`);
     }

@@ -182,7 +182,7 @@ export function createOrcaRemoteHelper({
     },
 
     async listTerminals(selector, { environment = null } = {}) {
-      const res = await run(["terminal", "list"], { worktree: selector, limit: 50, ...envOpt(environment) });
+      const res = await run(["terminal", "list"], { worktree: selector, limit: selector ? 50 : 200, ...envOpt(environment) });
       if (!res.ok) return res;
       const rows = Array.isArray(res.data?.terminals) ? res.data.terminals : [];
       return {
@@ -193,6 +193,7 @@ export function createOrcaRemoteHelper({
           title: t.title || "",
           preview: t.preview || "",
           connected: t.connected !== false,
+          worktreePath: t.worktreePath || "",
         })),
       };
     },
