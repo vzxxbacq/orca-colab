@@ -26,10 +26,8 @@ const LOCAL_CLI_PATH = path.resolve(__dirname, "..", "bin", "orca-colab.mjs");
 const BUNDLED_SKILL_DIR = path.resolve(__dirname, "..", "skills", "colab-gpu");
 const BRIDGE_TERMINAL_TITLE = "Colab Bridge";
 const isBridgeTitle = (title) => typeof title === "string" && title.startsWith(BRIDGE_TERMINAL_TITLE);
-const DEFAULT_CLI_COMMAND = "npx -y github:vzxxbacq/orca-colab#v0.1.0";
-// The bridge needs `watch`, which v0.1.0 lacks; point at the branch until the next tag ships.
-// --prefer-online makes npx re-resolve the branch instead of reusing a cached older checkout.
-const DEFAULT_REMOTE_CLI_COMMAND = "npx -y --prefer-online github:vzxxbacq/orca-colab#remote-host-bridge";
+const DEFAULT_CLI_COMMAND = "npx -y github:vzxxbacq/orca-colab#v0.2.0";
+const DEFAULT_REMOTE_CLI_COMMAND = DEFAULT_CLI_COMMAND;
 const WATCH_UNSUPPORTED_RE = /unknown command: watch/;
 const ACTION_TIMEOUTS_MS = {
   authLogin: 320_000,

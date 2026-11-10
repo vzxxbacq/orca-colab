@@ -9,7 +9,7 @@ const REPO_ROOT = path.resolve(
   "..",
 );
 
-test("skills/colab-gpu/SKILL.md and references/cli.md follow agentskills layout and pin v0.1.0", () => {
+test("skills/colab-gpu/SKILL.md and references/cli.md follow agentskills layout and pin v0.2.0", () => {
   const skillPath = path.join(REPO_ROOT, "skills", "colab-gpu", "SKILL.md");
   const refPath = path.join(
     REPO_ROOT,
@@ -25,7 +25,7 @@ test("skills/colab-gpu/SKILL.md and references/cli.md follow agentskills layout 
   const skillText = readFileSync(skillPath, "utf8");
   assert.match(skillText, /^---\nname: colab-gpu\ndescription: .+\n---/s);
   assert.equal(
-    skillText.includes("npx -y github:vzxxbacq/orca-colab#v0.1.0"),
+    skillText.includes("npx -y github:vzxxbacq/orca-colab#v0.2.0"),
     true,
   );
   assert.equal(skillText.includes("references/cli.md"), true);

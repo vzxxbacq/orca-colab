@@ -1,6 +1,6 @@
 {
   "name": "orca-colab",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Use a Google Colab GPU runtime as a compute backend from your local Orca workspace and agents.",
   "type": "module",
   "bin": {
