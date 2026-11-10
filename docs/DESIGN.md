@@ -228,7 +228,7 @@ No outputs committed. No pip packages.
     "statusBarItems": [{ "id": "colab-sessions", "icon": "zap", "text": "Colab", "command": "colab.showPanel" }],
     "settings": [
       { "key": "autoStopIdleMinutes", "title": "Auto-stop idle sessions after (minutes)", "type": "integer", "default": 20, "minimum": 0 },
-      { "key": "cliCommand", "title": "orca-colab command", "type": "string", "default": "npx -y github:vzxxbacq/orca-colab#v0.2.1" }
+      { "key": "cliCommand", "title": "orca-colab command", "type": "string", "default": "npx -y github:vzxxbacq/orca-colab#v0.2.2" }
     ]
   },
   "capabilities": [
