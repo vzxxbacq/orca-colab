@@ -2,32 +2,66 @@
 
 [**English**](./README.md) | [**简体中文**](./README.zh-CN.md)
 
-Use Google Colab GPUs as an autonomous compute backend for local coding agents in [Orca](https://github.com/stablyai/orca).
+![Colab GPUs, run by your agent](./assets/cover.png)
 
-- **Humans set guardrails**: Sign in with Google, pick allowed GPU tiers, and cap concurrent runtimes & monthly Compute Units.
-- **Agents manage compute**: Agents autonomously check policy, provision or scale parallel runtimes, install dependencies, stream task logs, and release idle GPUs.
-- **Direct API connection**: Connects directly to Google Colab without Tailscale or manual browser steps (optional Tailscale SSH also supported).
+Use Google Colab GPUs as an autonomous compute backend for local coding agents in [Orca](https://github.com/stablyai/orca).
+Your workspace, agent and credentials stay on your machine; Colab is a disposable GPU box the agent starts, uses and releases.
+
+## What you get
+
+- **Agents manage compute**: the agent checks your policy, provisions or scales parallel runtimes, syncs the
+  workspace, installs dependencies, runs jobs and releases idle GPUs, all through one JSON CLI.
+- **Live output**: every agent run streams into the **Colab GPU** panel in real time, with history, exit
+  codes and per-run GPU attribution.
+- **Humans set guardrails**: sign in with Google, pick the allowed GPU tiers (T4, L4, A100, CPU), cap
+  concurrent runtimes and the monthly Compute Unit budget. The agent cannot step outside them.
+- **Multiple runtimes and sessions**: run several GPUs side by side, name them, address them per command
+  with `--session`, and switch between Google accounts.
+- **Direct API connection**: connects to Colab's runtime API without Tailscale or manual browser steps
+  (an optional Tailscale SSH mode is kept for custom images).
+- **Remote Orca servers (beta)**: the panel follows a project that lives on an Orca server and shows that
+  server's runtimes, runs and credits through a Bridge Terminal. See [below](#remote-orca-servers-beta).
 
 ## Quick Start
 
 ### 1. Install
 
+From the Orca Community Plugins marketplace (Settings → Plugins → `vzxxbacq.colab`), or from GitHub:
+
 ```sh
 orca plugin install github:vzxxbacq/orca-colab
 ```
 
-For local development or standalone skill installation:
+The plugin bundles the `colab-gpu` agent skill. To install only the skill, or to develop the plugin locally:
 
 ```sh
-orca plugin dev load .
 npx skills add vzxxbacq/orca-colab
+orca plugin dev load .
 ```
+
+The CLI needs no install step; agents call it as `npx -y github:vzxxbacq/orca-colab#v0.2.1 <command> --json`.
 
 ### 2. Configure
 
 1. Open the **Colab GPU** panel in Orca and click **Sign in with Google**.
 2. Set allowed GPU tiers and concurrency limits under **Guardrails & CU**.
 3. Ask your agent to run any GPU task.
+
+## What an agent run looks like
+
+A smoke test on a T4, exactly as the `colab-gpu` skill drives it:
+
+```sh
+orca-colab up --gpu T4 --json                                   # Tesla T4, ≈1.96 CU/h
+orca-colab sync --json                                          # workspace → /content/orca/<dir>
+orca-colab job submit --name "Smoke bench" --wait --json -- python3 bench.py
+orca-colab run --json -- cat /content/orca/colab-smoke/results.json
+orca-colab down --json                                          # runtime released
+```
+
+The whole round trip, including a 2048² fp16 matmul (≈21 TFLOPS) and 200 CNN training steps, took about
+a minute of runtime and roughly 0.03 Compute Units. Credits in the panel and in `credits --json` are
+estimates, labelled as such, and calibrated against your real balance on request.
 
 ## CLI
 
@@ -36,7 +70,7 @@ Full reference: [`skills/colab-gpu/references/cli.md`](./skills/colab-gpu/refere
 ```sh
 orca-colab auth [login --add | list | switch <account>] --json
 orca-colab doctor --json
-orca-colab up [--new] [--account <account>] --json
+orca-colab up --gpu T4 [--new] [--session <name>] [--account <account>] --json
 orca-colab job submit --name "Train" --wait --json -- <cmd>
 orca-colab run --json -- <cmd>
 orca-colab sync [path] --json

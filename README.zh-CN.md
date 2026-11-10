@@ -2,32 +2,62 @@
 
 [**English**](./README.md) | [**简体中文**](./README.zh-CN.md)
 
-让 [Orca](https://github.com/stablyai/orca) 中的本地 Coding Agent 将 Google Colab GPU 作为自治远程算力后端使用。
+![Colab GPUs, run by your agent](./assets/cover.png)
 
-- **人只设边界**：一键登录 Google 账号，设置允许使用的 GPU 级别、最大并发数与月度计算单元预算。
-- **Agent 自治算力**：Agent 自动检查策略、按需开启或并发扩容多台实例、安装依赖、流式回传日志，并在任务完成后释放算力。
-- **免配置直连**：默认通过 Google Colab Direct API 直连，无需配置 Tailscale 或手动操作浏览器（同时保留可选的 Tailscale SSH 模式）。
+让 [Orca](https://github.com/stablyai/orca) 中的本地 Coding Agent 将 Google Colab GPU 作为自治远程算力后端使用。
+工作区、Agent 和凭据都留在本机；Colab 只是一台由 Agent 自行开启、使用、释放的一次性 GPU 机器。
+
+## 你将获得
+
+- **Agent 自治算力**：Agent 自动检查策略、按需开启或并发扩容运行时、同步工作区、安装依赖、提交任务并在空闲时释放 GPU，
+  全部通过同一个 JSON CLI 完成。
+- **Live Output 实时输出**：每个 Agent 任务的输出实时流入 **Colab GPU** 面板，带历史记录、退出码和所用 GPU 标注。
+- **人只设边界**：一键登录 Google，选择允许的 GPU 级别（T4、L4、A100、CPU），限制并发运行时数量和月度计算单元预算，
+  Agent 无法越界。
+- **多运行时、多 Session**：多块 GPU 并行，可命名、可用 `--session` 逐条指定，并支持多个 Google 账号切换。
+- **免配置直连**：通过 Colab Direct API 直连，无需 Tailscale 或手动操作浏览器（为自定义镜像保留可选的 Tailscale SSH 模式）。
+- **远程 Orca 服务器（Beta）**：项目位于 Orca 服务器上时，面板通过 Bridge Terminal 跟随显示该服务器的运行时、任务和算力。
+  详见[下文](#远程-orca-服务器beta)。
 
 ## 快速开始
 
 ### 1. 安装
 
+在 Orca Community Plugins 市场中安装（Settings → Plugins → `vzxxbacq.colab`），或直接从 GitHub 安装：
+
 ```sh
 orca plugin install github:vzxxbacq/orca-colab
 ```
 
-本地开发加载或单独安装 Skill：
+插件自带 `colab-gpu` Agent Skill。只装 Skill 或本地开发插件：
 
 ```sh
-orca plugin dev load .
 npx skills add vzxxbacq/orca-colab
+orca plugin dev load .
 ```
+
+CLI 无需单独安装，Agent 通过 `npx -y github:vzxxbacq/orca-colab#v0.2.1 <command> --json` 直接调用。
 
 ### 2. 配置
 
 1. 在 Orca 右侧打开 **Colab GPU** 面板，点击 **Sign in with Google**。
 2. 在 **Guardrails & CU** 中设置允许的 GPU 级别与并发上限。
 3. 直接让 Agent 执行 GPU 任务即可。
+
+## 一次 Agent 任务长什么样
+
+在 T4 上跑一次冒烟测试，就是 `colab-gpu` Skill 的标准流程：
+
+```sh
+orca-colab up --gpu T4 --json                                   # Tesla T4，约 1.96 CU/h
+orca-colab sync --json                                          # 工作区 → /content/orca/<目录>
+orca-colab job submit --name "Smoke bench" --wait --json -- python3 bench.py
+orca-colab run --json -- cat /content/orca/colab-smoke/results.json
+orca-colab down --json                                          # 释放运行时
+```
+
+整个流程（含 2048² fp16 矩阵乘法约 21 TFLOPS、200 步 CNN 训练）只占用约一分钟运行时，消耗约 0.03 个计算单元。
+面板和 `credits --json` 中的算力数字都是估算值并明确标注，可随时按真实余额校准。
 
 ## CLI
 
@@ -36,7 +66,7 @@ npx skills add vzxxbacq/orca-colab
 ```sh
 orca-colab auth [login --add | list | switch <account>] --json
 orca-colab doctor --json
-orca-colab up [--new] [--account <account>] --json
+orca-colab up --gpu T4 [--new] [--session <name>] [--account <account>] --json
 orca-colab job submit --name "Train" --wait --json -- <cmd>
 orca-colab run --json -- <cmd>
 orca-colab sync [path] --json
