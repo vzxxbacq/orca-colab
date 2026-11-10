@@ -28,6 +28,13 @@ export function normalizeRuntimeSpec({ gpu = "T4", highRam = false } = {}) {
       shape,
     };
   }
+  if (upper.includes("6000") || upper.includes("BLACKWELL") || upper === "G4") {
+    return {
+      variant: "VARIANT_GPU",
+      accelerator: "G4",
+      shape,
+    };
+  }
   return {
     variant: "VARIANT_GPU",
     accelerator: upper,
@@ -80,8 +87,8 @@ async function colabJsonRequest(
   if (res.status === 204) {
     return {};
   }
-  const text = await res.text();
-  if (!text.trim()) {
+  const text = (await res.text()).replace(/^\)\]\}'\r?\n?/, "").trim();
+  if (!text) {
     return {};
   }
   return JSON.parse(text);
@@ -352,7 +359,7 @@ export async function getConsumptionUserInfo({
         ? info.consumptionRateHourly
         : null,
     assignmentsCount:
-      typeof info.assignmentsCount === "number" ? info.assignmentsCount : 0,
+      typeof info.assignmentsCount === "number" ? info.assignmentsCount : null,
     eligibleAccelerators: Array.isArray(info.eligibleAccelerators)
       ? info.eligibleAccelerators
       : [],

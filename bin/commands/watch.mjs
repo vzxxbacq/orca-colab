@@ -8,6 +8,7 @@ import { getRuntime } from "../lib/colab-api-client.mjs";
 import { getColabPaths } from "../lib/colab-home.mjs";
 import { getValidAccessToken } from "../lib/colab-oauth.mjs";
 import { CliError, EXIT_OK } from "../lib/cli-output.mjs";
+import { recordSessionEndEvent, resolveDeadSessionEndIso } from "../lib/credit-ledger.mjs";
 import { DashboardSnapshotBuilder } from "../lib/dashboard-snapshot.mjs";
 import {
   DEFAULT_AUTO_STOP_IDLE_MINUTES,
@@ -15,7 +16,7 @@ import {
   GRACE_PERIOD_MINUTES,
 } from "../lib/idle-watchdog.mjs";
 import { createPanelActions } from "../lib/panel-actions.mjs";
-import { listSessions, readSession, writeSession } from "../lib/session-store.mjs";
+import { deleteSession, listSessions, readSession, writeSession } from "../lib/session-store.mjs";
 import { listTasks } from "../lib/task-store.mjs";
 
 // 2 = understands `batch` and the ";;" terminator. Clients fall back to single `call` lines below it.
@@ -315,9 +316,22 @@ export async function run(
               homeDir,
             );
           }
-        } catch {
-          // Token refresh is best effort; the next tick retries.
+        } catch (err) {
+          if (err?.status === 404 && !s.ip) {
+            deleteSession(s.name, homeDir);
+            recordSessionEndEvent(s, {
+              cause: "colab-died",
+              endedAt: resolveDeadSessionEndIso(s, Date.now()),
+              homeDir,
+            });
+            await emitSnapshot({ force: true });
+            continue;
+          }
         }
+      }
+      const metrics = builder.liveMetricsBySession.get(s.name);
+      if (metrics && typeof metrics.gpuUtilizationPercent === "number") {
+        builder.recordGpuSample(s.name, metrics.gpuUtilizationPercent);
       }
       const runningCount = tasks.filter((t) => t.sessionName === s.name && t.status === "running").length;
       const decision = evaluateSessionIdleState({

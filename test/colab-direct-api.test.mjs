@@ -564,3 +564,137 @@ test("Multi-account OAuth supports listing, switching default, and automatic acc
     rmSync(homeDir, { recursive: true, force: true });
   }
 });
+
+test("Re-running up on the same runtime preserves createdAt and replacing a runtime records session.end so monthly usage does not reset", async () => {
+  const homeDir = makeTempHome();
+  try {
+    saveOAuthCredentials(
+      "default",
+      {
+        refreshToken: "ref-reup",
+        accessToken: "valid-reup-token",
+        expiryDate: Date.now() + 3600_000,
+        email: "reup@example.com",
+      },
+      homeDir,
+    );
+
+    // 1. First runtime started at 10:00Z
+    const up1Io = makeBuffers();
+    await runUp(["--gpu", "L4", "--name", "decision-api"], {
+      json: true,
+      stdout: up1Io.stdout,
+      stderr: up1Io.stderr,
+      env: {},
+      homeDir,
+      assignRuntimeFn: async () => ({
+        id: "rt-l4-first",
+        endpoint: "ep-l4-first",
+        baseUrl: "https://8080-rt-l4-first.colab.dev",
+        token: "ptok-first",
+        tokenExpiry: "2026-11-10T11:00:00.000Z",
+      }),
+      queryGpuTtyFn: async () => ({
+        name: "NVIDIA L4",
+        memoryTotalMiB: 23034,
+        driverVersion: "580.82.07",
+      }),
+      getConsumptionUserInfoFn: async () => ({
+        subscriptionTier: "SUBSCRIPTION_TIER_PRO_PLUS",
+        paidComputeUnitsBalance: 100,
+        consumptionRateHourly: 1.94,
+        assignmentsCount: 1,
+      }),
+      nowIso: () => "2026-11-10T10:00:00.000Z",
+      nowMs: () => Date.parse("2026-11-10T10:00:00.000Z"),
+    });
+    const s1 = JSON.parse(up1Io.stdoutText);
+    assert.equal(s1.createdAt, "2026-11-10T10:00:00.000Z");
+    assert.equal(s1.cuPerHour, 1.94);
+
+    // 2. Re-running up 15 minutes later reusing the SAME runtime ID preserves createdAt
+    const up2Io = makeBuffers();
+    await runUp(["--gpu", "L4", "--name", "decision-api"], {
+      json: true,
+      stdout: up2Io.stdout,
+      stderr: up2Io.stderr,
+      env: {},
+      homeDir,
+      assignRuntimeFn: async () => ({
+        id: "rt-l4-first",
+        endpoint: "ep-l4-first",
+        baseUrl: "https://8080-rt-l4-first.colab.dev",
+        token: "ptok-first-refreshed",
+        tokenExpiry: "2026-11-10T11:15:00.000Z",
+      }),
+      queryGpuTtyFn: async () => ({
+        name: "NVIDIA L4",
+        memoryTotalMiB: 23034,
+        driverVersion: "580.82.07",
+      }),
+      nowIso: () => "2026-11-10T10:15:00.000Z",
+      nowMs: () => Date.parse("2026-11-10T10:15:00.000Z"),
+    });
+    const s2 = JSON.parse(up2Io.stdoutText);
+    assert.equal(s2.createdAt, "2026-11-10T10:00:00.000Z");
+
+    // 3. Re-running up at 11:00Z when a NEW runtime ID is assigned closes the first session and keeps its 1.94 CU usage
+    const up3Io = makeBuffers();
+    await runUp(["--gpu", "L4", "--name", "decision-api"], {
+      json: true,
+      stdout: up3Io.stdout,
+      stderr: up3Io.stderr,
+      env: {},
+      homeDir,
+      assignRuntimeFn: async () => ({
+        id: "rt-l4-second",
+        endpoint: "ep-l4-second",
+        baseUrl: "https://8080-rt-l4-second.colab.dev",
+        token: "ptok-second",
+        tokenExpiry: "2026-11-10T12:00:00.000Z",
+      }),
+      queryGpuTtyFn: async () => ({
+        name: "NVIDIA L4",
+        memoryTotalMiB: 23034,
+        driverVersion: "580.82.07",
+      }),
+      getConsumptionUserInfoFn: async () => ({
+        subscriptionTier: "SUBSCRIPTION_TIER_PRO_PLUS",
+        paidComputeUnitsBalance: 98.06,
+        consumptionRateHourly: 1.94,
+        assignmentsCount: 1,
+      }),
+      nowIso: () => "2026-11-10T11:00:00.000Z",
+      nowMs: () => Date.parse("2026-11-10T11:00:00.000Z"),
+    });
+    const s3 = JSON.parse(up3Io.stdoutText);
+    assert.equal(s3.createdAt, "2026-11-10T11:00:00.000Z");
+
+    const credIo = makeBuffers();
+    await runCredits([], {
+      json: true,
+      stdout: credIo.stdout,
+      stderr: credIo.stderr,
+      homeDir,
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            subscriptionTier: "SUBSCRIPTION_TIER_PRO_PLUS",
+            paidComputeUnitsBalance: 98.06,
+            consumptionRateHourly: 1.94,
+            assignmentsCount: 1,
+          }),
+      }),
+      nowIso: () => "2026-11-10T11:00:00.000Z",
+      nowMs: () => Date.parse("2026-11-10T11:00:00.000Z"),
+    });
+    const cred = JSON.parse(credIo.stdoutText);
+    assert.equal(cred.estimatedMonthlyUsedCu, 1.94);
+    assert.equal(cred.estimatedBalanceCu, 98.06);
+    assert.equal(cred.estimatedBurnCuPerHour, 1.94);
+  } finally {
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+});

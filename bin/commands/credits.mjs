@@ -15,8 +15,11 @@ import {
   readLedgerEvents,
   recordBudgetSetEvent,
   recordCalibrateEvent,
+  recordSessionEndEvent,
+  resolveDeadSessionEndIso,
 } from "../lib/credit-ledger.mjs";
-import { listSessions } from "../lib/session-store.mjs";
+import { setRateOverride } from "../lib/rate-table.mjs";
+import { deleteSession, listSessions, writeSession } from "../lib/session-store.mjs";
 
 function calibrateViaOrcaEmbeddedBrowser({ env = process.env } = {}) {
   const orcaBin = locateOrcaBinary(env);
@@ -77,6 +80,107 @@ function calibrateViaOrcaEmbeddedBrowser({ env = process.env } = {}) {
   );
 }
 
+export async function syncCreditsFromColabApi({
+  account = "default",
+  homeDir,
+  fetchImpl = fetch,
+  nowMs = () => Date.now(),
+  nowIso = () => new Date().toISOString(),
+  forceRecord = false,
+} = {}) {
+  const accessToken = await getValidAccessToken({ account, homeDir, fetchImpl });
+  if (!accessToken) {
+    return null;
+  }
+  const ccu = await getConsumptionUserInfo({ accessToken, fetchImpl });
+  const balanceCu =
+    typeof ccu.paidComputeUnitsBalance === "number"
+      ? ccu.paidComputeUnitsBalance
+      : 0;
+  const accountActive = listSessions(homeDir).filter(
+    (s) => (s?.account || "default") === account && s?.state !== "zombie",
+  );
+  if (ccu.assignmentsCount === 0) {
+    for (const s of accountActive) {
+      if (s.colabRuntime?.id && !s.ip) {
+        deleteSession(s.name, homeDir);
+        recordSessionEndEvent(s, {
+          cause: "colab-died",
+          endedAt: resolveDeadSessionEndIso(s, nowMs()),
+          homeDir,
+        });
+      }
+    }
+  } else if (
+    typeof ccu.consumptionRateHourly === "number" &&
+    Number.isFinite(ccu.consumptionRateHourly) &&
+    ccu.consumptionRateHourly > 0
+  ) {
+    const liveRate =
+      Math.round((ccu.consumptionRateHourly + Number.EPSILON) * 100) / 100;
+    if (accountActive.length === 1) {
+      const s = accountActive[0];
+      if (s.cuPerHour !== liveRate) {
+        writeSession({ ...s, cuPerHour: liveRate }, homeDir);
+      }
+      if (s.rateKey && s.rateKey !== "unknown") {
+        setRateOverride(s.rateKey, liveRate, homeDir);
+      }
+    }
+  }
+
+  const at = nowIso();
+  const existingEvents = readLedgerEvents(homeDir);
+  const lastCal = [...existingEvents]
+    .reverse()
+    .find((e) => e?.type === "calibrate" && (e?.account ?? "default") === account);
+  const changed =
+    forceRecord ||
+    !lastCal ||
+    lastCal.source !== "colab-api" ||
+    Math.abs(Number(lastCal.balanceCu) - balanceCu) > 1e-6 ||
+    lastCal.consumptionRateHourly !== ccu.consumptionRateHourly ||
+    lastCal.assignmentsCount !== ccu.assignmentsCount;
+
+  const event = {
+    type: "calibrate",
+    at,
+    account,
+    balanceCu,
+    ...(typeof ccu.consumptionRateHourly === "number" &&
+    Number.isFinite(ccu.consumptionRateHourly)
+      ? { consumptionRateHourly: ccu.consumptionRateHourly }
+      : {}),
+    ...(typeof ccu.assignmentsCount === "number" &&
+    Number.isFinite(ccu.assignmentsCount)
+      ? { assignmentsCount: ccu.assignmentsCount }
+      : {}),
+    source: "colab-api",
+  };
+
+  if (changed) {
+    recordCalibrateEvent(
+      {
+        account,
+        balanceCu,
+        consumptionRateHourly: ccu.consumptionRateHourly,
+        assignmentsCount: ccu.assignmentsCount,
+        source: "colab-api",
+        at,
+      },
+      homeDir,
+    );
+  }
+
+  return {
+    event,
+    balanceCu,
+    subscriptionTier: ccu.subscriptionTier || "free",
+    consumptionRateHourly: ccu.consumptionRateHourly,
+    assignmentsCount: ccu.assignmentsCount,
+  };
+}
+
 export async function run(
   argv,
   {
@@ -110,6 +214,8 @@ export async function run(
     parsed.values.account?.trim() || config?.defaultAccount || "default";
   const [subcommand, rawValue] = parsed.positionals;
 
+  let liveEvent = null;
+
   if (subcommand === "set") {
     const balanceCu = Number(rawValue);
     if (rawValue === undefined || !Number.isFinite(balanceCu) || balanceCu < 0) {
@@ -129,19 +235,18 @@ export async function run(
     let calibrated = false;
     if (!parsed.values.browser) {
       try {
-        const accessToken = await getValidAccessToken({ account, homeDir, fetchImpl });
-        if (accessToken) {
-          const ccu = await getConsumptionUserInfo({ accessToken, fetchImpl });
-          const balanceCu =
-            typeof ccu.paidComputeUnitsBalance === "number"
-              ? ccu.paidComputeUnitsBalance
-              : 0;
-          recordCalibrateEvent(
-            { account, balanceCu, source: "colab-api", at: nowIso() },
-            homeDir,
-          );
+        const synced = await syncCreditsFromColabApi({
+          account,
+          homeDir,
+          fetchImpl,
+          nowMs,
+          nowIso,
+          forceRecord: true,
+        });
+        if (synced) {
+          liveEvent = synced.event;
           log(
-            `Calibrated account '${account}' via Colab API: ${balanceCu} CU (${ccu.subscriptionTier || "free"}).`,
+            `Calibrated account '${account}' via Colab API: ${synced.balanceCu} CU (${synced.subscriptionTier}).`,
             stderr,
           );
           calibrated = true;
@@ -168,13 +273,34 @@ export async function run(
         );
       }
     }
-  } else if (subcommand !== undefined) {
+  } else if (subcommand === undefined) {
+    if (!parsed.values.browser) {
+      try {
+        const synced = await syncCreditsFromColabApi({
+          account,
+          homeDir,
+          fetchImpl,
+          nowMs,
+          nowIso,
+          forceRecord: false,
+        });
+        if (synced) {
+          liveEvent = synced.event;
+        }
+      } catch {
+        // Offline or token unavailable; use ledger state.
+      }
+    }
+  } else {
     throw new CliError(
       `unknown credits subcommand '${subcommand}' (expected 'set', 'budget', or 'calibrate')`,
     );
   }
 
   const events = readLedgerEvents(homeDir);
+  if (liveEvent && events.at(-1)?.at !== liveEvent.at) {
+    events.push(liveEvent);
+  }
   const activeSessions = listSessions(homeDir);
   const projection = projectAccountCredits({
     events,

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { syncCreditsFromColabApi } from "../commands/credits.mjs";
 import { getRuntimeResources } from "./colab-api-client.mjs";
 import {
   getColabPaths,
@@ -90,12 +91,40 @@ export class DashboardSnapshotBuilder {
     this.origin = origin;
     this.gpuUtilSamplesBySession = new Map();
     this.liveMetricsBySession = new Map();
+    this.lastCcuSyncAtByAccount = new Map();
+    this.inFlightCcuSyncByAccount = new Map();
+    this.liveCcuEventByAccount = new Map();
     this.cachedDoctor = null;
     this.lastDoctorAt = 0;
   }
 
   invalidateDoctor() {
     this.cachedDoctor = null;
+  }
+
+  async syncAccountCcu(account) {
+    if (this.inFlightCcuSyncByAccount.has(account)) {
+      return this.inFlightCcuSyncByAccount.get(account);
+    }
+    const promise = (async () => {
+      try {
+        this.lastCcuSyncAtByAccount.set(account, Date.now());
+        const synced = await syncCreditsFromColabApi({
+          account,
+          homeDir: this.homeDir,
+          forceRecord: false,
+        });
+        if (synced?.event) {
+          this.liveCcuEventByAccount.set(account, synced.event);
+        }
+      } catch {
+        // Ignore transient network errors during background poll.
+      } finally {
+        this.inFlightCcuSyncByAccount.delete(account);
+      }
+    })();
+    this.inFlightCcuSyncByAccount.set(account, promise);
+    return promise;
   }
 
   recordGpuSample(sessionName, percent) {
@@ -128,6 +157,20 @@ export class DashboardSnapshotBuilder {
         ? configuredDefault
         : oauthAccounts[0].account;
 
+    const authByAccount = {};
+    for (const acc of accounts) {
+      authByAccount[acc] = readOAuthAccountStatus(acc, homeDir);
+      if (authByAccount[acc]?.authenticated) {
+        const lastSync = this.lastCcuSyncAtByAccount.get(acc) || 0;
+        const ageMs = Date.now() - lastSync;
+        if (includeLiveMetrics && ageMs > 5_000) {
+          await this.syncAccountCcu(acc);
+        } else if (ageMs > 30_000) {
+          void this.syncAccountCcu(acc);
+        }
+      }
+    }
+
     const sessions = listSessions(homeDir);
     const tasks = listTasks(homeDir);
     const events = readLedgerEvents(homeDir);
@@ -138,15 +181,18 @@ export class DashboardSnapshotBuilder {
     );
 
     const creditsByAccount = {};
-    const authByAccount = {};
     for (const acc of accounts) {
+      const liveEv = this.liveCcuEventByAccount.get(acc);
+      const accEvents =
+        liveEv && events.at(-1)?.at !== liveEv.at
+          ? [...events, liveEv]
+          : events;
       creditsByAccount[acc] = projectAccountCredits({
-        events,
+        events: accEvents,
         activeSessions: sessions,
         account: acc,
         nowMs: Date.now(),
       });
-      authByAccount[acc] = readOAuthAccountStatus(acc, homeDir);
     }
 
     const activeTask = pickActiveTask(tasks, selectedTaskId);

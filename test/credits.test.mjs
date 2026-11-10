@@ -30,6 +30,8 @@ test("mapGpuNameToRateKey maps nvidia-smi GPU names and rates command persists u
   assert.equal(mapGpuNameToRateKey("Tesla T4"), "T4");
   assert.equal(mapGpuNameToRateKey("NVIDIA A100-SXM4-40GB"), "A100");
   assert.equal(mapGpuNameToRateKey("NVIDIA L4"), "L4");
+  assert.equal(mapGpuNameToRateKey("NVIDIA RTX PRO 6000 Blackwell Server Edition"), "G4");
+  assert.equal(mapGpuNameToRateKey("NVIDIA H100 80GB HBM3"), "H100");
   assert.equal(mapGpuNameToRateKey("TPU v2-8"), "TPU v2-8");
   assert.equal(mapGpuNameToRateKey("CPU"), "CPU");
   assert.equal(mapGpuNameToRateKey("Mystery Accelerator"), "unknown");
@@ -52,7 +54,9 @@ test("mapGpuNameToRateKey maps nvidia-smi GPU names and rates command persists u
     rates: {
       T4: 2.1,
       L4: 4.82,
+      G4: 6.71,
       A100: 11.77,
+      H100: 21.2,
       "TPU v2-8": 1.76,
       CPU: 0.08,
       unknown: 2,
@@ -212,4 +216,77 @@ test("credits set, credits budget and ledger commands append and query JSONL eve
       },
     ],
   });
+});
+
+test("projectAccountCredits preserves unended session.start intervals when a runtime is replaced and reconciles colab-api calibrations", () => {
+  const events = [
+    {
+      type: "calibrate",
+      at: "2026-11-09T10:00:00.000Z",
+      account: "default",
+      balanceCu: 2500,
+      source: "colab-api",
+    },
+    {
+      type: "session.start",
+      at: "2026-11-10T03:00:00.000Z",
+      account: "default",
+      session: "orca-colab-decision-api",
+      gpuName: "NVIDIA L4",
+      rateKey: "L4",
+      cuPerHour: 1.94,
+    },
+    {
+      type: "session.start",
+      at: "2026-11-10T09:00:00.000Z",
+      account: "default",
+      session: "orca-colab-decision-api",
+      gpuName: "NVIDIA L4",
+      rateKey: "L4",
+      cuPerHour: 1.94,
+    },
+    {
+      type: "session.start",
+      at: "2026-11-10T09:00:30.000Z",
+      account: "default",
+      session: "orca-colab-decision-api",
+      gpuName: "NVIDIA L4",
+      rateKey: "L4",
+      cuPerHour: 4.82,
+    },
+    {
+      type: "calibrate",
+      at: "2026-11-10T09:00:30.000Z",
+      account: "default",
+      balanceCu: 2495.5,
+      consumptionRateHourly: 1.94,
+      assignmentsCount: 1,
+      source: "colab-api",
+    },
+  ];
+
+  const activeSessions = [
+    {
+      name: "orca-colab-decision-api",
+      account: "default",
+      createdAt: "2026-11-10T09:00:30.000Z",
+      cuPerHour: 4.82,
+      state: "active",
+    },
+  ];
+
+  const nowMs = Date.parse("2026-11-10T10:00:30.000Z");
+  const projected = projectAccountCredits({
+    events,
+    activeSessions,
+    account: "default",
+    nowMs,
+    month: "2026-11",
+  });
+
+  // Direct from colab-api: balance is paidComputeUnitsBalance (2495.5), monthly used is 2500 - 2495.5 = 4.5 CU
+  assert.equal(projected.estimatedBurnCuPerHour, 1.94);
+  assert.equal(projected.estimatedBalanceCu, 2495.5);
+  assert.equal(projected.estimatedMonthlyUsedCu, 4.5);
+  assert.equal(projected.sessionsThisMonth, 2);
 });

@@ -12,6 +12,7 @@ import {
 import { copyToClipboard } from "../lib/clipboard.mjs";
 import {
   assignRuntime as defaultAssignRuntime,
+  getConsumptionUserInfo as defaultGetConsumptionUserInfo,
   queryGpuOverTty as defaultQueryGpuOverTty,
   runBootstrapOverTty as defaultRunBootstrapOverTty,
 } from "../lib/colab-api-client.mjs";
@@ -33,10 +34,23 @@ import {
   readOAuthAccountStatus,
   resolveOAuthAccountKey,
 } from "../lib/colab-oauth.mjs";
-import { recordSessionStartEvent } from "../lib/credit-ledger.mjs";
+import {
+  recordCalibrateEvent,
+  recordSessionEndEvent,
+  recordSessionStartEvent,
+  resolveDeadSessionEndIso,
+} from "../lib/credit-ledger.mjs";
 import { BOOTSTRAP_NOTEBOOK_COLAB_URL, openUrl } from "../lib/open-url.mjs";
-import { resolveGpuRate as resolveRateFromTable } from "../lib/rate-table.mjs";
-import { listSessions, writeSession } from "../lib/session-store.mjs";
+import {
+  resolveGpuRate as resolveRateFromTable,
+  setRateOverride,
+} from "../lib/rate-table.mjs";
+import {
+  deleteSession,
+  listSessions,
+  readSession,
+  writeSession,
+} from "../lib/session-store.mjs";
 import { waitForSshBanner } from "../lib/ssh-banner-probe.mjs";
 import { queryRemoteGpu } from "../lib/ssh-exec.mjs";
 import { getTailscaleStatus } from "../lib/tailscale-cli.mjs";
@@ -62,7 +76,9 @@ export async function run(
     copyClipboard = copyToClipboard,
     resolveGpuRate = resolveRateFromTable,
     onSessionStart = recordSessionStartEvent,
+    onSessionEnd = recordSessionEndEvent,
     assignRuntimeFn = defaultAssignRuntime,
+    getConsumptionUserInfoFn = null,
     bootstrapTtyFn = defaultRunBootstrapOverTty,
     queryGpuTtyFn = defaultQueryGpuOverTty,
     fetchImpl = fetch,
@@ -346,8 +362,8 @@ export async function run(
                       : null,
               driverVersion: null,
             };
-      const { rateKey, cuPerHour } = resolveGpuRate(effectiveGpu.name, homeDir);
-      const createdAt = nowIso();
+      let { rateKey, cuPerHour } = resolveGpuRate(effectiveGpu.name, homeDir);
+      const nowIsoVal = nowIso();
       const rawSuffix =
         opts.name ||
         String(colabRuntime.id || "")
@@ -359,6 +375,74 @@ export async function run(
         ? rawSuffix
         : `orca-colab-${rawSuffix}`;
 
+      const fetchCcuInfo =
+        getConsumptionUserInfoFn ??
+        (assignRuntimeFn === defaultAssignRuntime
+          ? defaultGetConsumptionUserInfo
+          : null);
+      let syncedCcu = null;
+      if (fetchCcuInfo && accessToken) {
+        try {
+          syncedCcu = await fetchCcuInfo({ accessToken, fetchImpl, signal });
+          if (
+            typeof syncedCcu?.consumptionRateHourly === "number" &&
+            Number.isFinite(syncedCcu.consumptionRateHourly) &&
+            syncedCcu.consumptionRateHourly > 0 &&
+            (syncedCcu.assignmentsCount ?? 1) <= 1
+          ) {
+            cuPerHour =
+              Math.round(
+                (syncedCcu.consumptionRateHourly + Number.EPSILON) * 100,
+              ) / 100;
+            if (rateKey && rateKey !== "unknown") {
+              setRateOverride(rateKey, cuPerHour, homeDir);
+            }
+          }
+        } catch {
+          // Best-effort CCU rate & balance sync.
+        }
+      }
+
+      const existingSameName = readSession(sessionName, homeDir);
+      const isSameRuntime = Boolean(
+        existingSameName &&
+          existingSameName.state !== "zombie" &&
+          existingSameName.colabRuntime?.id &&
+          existingSameName.colabRuntime.id === colabRuntime.id,
+      );
+
+      if (existingSameName && existingSameName.state !== "zombie" && !isSameRuntime) {
+        if (onSessionEnd) {
+          await onSessionEnd(existingSameName, {
+            cause: "colab-died",
+            endedAt: resolveDeadSessionEndIso(existingSameName, nowMs()),
+            homeDir,
+          });
+        }
+      }
+
+      if (!opts.new && assignRuntimeFn === defaultAssignRuntime) {
+        const otherStale = currentActiveSessions.filter(
+          (s) =>
+            s.name !== sessionName &&
+            s.colabRuntime?.id &&
+            s.colabRuntime.id !== colabRuntime.id &&
+            (s.rateKey === rateKey || (syncedCcu?.assignmentsCount ?? 2) <= 1),
+        );
+        for (const stale of otherStale) {
+          deleteSession(stale.name, homeDir);
+          if (onSessionEnd) {
+            await onSessionEnd(stale, {
+              cause: "colab-died",
+              endedAt: resolveDeadSessionEndIso(stale, nowMs()),
+              homeDir,
+            });
+          }
+        }
+      }
+
+      const createdAt = isSameRuntime ? existingSameName.createdAt : nowIsoVal;
+
       const sessionRecord = {
         name: sessionName,
         account: account.label,
@@ -369,12 +453,12 @@ export async function run(
         rateKey,
         cuPerHour,
         createdAt,
-        lastActivityAt: createdAt,
-        activePids: [],
-        keep: Boolean(opts.keep),
+        lastActivityAt: nowIsoVal,
+        activePids: isSameRuntime ? existingSameName.activePids ?? [] : [],
+        keep: Boolean(opts.keep || (isSameRuntime && existingSameName.keep)),
         state: "active",
-        remoteRoot: null,
-        forwards: [],
+        remoteRoot: isSameRuntime ? existingSameName.remoteRoot ?? null : null,
+        forwards: isSameRuntime ? existingSameName.forwards ?? [] : [],
         colabRuntime: {
           id: colabRuntime.id,
           endpoint: colabRuntime.endpoint,
@@ -385,8 +469,21 @@ export async function run(
       };
 
       const session = writeSession(sessionRecord, homeDir);
-      if (onSessionStart) {
+      if (onSessionStart && !isSameRuntime) {
         await onSessionStart(session, homeDir);
+      }
+      if (syncedCcu && typeof syncedCcu.paidComputeUnitsBalance === "number") {
+        recordCalibrateEvent(
+          {
+            account: account.label,
+            balanceCu: syncedCcu.paidComputeUnitsBalance,
+            consumptionRateHourly: syncedCcu.consumptionRateHourly,
+            assignmentsCount: syncedCcu.assignmentsCount,
+            source: "colab-api",
+            at: nowIsoVal,
+          },
+          homeDir,
+        );
       }
 
       log(
@@ -609,7 +706,28 @@ export async function run(
     runSsh,
   });
   const { rateKey, cuPerHour } = resolveGpuRate(gpu.name, homeDir);
-  const createdAt = nowIso();
+  const nowIsoVal = nowIso();
+  const existingSameName = readSession(peer.hostName, homeDir);
+  const isSameRuntime = Boolean(
+    existingSameName &&
+      existingSameName.state !== "zombie" &&
+      ((colabRuntime?.id &&
+        existingSameName.colabRuntime?.id === colabRuntime.id) ||
+        (peer?.ipv4 && existingSameName.ip === peer.ipv4)),
+  );
+  if (
+    existingSameName &&
+    existingSameName.state !== "zombie" &&
+    !isSameRuntime &&
+    onSessionEnd
+  ) {
+    await onSessionEnd(existingSameName, {
+      cause: "colab-died",
+      endedAt: resolveDeadSessionEndIso(existingSameName, nowMs()),
+      homeDir,
+    });
+  }
+  const createdAt = isSameRuntime ? existingSameName.createdAt : nowIsoVal;
 
   const sessionRecord = {
     name: peer.hostName,
@@ -620,12 +738,12 @@ export async function run(
     rateKey,
     cuPerHour,
     createdAt,
-    lastActivityAt: createdAt,
-    activePids: [],
-    keep: Boolean(opts.keep),
+    lastActivityAt: nowIsoVal,
+    activePids: isSameRuntime ? existingSameName.activePids ?? [] : [],
+    keep: Boolean(opts.keep || (isSameRuntime && existingSameName.keep)),
     state: "active",
-    remoteRoot: null,
-    forwards: [],
+    remoteRoot: isSameRuntime ? existingSameName.remoteRoot ?? null : null,
+    forwards: isSameRuntime ? existingSameName.forwards ?? [] : [],
   };
   if (colabRuntime) {
     sessionRecord.colabRuntime = {
@@ -639,7 +757,7 @@ export async function run(
 
   const session = writeSession(sessionRecord, homeDir);
 
-  if (onSessionStart) {
+  if (onSessionStart && !isSameRuntime) {
     await onSessionStart(session, homeDir);
   }
 

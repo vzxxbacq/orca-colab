@@ -6,8 +6,14 @@ import {
   log,
   writeJson,
 } from "../lib/cli-output.mjs";
-import { recordSessionEndEvent } from "../lib/credit-ledger.mjs";
-import { deleteRuntime as defaultDeleteRuntime } from "../lib/colab-api-client.mjs";
+import {
+  recordCalibrateEvent,
+  recordSessionEndEvent,
+} from "../lib/credit-ledger.mjs";
+import {
+  deleteRuntime as defaultDeleteRuntime,
+  getConsumptionUserInfo as defaultGetConsumptionUserInfo,
+} from "../lib/colab-api-client.mjs";
 import { getValidAccessToken } from "../lib/colab-oauth.mjs";
 import {
   deleteSession,
@@ -106,6 +112,7 @@ export async function run(
     }
 
     let deletedByApi = false;
+    let apiAccessToken = null;
     if (session.colabRuntime?.id) {
       try {
         const accessToken = await getValidAccessToken({
@@ -114,6 +121,7 @@ export async function run(
           fetchImpl,
         });
         if (accessToken) {
+          apiAccessToken = accessToken;
           await deleteRuntimeFn({
             runtimeId: session.colabRuntime.id,
             accessToken,
@@ -162,6 +170,30 @@ export async function run(
           endedAt,
           homeDir,
         });
+      }
+      if (deletedByApi && apiAccessToken && deleteRuntimeFn === defaultDeleteRuntime) {
+        try {
+          const ccu = await defaultGetConsumptionUserInfo({
+            accessToken: apiAccessToken,
+            fetchImpl,
+            signal,
+          });
+          if (typeof ccu.paidComputeUnitsBalance === "number") {
+            recordCalibrateEvent(
+              {
+                account: session.account || "default",
+                balanceCu: ccu.paidComputeUnitsBalance,
+                consumptionRateHourly: ccu.consumptionRateHourly,
+                assignmentsCount: ccu.assignmentsCount,
+                source: "colab-api",
+                at: endedAt,
+              },
+              homeDir,
+            );
+          }
+        } catch {
+          // Best-effort post-session CCU calibration.
+        }
       }
       log(`Released session ${session.name}.`, stderr);
       results.push({

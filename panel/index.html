@@ -6,6 +6,7 @@
     <title>Google Colab GPU</title>
     <style>
       :root {
+        color-scheme: dark;
         --bg: var(--orca-background, #0b0e14);
         --fg: var(--orca-foreground, #eef2f8);
         --muted: var(--orca-muted-foreground, #8b95a7);
@@ -41,6 +42,31 @@
 
       * {
         box-sizing: border-box;
+        scrollbar-width: thin;
+        scrollbar-color: color-mix(in srgb, var(--fg) 16%, transparent)
+          transparent;
+      }
+
+      ::-webkit-scrollbar {
+        width: 5px;
+        height: 5px;
+      }
+
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+
+      ::-webkit-scrollbar-thumb {
+        background: color-mix(in srgb, var(--fg) 16%, transparent);
+        border-radius: 999px;
+      }
+
+      ::-webkit-scrollbar-thumb:hover {
+        background: color-mix(in srgb, var(--fg) 30%, transparent);
+      }
+
+      ::-webkit-scrollbar-corner {
+        background: transparent;
       }
 
       body {
@@ -664,6 +690,56 @@
         gap: 5px;
         max-height: 215px;
         overflow-y: auto;
+        scrollbar-width: none;
+      }
+
+      .task-list::-webkit-scrollbar {
+        display: none;
+      }
+
+      .task-list.fade-bottom {
+        -webkit-mask-image: linear-gradient(
+          to bottom,
+          #000 calc(100% - 28px),
+          transparent 100%
+        );
+        mask-image: linear-gradient(
+          to bottom,
+          #000 calc(100% - 28px),
+          transparent 100%
+        );
+      }
+
+      .task-list.fade-top {
+        -webkit-mask-image: linear-gradient(
+          to bottom,
+          transparent 0%,
+          #000 16px,
+          #000 100%
+        );
+        mask-image: linear-gradient(
+          to bottom,
+          transparent 0%,
+          #000 16px,
+          #000 100%
+        );
+      }
+
+      .task-list.fade-top.fade-bottom {
+        -webkit-mask-image: linear-gradient(
+          to bottom,
+          transparent 0%,
+          #000 16px,
+          #000 calc(100% - 28px),
+          transparent 100%
+        );
+        mask-image: linear-gradient(
+          to bottom,
+          transparent 0%,
+          #000 16px,
+          #000 calc(100% - 28px),
+          transparent 100%
+        );
       }
 
       .filter-strip {
@@ -806,11 +882,52 @@
         margin-bottom: 9px;
         font-size: 11px;
         color: var(--muted);
+        transition: border-color 0.14s ease, background 0.14s ease;
+      }
+
+      details.helper-details:hover {
+        border-color: var(--border-strong);
       }
 
       details.helper-details summary {
+        list-style: none;
         cursor: pointer;
         font-weight: 600;
+        color: var(--fg);
+        user-select: none;
+      }
+
+      details.helper-details summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .fold-chevron {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 14px;
+        height: 14px;
+        color: var(--muted);
+        transition: transform 0.16s ease, color 0.16s ease;
+        flex-shrink: 0;
+      }
+
+      .fold-chevron::before {
+        content: "";
+        width: 5px;
+        height: 5px;
+        border-right: 1.5px solid currentColor;
+        border-bottom: 1.5px solid currentColor;
+        transform: rotate(-45deg);
+        margin-left: -2px;
+      }
+
+      details[open] > summary .fold-chevron {
+        transform: rotate(90deg);
+        color: var(--fg);
+      }
+
+      details.helper-details summary:hover .fold-chevron {
         color: var(--fg);
       }
     </style>
@@ -951,7 +1068,10 @@
         <!-- Optional Advanced Section: Tailscale / Headscale P2P SSH -->
         <details class="helper-details" style="padding: 10px 12px">
           <summary style="display: flex; align-items: center; justify-content: space-between">
-            <span>Advanced (Optional) · Configure Tailscale P2P SSH</span>
+            <span class="row" style="gap: 5px">
+              <span class="fold-chevron"></span>
+              <span>Advanced (Optional) · Configure Tailscale P2P SSH</span>
+            </span>
             <span id="step2Badge" class="badge neutral">Optional</span>
           </summary>
 
@@ -1094,12 +1214,21 @@
             </div>
           </div>
 
-          <!-- 2x2 Accelerator Selector Grid -->
+          <!-- Accelerator Selector Grid -->
           <div class="form-label" style="margin-bottom: 4px">
             <span>Select Hardware Accelerator</span>
             <span class="muted" style="font-weight: 400">Colab Direct API</span>
           </div>
           <div class="gpu-grid" id="gpuCardGrid">
+            <div class="gpu-card" data-gpu="CPU">
+              <div class="gpu-card-top">
+                <span class="gpu-name">Colab CPU</span>
+                <span class="gpu-rate">≈ 0.08 CU/h</span>
+              </div>
+              <div class="gpu-spec">12+ GB System RAM</div>
+              <div class="gpu-tag">Lightweight · Debugging</div>
+            </div>
+
             <div class="gpu-card selected" data-gpu="T4">
               <div class="gpu-card-top">
                 <span class="gpu-name">NVIDIA T4</span>
@@ -1118,22 +1247,31 @@
               <div class="gpu-tag">Ada Lovelace · Fine-Tuning</div>
             </div>
 
+            <div class="gpu-card" data-gpu="G4">
+              <div class="gpu-card-top">
+                <span class="gpu-name">RTX PRO 6000</span>
+                <span class="gpu-rate">≈ 6.71 CU/h</span>
+              </div>
+              <div class="gpu-spec">96 GB GDDR7 VRAM</div>
+              <div class="gpu-tag">Blackwell · Large Models</div>
+            </div>
+
             <div class="gpu-card" data-gpu="A100">
               <div class="gpu-card-top">
                 <span class="gpu-name">NVIDIA A100</span>
                 <span class="gpu-rate">≈ 11.77 CU/h</span>
               </div>
-              <div class="gpu-spec">40 GB HBM2 VRAM</div>
+              <div class="gpu-spec">40 / 80 GB HBM2 VRAM</div>
               <div class="gpu-tag">High Compute · Training</div>
             </div>
 
-            <div class="gpu-card" data-gpu="CPU">
+            <div class="gpu-card" data-gpu="H100">
               <div class="gpu-card-top">
-                <span class="gpu-name">Colab CPU</span>
-                <span class="gpu-rate">≈ 0.08 CU/h</span>
+                <span class="gpu-name">NVIDIA H100</span>
+                <span class="gpu-rate">≈ 21.20 CU/h</span>
               </div>
-              <div class="gpu-spec">12+ GB System RAM</div>
-              <div class="gpu-tag">Lightweight · Debugging</div>
+              <div class="gpu-spec">80 GB HBM3 VRAM</div>
+              <div class="gpu-tag">Hopper · Frontier Training</div>
             </div>
           </div>
 
@@ -1203,7 +1341,10 @@
       <!-- Shown when >= 1 GPU session is active (or viewing past logs)      -->
       <!-- ================================================================= -->
       <div id="viewWorkspace" class="hidden" style="display: flex; flex-direction: column; gap: 10px">
-        <!-- Pinned Active GPU Banner -->
+        <!-- Top-Level Account Pool Bar (Parent of GPU Runtimes) -->
+        <div id="accountsHeaderBox"></div>
+
+        <!-- Pinned Active GPU Banner (Child of Account Pool) -->
         <div id="activeRuntimeBanner" class="runtime-banner"></div>
 
         <!-- Segmented Navigation Bar -->
@@ -1236,7 +1377,7 @@
                 class="muted"
                 style="font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis"
               >
-                Boundary: T4, L4, A100, G4, H100, CPU · Max 2 Runtimes
+                Allowed GPUs: CPU, T4, L4, RTX PRO 6000, A100, H100 · Max 2 Concurrent Runtimes
               </div>
               <button
                 class="ghost"
@@ -1387,7 +1528,7 @@
                 min="0"
                 placeholder="Set balance (CU)"
               />
-              <button id="setBalanceBtn">Set Balance</button>
+              <button id="setBalanceBtn" style="flex-shrink: 0">Set</button>
             </div>
             <div class="row" style="margin-top: 6px">
               <input
@@ -1397,7 +1538,7 @@
                 min="0"
                 placeholder="Monthly budget (CU)"
               />
-              <button id="setBudgetBtn">Set Budget</button>
+              <button id="setBudgetBtn" style="flex-shrink: 0">Set</button>
             </div>
           </div>
 
@@ -1504,6 +1645,20 @@
         }
       }
 
+      function updateTaskListFade() {
+        const el = document.getElementById("taskListContainer");
+        if (!el) return;
+        const canScrollTop = el.scrollTop > 2;
+        const canScrollBottom =
+          el.scrollHeight - el.scrollTop - el.clientHeight > 2;
+        el.classList.toggle("fade-top", canScrollTop);
+        el.classList.toggle("fade-bottom", canScrollBottom);
+      }
+
+      document
+        .getElementById("taskListContainer")
+        .addEventListener("scroll", updateTaskListFade, { passive: true });
+
       function switchWorkspaceTab(tabName) {
         currentTab = tabName;
         document.querySelectorAll(".seg-tab").forEach((btn) => {
@@ -1518,6 +1673,9 @@
         document
           .getElementById("tabCredits")
           .classList.toggle("hidden", tabName !== "credits");
+        if (tabName === "tasks") {
+          requestAnimationFrame(updateTaskListFade);
+        }
       }
 
       document.querySelectorAll(".seg-tab").forEach((btn) => {
@@ -1534,7 +1692,9 @@
           const label =
             selectedGpu === "CPU"
               ? "⚡ Launch Colab CPU Runtime"
-              : `⚡ Launch NVIDIA ${selectedGpu} Runtime`;
+              : selectedGpu === "G4"
+                ? "⚡ Launch RTX PRO 6000 (96 GB) Runtime"
+                : `⚡ Launch NVIDIA ${selectedGpu} Runtime`;
           document.getElementById("launchGpuBtn").textContent = label;
         });
       });
@@ -1545,12 +1705,12 @@
       };
 
       const GPU_CATALOG = [
-        { id: "T4", name: "NVIDIA T4", spec: "16 GB VRAM", rate: "≈ 1.96 CU/h" },
-        { id: "L4", name: "NVIDIA L4", spec: "24 GB VRAM", rate: "≈ 4.82 CU/h" },
-        { id: "A100", name: "NVIDIA A100", spec: "40 GB VRAM", rate: "≈ 11.77 CU/h" },
-        { id: "G4", name: "NVIDIA G4", spec: "24 GB VRAM", rate: "≈ 5.50 CU/h" },
-        { id: "H100", name: "NVIDIA H100", spec: "80 GB VRAM", rate: "≈ 21.20 CU/h" },
-        { id: "CPU", name: "Colab CPU", spec: "12+ GB RAM", rate: "≈ 0.08 CU/h" },
+        { id: "CPU", name: "Colab CPU", shortName: "CPU", spec: "12+ GB RAM", rate: "≈ 0.08 CU/h" },
+        { id: "T4", name: "NVIDIA T4", shortName: "T4", spec: "16 GB VRAM", rate: "≈ 1.96 CU/h" },
+        { id: "L4", name: "NVIDIA L4", shortName: "L4", spec: "24 GB VRAM", rate: "≈ 4.82 CU/h" },
+        { id: "G4", name: "RTX PRO 6000", shortName: "RTX PRO 6000", spec: "96 GB VRAM", rate: "≈ 6.71 CU/h" },
+        { id: "A100", name: "NVIDIA A100", shortName: "A100", spec: "40 / 80 GB VRAM", rate: "≈ 11.77 CU/h" },
+        { id: "H100", name: "NVIDIA H100", shortName: "H100", spec: "80 GB VRAM", rate: "≈ 21.20 CU/h" },
       ];
 
       window.__togglePolicyGpu = async (gpuId) => {
@@ -1921,7 +2081,10 @@
         };
         const policySummaryEl = document.getElementById("agentPolicySummaryText");
         if (policySummaryEl) {
-          policySummaryEl.textContent = `Allowed GPUs: ${policy.allowedGpus.join(", ")} · Max ${policy.maxConcurrentSessions} Concurrent Runtime${policy.maxConcurrentSessions > 1 ? "s" : ""}`;
+          const orderedAllowed = GPU_CATALOG.filter((g) =>
+            policy.allowedGpus.includes(g.id),
+          ).map((g) => g.shortName);
+          policySummaryEl.textContent = `Allowed GPUs: ${orderedAllowed.join(", ")} · Max ${policy.maxConcurrentSessions} Concurrent Runtime${policy.maxConcurrentSessions > 1 ? "s" : ""}`;
         }
 
         const policyGridEl = document.getElementById("policyGpuGrid");
@@ -1950,8 +2113,47 @@
             val === policy.maxConcurrentSessions ? "primary" : "ghost";
         });
 
+        const accountsHeaderEl = document.getElementById("accountsHeaderBox");
+        const existingDetails = accountsHeaderEl?.querySelector("details.helper-details");
+        if (existingDetails) {
+          window.__accountsDetailsOpen = existingDetails.open;
+        }
+        const defaultAccObj =
+          oauthAccounts.find((a) => a.account === snap.defaultAccount) ||
+          oauthAccounts[0] ||
+          null;
+        const defaultAccLabel = defaultAccObj
+          ? defaultAccObj.email || defaultAccObj.account
+          : oauthOk
+            ? "Connected"
+            : "Not signed in";
+        const shouldOpenAccounts =
+          window.__accountsDetailsOpen !== undefined
+            ? window.__accountsDetailsOpen
+            : activeSessions.length === 0;
+        const accountsOpenAttr = shouldOpenAccounts ? "open" : "";
+        if (accountsHeaderEl) {
+          accountsHeaderEl.innerHTML = `
+            <details class="helper-details" ${accountsOpenAttr} ontoggle="window.__accountsDetailsOpen = this.open" style="margin: 0; padding: 7px 10px; background: var(--surface); border-color: var(--border)">
+              <summary class="row-between" style="font-size: 11px; gap: 6px">
+                <span class="row" style="gap: 6px; min-width: 0; flex: 1">
+                  <span class="fold-chevron"></span>
+                  <span class="status-dot ${oauthOk ? "ok" : "warn"}"></span>
+                  <span style="flex-shrink: 0">Google Colab Accounts (${oauthAccounts.length})</span>
+                  <span class="muted" style="font-weight: 400; font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">· ${esc(defaultAccLabel)} · ${esc(balStr)}</span>
+                </span>
+                <button style="padding: 2px 7px; font-size: 10px; flex-shrink: 0" onclick="event.preventDefault(); event.stopPropagation(); window.__addAccountFromBanner(this)">+ Add Account</button>
+              </summary>
+              <div style="display: flex; flex-direction: column; gap: 5px; margin-top: 7px">
+                ${renderAccountsRows()}
+              </div>
+            </details>
+          `;
+        }
+
         const bannerEl = document.getElementById("activeRuntimeBanner");
         if (snap.provisioning?.active) {
+          bannerEl.classList.remove("hidden");
           bannerEl.innerHTML = `
             <div class="runtime-top">
               <div class="runtime-title">
@@ -1965,21 +2167,10 @@
             </div>
           `;
         } else if (activeSessions.length === 0) {
-          bannerEl.innerHTML = `
-            <div class="runtime-top">
-              <div class="runtime-title">
-                <span class="status-dot ${oauthOk ? "ok" : "warn"}"></span>
-                <span>${oauthOk ? "Google Connected" : "Not Connected"} · ${esc(balStr)}</span>
-              </div>
-              <button class="primary" style="padding: 3px 8px; font-size: 10.5px" onclick="window.__addAccountFromBanner(this)">
-                + Add Account
-              </button>
-            </div>
-            <div style="display: flex; flex-direction: column; gap: 5px; margin-top: 2px">
-              ${renderAccountsRows()}
-            </div>
-          `;
+          bannerEl.classList.add("hidden");
+          bannerEl.innerHTML = "";
         } else if (activeSessions.length === 1) {
+          bannerEl.classList.remove("hidden");
           const s = activeSessions[0];
           const m = s.liveMetrics || {};
           const gpuUtil =
@@ -1993,6 +2184,10 @@
             m.vramTotalMiB || s.gpu?.memoryTotalMiB
               ? ((m.vramTotalMiB || s.gpu.memoryTotalMiB) / 1024).toFixed(1)
               : null;
+          const sessAccEmail =
+            snap.authByAccount?.[s.account || "default"]?.email ||
+            defaultAccObj?.email ||
+            null;
 
           bannerEl.innerHTML = `
             <div class="runtime-top">
@@ -2016,6 +2211,7 @@
               </div>
             </div>
             <div class="runtime-meta">
+              ${oauthAccounts.length > 1 && sessAccEmail ? `<span>Account: <strong>${esc(sessAccEmail)}</strong></span>` : ""}
               <span class="mono">${esc(s.ip || "Direct API (/colab/tty)")}</span>
               <span>Uptime: ${formatDuration(s.ageSeconds)}</span>
               <span>Burn: ≈ ${s.costSoFarCu ?? 0} CU (${s.cuPerHour ?? 0} CU/h)</span>
@@ -2027,18 +2223,10 @@
                 ? `<div class="bar-wrap"><div class="bar-fill" style="width:${Math.min(100, gpuUtil)}%"></div></div>`
                 : ""
             }
-            <details class="helper-details" style="margin: 2px 0 0 0; padding: 5px 8px">
-              <summary class="row-between" style="font-size: 10.5px">
-                <span>Google Colab Accounts (${oauthAccounts.length})</span>
-                <button style="padding: 2px 7px; font-size: 10px" onclick="event.preventDefault(); event.stopPropagation(); window.__addAccountFromBanner(this)">+ Add Account</button>
-              </summary>
-              <div style="display: flex; flex-direction: column; gap: 5px; margin-top: 6px">
-                ${renderAccountsRows()}
-              </div>
-            </details>
           `;
         } else {
           // Multi-Runtime Dock: render each active runtime as a sleek interactive mini-card
+          bannerEl.classList.remove("hidden");
           bannerEl.innerHTML = `
             <div class="row-between" style="margin-bottom:2px">
               <div class="runtime-title" style="font-size:11.5px">
@@ -2099,15 +2287,6 @@
                 })
                 .join("")}
             </div>
-            <details class="helper-details" style="margin: 2px 0 0 0; padding: 5px 8px">
-              <summary class="row-between" style="font-size: 10.5px">
-                <span>Google Colab Accounts (${oauthAccounts.length})</span>
-                <button style="padding: 2px 7px; font-size: 10px" onclick="event.preventDefault(); event.stopPropagation(); window.__addAccountFromBanner(this)">+ Add Account</button>
-              </summary>
-              <div style="display: flex; flex-direction: column; gap: 5px; margin-top: 6px">
-                ${renderAccountsRows()}
-              </div>
-            </details>
           `;
         }
 
@@ -2279,6 +2458,8 @@
             })
             .join("");
         }
+        updateTaskListFade();
+        requestAnimationFrame(updateTaskListFade);
 
         if (snap.activeTaskOutput) {
           renderTaskOutputBox(snap.activeTaskOutput);

@@ -10,7 +10,9 @@ import {
 export const DEFAULT_RATE_TABLE = Object.freeze({
   T4: 1.96,
   L4: 4.82,
+  G4: 6.71,
   A100: 11.77,
+  H100: 21.2,
   "TPU v2-8": 1.76,
   CPU: 0.08,
   unknown: 2,
@@ -28,8 +30,14 @@ export function mapGpuNameToRateKey(gpuName) {
   if (upper.includes("L4")) {
     return "L4";
   }
+  if (upper.includes("6000") || upper.includes("BLACKWELL") || upper === "G4") {
+    return "G4";
+  }
   if (upper.includes("A100")) {
     return "A100";
+  }
+  if (upper.includes("H100")) {
+    return "H100";
   }
   if (upper.includes("TPU")) {
     return "TPU v2-8";

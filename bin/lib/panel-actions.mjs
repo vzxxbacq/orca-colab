@@ -70,7 +70,13 @@ export function createPanelActions({
           const ccu = await getConsumptionUserInfo({ accessToken });
           if (typeof ccu.paidComputeUnitsBalance === "number") {
             recordCalibrateEvent(
-              { account: savedAccount, balanceCu: ccu.paidComputeUnitsBalance, source: "colab-api" },
+              {
+                account: savedAccount,
+                balanceCu: ccu.paidComputeUnitsBalance,
+                consumptionRateHourly: ccu.consumptionRateHourly,
+                assignmentsCount: ccu.assignmentsCount,
+                source: "colab-api",
+              },
               homeDir,
             );
           }
@@ -102,7 +108,13 @@ export function createPanelActions({
           const ccu = await getConsumptionUserInfo({ accessToken });
           if (typeof ccu.paidComputeUnitsBalance === "number") {
             recordCalibrateEvent(
-              { account: targetAccount, balanceCu: ccu.paidComputeUnitsBalance, source: "colab-api" },
+              {
+                account: targetAccount,
+                balanceCu: ccu.paidComputeUnitsBalance,
+                consumptionRateHourly: ccu.consumptionRateHourly,
+                assignmentsCount: ccu.assignmentsCount,
+                source: "colab-api",
+              },
               homeDir,
             );
           }

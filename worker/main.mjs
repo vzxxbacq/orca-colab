@@ -9,6 +9,7 @@ import { getRuntime } from "../bin/lib/colab-api-client.mjs";
 import { locateOrcaBinary } from "../bin/lib/colab-browser-automation.mjs";
 import { ensureColabHome } from "../bin/lib/colab-home.mjs";
 import { getValidAccessToken, readOAuthAccountStatus, runLoopbackOAuthFlow } from "../bin/lib/colab-oauth.mjs";
+import { recordSessionEndEvent, resolveDeadSessionEndIso } from "../bin/lib/credit-ledger.mjs";
 import { DashboardSnapshotBuilder, pickActiveTask } from "../bin/lib/dashboard-snapshot.mjs";
 import {
   DEFAULT_AUTO_STOP_IDLE_MINUTES,
@@ -17,7 +18,7 @@ import {
   GRACE_PERIOD_MINUTES,
 } from "../bin/lib/idle-watchdog.mjs";
 import { createPanelActions, PANEL_ACTION_NAMES } from "../bin/lib/panel-actions.mjs";
-import { listSessions, readSession, writeSession } from "../bin/lib/session-store.mjs";
+import { deleteSession, listSessions, readSession, writeSession } from "../bin/lib/session-store.mjs";
 import { createOrcaRemoteHelper } from "../bin/lib/orca-remote-helper.mjs";
 import { listTasks, readTaskLog } from "../bin/lib/task-store.mjs";
 
@@ -26,7 +27,7 @@ const LOCAL_CLI_PATH = path.resolve(__dirname, "..", "bin", "orca-colab.mjs");
 const BUNDLED_SKILL_DIR = path.resolve(__dirname, "..", "skills", "colab-gpu");
 const BRIDGE_TERMINAL_TITLE = "Colab Bridge";
 const isBridgeTitle = (title) => typeof title === "string" && title.startsWith(BRIDGE_TERMINAL_TITLE);
-const DEFAULT_CLI_COMMAND = "npx -y github:vzxxbacq/orca-colab#v0.2.2";
+const DEFAULT_CLI_COMMAND = "npx -y github:vzxxbacq/orca-colab#v0.2.3";
 const DEFAULT_REMOTE_CLI_COMMAND = DEFAULT_CLI_COMMAND;
 const WATCH_UNSUPPORTED_RE = /unknown command: watch/;
 const ACTION_TIMEOUTS_MS = {
@@ -435,15 +436,22 @@ class LocalBridge {
               homeDir,
             );
           }
-        } catch {
-          // Best effort; the next tick retries.
+        } catch (err) {
+          if (err?.status === 404 && !s.ip) {
+            deleteSession(s.name, homeDir);
+            recordSessionEndEvent(s, {
+              cause: "colab-died",
+              endedAt: resolveDeadSessionEndIso(s, Date.now()),
+              homeDir,
+            });
+            this.onSnapshot(await this.snapshot(), { stateChanged: true });
+            continue;
+          }
         }
       }
-      if (s.ip) {
-        const metrics = this.builder.liveMetricsBySession.get(s.name);
-        if (metrics && typeof metrics.gpuUtilizationPercent === "number") {
-          this.builder.recordGpuSample(s.name, metrics.gpuUtilizationPercent);
-        }
+      const metrics = this.builder.liveMetricsBySession.get(s.name);
+      if (metrics && typeof metrics.gpuUtilizationPercent === "number") {
+        this.builder.recordGpuSample(s.name, metrics.gpuUtilizationPercent);
       }
       const runningCount = tasks.filter((t) => t.sessionName === s.name && t.status === "running").length;
       const decision = evaluateSessionIdleState({
