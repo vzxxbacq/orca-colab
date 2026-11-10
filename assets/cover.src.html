@@ -1,0 +1,41 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@500;600;800&family=JetBrains+Mono:wght@500&display=swap');
+html,body{margin:0;width:1600px;height:1000px;overflow:hidden;font-family:Inter,-apple-system,"Segoe UI",sans-serif;color:#e8e7f5}
+body{background:radial-gradient(1200px 800px at 80% 20%,#2a2460 0%,#17152b 45%,#0f0e1c 100%)}
+.grid{position:absolute;inset:0;background-image:linear-gradient(rgba(255,255,255,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.04) 1px,transparent 1px);background-size:40px 40px;mask-image:linear-gradient(180deg,rgba(0,0,0,.9),transparent 85%)}
+.left{position:absolute;left:96px;top:120px;width:700px}
+.mark{display:flex;align-items:center;gap:20px}
+.mark svg{width:72px;height:72px;filter:drop-shadow(0 8px 20px rgba(76,60,220,.5))}
+.brand{font-size:22px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:#a9a4e6}
+h1{margin:44px 0 0;font-size:68px;line-height:1.02;font-weight:800;letter-spacing:-.02em}
+h1 span{background:linear-gradient(90deg,#c4b5fd,#fbbf24);-webkit-background-clip:text;color:transparent}
+p.sub{margin:28px 0 0;font-size:26px;line-height:1.4;font-weight:500;color:#b7b4d6}
+.chips{margin-top:44px;display:flex;flex-wrap:wrap;gap:12px}
+.chip{display:flex;align-items:center;gap:10px;padding:12px 18px;border-radius:999px;border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.05);font-size:19px;font-weight:600}
+.chip i{width:10px;height:10px;border-radius:50%;background:#34d399;box-shadow:0 0 12px #34d399}
+.chip.beta i{background:#fbbf24;box-shadow:0 0 12px #fbbf24}
+.cmd{margin-top:48px;font-family:"JetBrains Mono",Menlo,monospace;font-size:19px;color:#8f8bc9}
+.cmd b{color:#fbbf24;font-weight:500}
+.shot{position:absolute;right:-40px;top:96px;width:760px;height:822px;border-radius:28px 0 0 28px;overflow:hidden;border:1px solid rgba(255,255,255,.14);border-right:0;background:#1e1d2f;box-shadow:0 40px 100px rgba(0,0,0,.6),0 0 0 1px rgba(124,108,245,.25)}
+.shot img{position:absolute;left:0;top:-250px;width:760px;image-rendering:auto}
+.glow{position:absolute;right:140px;top:-200px;width:900px;height:900px;border-radius:50%;background:radial-gradient(circle,rgba(124,108,245,.35),transparent 60%);pointer-events:none}
+</style></head><body>
+<div class="grid"></div><div class="glow"></div>
+<div class="left">
+  <div class="mark">
+    <svg viewBox="0 0 512 512"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c6cf5"/><stop offset="1" stop-color="#4338ca"/></linearGradient><linearGradient id="bolt" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff7d6"/><stop offset="1" stop-color="#fbbf24"/></linearGradient></defs><rect width="512" height="512" rx="112" fill="url(#bg)"/><g fill="none" stroke="#fff" stroke-opacity=".22" stroke-width="10" stroke-linecap="round"><rect x="116" y="116" width="280" height="280" rx="40"/><path d="M176 116v-36M256 116v-36M336 116v-36M176 396v36M256 396v36M336 396v36M116 176h-36M116 256h-36M116 336h-36M396 176h36M396 256h36M396 336h36"/></g><path fill="url(#bolt)" d="M292 136 L178 290 h70 l-28 86 L348 222 h-72 z"/></svg>
+    <div class="brand">Orca plugin</div>
+  </div>
+  <h1>Colab GPUs,<br>run by <span>your agent</span></h1>
+  <p class="sub">Your workspace and credentials stay local. Agents start, use and release Google Colab runtimes on their own.</p>
+  <div class="chips">
+    <div class="chip"><i></i>Live output</div>
+    <div class="chip"><i></i>GPU &amp; budget guardrails</div>
+    <div class="chip"><i></i>Multiple runtimes</div>
+    <div class="chip"><i></i>T4 · L4 · A100</div>
+    <div class="chip beta"><i></i>Orca Server · beta</div>
+  </div>
+  <div class="cmd">$ orca-colab <b>up</b> --gpu T4 → <b>sync</b> → <b>job submit</b> --wait → <b>down</b></div>
+</div>
+<div class="shot"><img src="panel-dark.png"></div>
+</body></html>
