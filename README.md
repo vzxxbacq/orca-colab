@@ -70,7 +70,7 @@ Full reference: [`skills/colab-gpu/references/cli.md`](./skills/colab-gpu/refere
 ```sh
 orca-colab auth [login --add | list | switch <account>] --json
 orca-colab doctor --json
-orca-colab up --gpu T4 [--new] [--session <name>] [--account <account>] --json
+orca-colab up --gpu T4 [--new] [--name <name>] [--account <account>] --json
 orca-colab job submit --name "Train" --wait --json -- <cmd>
 orca-colab run --json -- <cmd>
 orca-colab sync [path] --json
