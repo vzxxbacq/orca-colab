@@ -407,8 +407,8 @@ test("Tailscale-free mode: up and execCommandOverTty work with only Google OAuth
       }
       send(raw) {
         const frame = JSON.parse(raw);
-        if (typeof frame.data === "string" && frame.data.includes("python3 -u -c")) {
-          const b64Match = frame.data.match(/b64decode\("([^"]+)"\)/);
+        if (typeof frame.data === "string" && frame.data.includes("python3 -u")) {
+          const b64Match = frame.data.match(/printf '%s' "([^"]+)"/);
           const pyCode = Buffer.from(b64Match[1], "base64").toString("utf8");
           const cfgMatch = pyCode.match(/b64decode\("([^"]+)"\)/);
           const cfg = JSON.parse(Buffer.from(cfgMatch[1], "base64").toString("utf8"));

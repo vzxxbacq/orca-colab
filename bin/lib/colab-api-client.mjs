@@ -494,7 +494,7 @@ print(f"ORCA_COLAB_BOOTSTRAP_READY ip={ip} hostname={hostname}", flush=True)
   const pyB64 = Buffer.from(pythonScript, "utf8").toString("base64");
   return {
     hostname,
-    command: `python3 -c 'import base64; exec(base64.b64decode("${pyB64}").decode("utf-8"))' || echo "ORCA_COLAB_BOOTSTRAP_ERROR"\n`,
+    command: `printf '%s' "${pyB64}" | base64 -d > /tmp/.orca-colab-bootstrap.py && python3 /tmp/.orca-colab-bootstrap.py || echo "ORCA_COLAB_BOOTSTRAP_ERROR"\n`,
   };
 }
 
@@ -726,7 +726,8 @@ export async function execCommandOverTty({
   ].join("\n");
 
   const pyB64 = Buffer.from(pyRunner, "utf8").toString("base64");
-  const shellLine = `stty -echo 2>/dev/null; python3 -u -c 'import base64; exec(base64.b64decode("${pyB64}").decode("utf-8"))'\n`;
+  const tmpPy = `/tmp/.orca-colab-exec-${runId}.py`;
+  const shellLine = `stty -echo 2>/dev/null; printf '%s' "${pyB64}" | base64 -d > ${tmpPy} && python3 -u ${tmpPy}; rm -f ${tmpPy}\n`;
 
   const wsUrl = new URL("/colab/tty", baseUrl);
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";

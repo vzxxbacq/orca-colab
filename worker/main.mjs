@@ -27,7 +27,7 @@ const LOCAL_CLI_PATH = path.resolve(__dirname, "..", "bin", "orca-colab.mjs");
 const BUNDLED_SKILL_DIR = path.resolve(__dirname, "..", "skills", "colab-gpu");
 const BRIDGE_TERMINAL_TITLE = "Colab Bridge";
 const isBridgeTitle = (title) => typeof title === "string" && title.startsWith(BRIDGE_TERMINAL_TITLE);
-const DEFAULT_CLI_COMMAND = "npx -y github:vzxxbacq/orca-colab#v0.2.3";
+const DEFAULT_CLI_COMMAND = "npx -y github:vzxxbacq/orca-colab#v0.2.4";
 const DEFAULT_REMOTE_CLI_COMMAND = DEFAULT_CLI_COMMAND;
 const WATCH_UNSUPPORTED_RE = /unknown command: watch/;
 const ACTION_TIMEOUTS_MS = {

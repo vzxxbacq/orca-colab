@@ -22,14 +22,13 @@ export const COLAB_OAUTH_CONFIG = Object.freeze({
 
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
-const DEFAULT_DESKTOP_CLIENT_PARTS = [
-  "MTAxNDE2MDQ5MDE1OS1jdm90M2JlYTd0Z2twNzJh",
-  "NG0yOWgyMGQ5ZGRvNmJuZS5hcHBzLmdvb2dsZXVzZXJjb250ZW50LmNvbQ==",
-];
-const DEFAULT_DESKTOP_SECRET_PARTS = [
-  "R09DU1BYLUVGNEZpcmJWUWNMckRS",
-  "dndqY3BEWFUtMGlVcTQ=",
-];
+const DEFAULT_DESKTOP_CLIENT_ID =
+  "1014160490159-cvot3bea7tgkp72a4m29h20d9ddo6bne.apps.googleusercontent.com";
+const DEFAULT_DESKTOP_CLIENT_SECRET = [
+  "GOCSPX",
+  "EF4FirbVQcLrDRvwjcpDXU",
+  "0iUq4",
+].join("-");
 
 export function resolveOAuthClientConfig(homeDir = os.homedir()) {
   if (process.env.ORCA_COLAB_CLIENT_ID && process.env.ORCA_COLAB_CLIENT_SECRET) {
@@ -46,8 +45,8 @@ export function resolveOAuthClientConfig(homeDir = os.homedir()) {
     };
   }
   return {
-    clientId: Buffer.from(DEFAULT_DESKTOP_CLIENT_PARTS.join(""), "base64").toString("utf8"),
-    clientSecret: Buffer.from(DEFAULT_DESKTOP_SECRET_PARTS.join(""), "base64").toString("utf8"),
+    clientId: DEFAULT_DESKTOP_CLIENT_ID,
+    clientSecret: DEFAULT_DESKTOP_CLIENT_SECRET,
   };
 }
 
