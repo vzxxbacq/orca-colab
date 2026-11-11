@@ -230,3 +230,114 @@ test("coalesceOps keeps the last value per setting and cancels paired toggles", 
   assert.deepEqual(out.tasks.map((t) => t.id), ["t1"]);
   assert.equal(snap.credits.budgetCu, null, "input snapshot is not mutated");
 });
+
+test("TerminalBridge invalidates a retired paired-server environment id and re-resolves the new one", async () => {
+  const { TerminalBridge } = await import("../worker/main.mjs");
+  const oldEnvId = "1de75e51-6b2b-4e1f-b0b4-de175ff0bcd0";
+  const newEnvId = "9f8e7d6c-0000-4000-8000-111122223333";
+  let currentEnvId = oldEnvId;
+  const resolvedEvents = [];
+  const invalidatedEvents = [];
+  const worktreeRowsCache = new Map();
+
+  const unknownEnvError = (cmd, id) => ({
+    ok: false,
+    error: `orca ${cmd}: Unknown Orca server in --environment ${id}: no paired Orca server is named or has id ${id}.`,
+    data: null,
+  });
+
+  const helper = {
+    available: true,
+    async listEnvironments() {
+      return { ok: true, error: null, data: [{ id: currentEnvId, name: "macpro" }] };
+    },
+    async listWorktrees({ environment = null } = {}) {
+      if (!environment) {
+        return { ok: true, error: null, data: [] };
+      }
+      if (environment !== currentEnvId) {
+        return unknownEnvError("worktree list", environment);
+      }
+      return {
+        ok: true,
+        error: null,
+        data: [{ id: "wt-colab", displayName: "main", branch: "main", isArchived: false }],
+      };
+    },
+    async listTerminals(_selector, { environment = null } = {}) {
+      if (environment !== currentEnvId) {
+        return unknownEnvError("terminal list", environment);
+      }
+      return { ok: true, error: null, data: [] };
+    },
+    async createTerminal({ environment = null }) {
+      if (environment !== currentEnvId) {
+        return unknownEnvError("terminal create", environment);
+      }
+      return {
+        ok: true,
+        error: null,
+        data: { handle: environment === oldEnvId ? "term_old" : "term_new" },
+      };
+    },
+    async readTerminal(_handle, { environment = null } = {}) {
+      if (environment !== currentEnvId) {
+        return unknownEnvError("terminal read", environment);
+      }
+      return { ok: true, error: null, data: { lines: [], nextCursor: "1", status: "running" } };
+    },
+    async sendTerminal(_handle, _text, { environment = null } = {}) {
+      if (environment !== currentEnvId) {
+        return unknownEnvError("terminal send", environment);
+      }
+      return { ok: true, error: null, data: {} };
+    },
+  };
+
+  const bridge = new TerminalBridge({
+    orca: {
+      host: {
+        has: () => false,
+        call: async () => {
+          throw new Error("unknown handle");
+        },
+      },
+      storage: { get: async () => null, set: async () => {} },
+      log: () => {},
+    },
+    workspace: { workspaceId: null, workspaceName: "main", branch: "main", hostId: "unlisted", terminals: [] },
+    remoteCli: "orca-colab",
+    autoStopIdleMinutes: 20,
+    onSnapshot: () => {},
+    onEvent: () => {},
+    helper,
+    worktreeRowsCache,
+    onEnvironmentResolved: (env) => resolvedEvents.push(env),
+    onEnvironmentInvalidated: (env) => invalidatedEvents.push(env),
+  });
+
+  const firstHandle = await bridge.ensureTerminalViaHelper();
+  assert.equal(firstHandle, "term_old");
+  assert.equal(bridge.environment, oldEnvId);
+  assert.equal(worktreeRowsCache.has(oldEnvId), true);
+
+  // User re-pairs the server: oldEnvId vanishes from orca-environments.json, replaced by newEnvId.
+  currentEnvId = newEnvId;
+  bridge.terminalId = null;
+  bridge.lastCreateAt = 0;
+
+  const secondHandle = await bridge.ensureTerminalViaHelper();
+  assert.equal(secondHandle, "term_new");
+  assert.equal(bridge.environment, newEnvId);
+  assert.equal(bridge.lastHelperError, null);
+  assert.equal(worktreeRowsCache.has(oldEnvId), false);
+  assert.deepEqual(invalidatedEvents, [oldEnvId]);
+  assert.deepEqual(resolvedEvents, [oldEnvId, newEnvId]);
+
+  // If the server is later unpaired while reading over the CLI transport, readTerminal also invalidates it.
+  currentEnvId = "gone-env";
+  await assert.rejects(() => bridge.readTerminal("term_new"), /Unknown Orca server in --environment/);
+  assert.equal(bridge.environmentResolved, false);
+  assert.equal(bridge.environment, null);
+  assert.deepEqual(invalidatedEvents, [oldEnvId, newEnvId]);
+});

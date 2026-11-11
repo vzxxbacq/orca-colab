@@ -4,7 +4,7 @@
   "execution": "trusted-worker",
   "id": "colab",
   "name": "Google Colab GPU",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Use a Google Colab GPU runtime as a compute backend from your local Orca workspace and agents.",
   "repository": "https://github.com/vzxxbacq/orca-colab",
   "license": "MIT",
@@ -62,7 +62,7 @@
         "key": "cliCommand",
         "title": "orca-colab command",
         "type": "string",
-        "default": "npx -y github:vzxxbacq/orca-colab#v0.2.4"
+        "default": "npx -y github:vzxxbacq/orca-colab#v0.2.5"
       },
       {
         "key": "remoteCliCommand",

@@ -27,9 +27,11 @@ const LOCAL_CLI_PATH = path.resolve(__dirname, "..", "bin", "orca-colab.mjs");
 const BUNDLED_SKILL_DIR = path.resolve(__dirname, "..", "skills", "colab-gpu");
 const BRIDGE_TERMINAL_TITLE = "Colab Bridge";
 const isBridgeTitle = (title) => typeof title === "string" && title.startsWith(BRIDGE_TERMINAL_TITLE);
-const DEFAULT_CLI_COMMAND = "npx -y github:vzxxbacq/orca-colab#v0.2.4";
+const DEFAULT_CLI_COMMAND = "npx -y github:vzxxbacq/orca-colab#v0.2.5";
 const DEFAULT_REMOTE_CLI_COMMAND = DEFAULT_CLI_COMMAND;
 const WATCH_UNSUPPORTED_RE = /unknown command: watch/;
+const UNKNOWN_ENVIRONMENT_RE =
+  /Unknown Orca server in --environment|no paired Orca server is named or has id|Unknown environment:/i;
 const ACTION_TIMEOUTS_MS = {
   authLogin: 320_000,
   startSession: 15 * 60_000,
@@ -497,7 +499,7 @@ class LocalBridge {
 // Drives `orca-colab watch` inside one terminal of a workspace on a remote Orca server. The terminal is
 // the only channel Orca gives a desktop plugin to a remote host, so state arrives as frames read back
 // from the screen and actions are typed in as control lines.
-class TerminalBridge {
+export class TerminalBridge {
   constructor({
     orca,
     workspace,
@@ -507,10 +509,12 @@ class TerminalBridge {
     onEvent,
     helper = null,
     onEnvironmentResolved = null,
+    onEnvironmentInvalidated = null,
     worktreeRowsCache = new Map(),
   }) {
     this.kind = "remote";
     this.onEnvironmentResolved = onEnvironmentResolved;
+    this.onEnvironmentInvalidated = onEnvironmentInvalidated;
     this.worktreeRowsCache = worktreeRowsCache;
     this.orca = orca;
     this.workspace = workspace;
@@ -594,6 +598,24 @@ class TerminalBridge {
     this.watchUnsupported = true;
     this.lastHelperError = `The orca-colab on the server ("${this.remoteCli}") has no 'watch' command. Set the plugin setting "orca-colab command on remote Orca servers" to a newer orca-colab (for a checkout: node /path/to/orca-colab/bin/orca-colab.mjs) and reopen the panel`;
     this.terminalId = null;
+  }
+
+  // Re-pairing or removing a server retires its environment id while the resident worker is still running.
+  invalidateEnvironment() {
+    const prev = this.environment;
+    if (prev) {
+      this.worktreeRowsCache.delete(prev);
+      this.onEnvironmentInvalidated?.(prev, this);
+    }
+    this.environment = null;
+    this.environmentName = null;
+    this.worktreeSelector = null;
+    this.environmentResolved = false;
+    this.lastEnvironmentAttemptAt = 0;
+    this.lastCreateAt = 0;
+    this.terminalId = null;
+    this.cliCursor = undefined;
+    this.transport = "host";
   }
 
   // Where the host API cannot see the workspace, the local `orca` CLI still can. It finds a terminal
@@ -691,11 +713,12 @@ class TerminalBridge {
     return out;
   }
 
-  async ensureTerminalViaHelper() {
+  async ensureTerminalViaHelper({ retriedEnvironment = false } = {}) {
     if (!this.helper?.available) {
       this.lastHelperError = "orca CLI not found on this machine";
       return null;
     }
+    const wasCached = this.environmentResolved;
     const environment = await this.resolveEnvironment();
     if (!this.environmentResolved) {
       return null;
@@ -716,6 +739,14 @@ class TerminalBridge {
         }
       }
     } else {
+      if (environment && UNKNOWN_ENVIRONMENT_RE.test(serverWide.error || "")) {
+        this.invalidateEnvironment();
+        if (wasCached && !retriedEnvironment) {
+          return this.ensureTerminalViaHelper({ retriedEnvironment: true });
+        }
+        this.lastHelperError = serverWide.error;
+        return null;
+      }
       this.lastHelperError = serverWide.error;
     }
     if (this.watchUnsupported) {
@@ -739,6 +770,14 @@ class TerminalBridge {
       if (created.ok) {
         this.lastHelperError = null;
         return created.data.handle;
+      }
+      if (environment && UNKNOWN_ENVIRONMENT_RE.test(created.error || "")) {
+        this.invalidateEnvironment();
+        if (wasCached && !retriedEnvironment) {
+          return this.ensureTerminalViaHelper({ retriedEnvironment: true });
+        }
+        this.lastHelperError = created.error;
+        return null;
       }
       this.lastHelperError = created.error;
     }
@@ -767,6 +806,9 @@ class TerminalBridge {
       environment: this.environment,
     });
     if (!res.ok) {
+      if (this.environment && UNKNOWN_ENVIRONMENT_RE.test(res.error || "")) {
+        this.invalidateEnvironment();
+      }
       throw new Error(`orca terminal read: ${res.error}`);
     }
     if (res.data.nextCursor !== null && res.data.nextCursor !== undefined) {
@@ -862,6 +904,7 @@ class TerminalBridge {
       if (typeof stored === "string" && stored && !this.deadTerminals.has(stored)) {
         const probe = await this.orca.host.call("terminal.read", { terminalId: stored, maxLines: 5 });
         if (probe && Array.isArray(probe.lines)) {
+          this.transport = "host";
           this.terminalId = stored;
           this.sendRaw("snap");
           return stored;
@@ -875,6 +918,7 @@ class TerminalBridge {
     );
     const found = existing?.id || (await this.findRunningBridgeTerminal());
     if (found) {
+      this.transport = "host";
       await this.rememberTerminal(found);
       this.sendRaw("snap");
       return found;
@@ -942,7 +986,12 @@ class TerminalBridge {
       }
       if (this.transport === "cli") {
         const res = await this.helper.sendTerminal(terminalId, text, { environment: this.environment });
-        if (!res.ok) this.lastError = `orca terminal send: ${res.error}`;
+        if (!res.ok) {
+          if (this.environment && UNKNOWN_ENVIRONMENT_RE.test(res.error || "")) {
+            this.invalidateEnvironment();
+          }
+          this.lastError = `orca terminal send: ${res.error}`;
+        }
         return;
       }
       const method = await this.resolveSendMethod();
@@ -1442,6 +1491,11 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
           if (activeBridge === resolved) {
             activeBridge = shared;
             void shared.snapshot().then((snap) => orca.panels.post("colab.stateChanged", snap));
+          }
+        },
+        onEnvironmentInvalidated: (env, invalidated) => {
+          if (bridgesByEnvironment.get(env) === invalidated) {
+            bridgesByEnvironment.delete(env);
           }
         },
       });
