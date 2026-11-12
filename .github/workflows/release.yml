@@ -1,0 +1,136 @@
+name: Release
+
+# Cuts vX.Y.Z from main the way AGENTS.md § Git describes: a version commit, a pin commit that points every
+# npx command at the version commit, an annotated tag on the pin commit, then a smoke run of the published
+# pin and a GitHub release. Pushes made with GITHUB_TOKEN do not start other workflows, so this one checks
+# everything itself.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without the v, e.g. 0.3.1"
+        required: true
+        type: string
+      allow_breaking:
+        description: "The owner approved the breaking changes listed by the compatibility check"
+        type: boolean
+        default: false
+      confirm_major:
+        description: "The owner approved a major release (required for X.0.0)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+      ALLOW_BREAKING: ${{ inputs.allow_breaking }}
+      CONFIRM_MAJOR: ${{ inputs.confirm_major }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check the requested version
+        id: prev
+        run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::version must be X.Y.Z"; exit 1; }
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::v$VERSION already exists; a listed tag can never move"; exit 1
+          fi
+          PREV=$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
+          echo "tag=$PREV" >> "$GITHUB_OUTPUT"
+          node -e '
+            const [prev, next] = process.argv.slice(1).map((v) => v.replace(/^v/, "").split(".").map(Number));
+            const cmp = next[0] - prev[0] || next[1] - prev[1] || next[2] - prev[2];
+            if (cmp <= 0) { console.log(`::error::${next.join(".")} is not newer than ${prev.join(".")}`); process.exit(1); }
+            if (next[0] > prev[0] && process.env.CONFIRM_MAJOR !== "true") {
+              console.log("::error::major releases need the owner'"'"'s explicit approval (AGENTS.md); re-run with confirm_major");
+              process.exit(1);
+            }
+          ' "${PREV:-v0.0.0}" "$VERSION"
+
+      - name: Test
+        run: node --test
+
+      - name: Validate orca-plugin.json against Orca's schema
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/orca-plugin.schema.json" \
+            https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-plugin.v2.schema.json
+          npx -y -p ajv-cli@5 -p ajv-formats@3 ajv validate --spec=draft2020 --strict=false -c ajv-formats \
+            -s "$RUNNER_TEMP/orca-plugin.schema.json" -d orca-plugin.json
+
+      - name: Backward compatibility against ${{ steps.prev.outputs.tag }}
+        if: steps.prev.outputs.tag != ''
+        env:
+          PREV: ${{ steps.prev.outputs.tag }}
+        run: |
+          git worktree add "$RUNNER_TEMP/prev" "$PREV"
+          node scripts/compat-contract.mjs "$RUNNER_TEMP/prev" --allow-missing > "$RUNNER_TEMP/prev.json"
+          node scripts/release-bump.mjs "$VERSION" >/dev/null
+          node scripts/compat-contract.mjs . > "$RUNNER_TEMP/head.json"
+          git checkout -- package.json orca-plugin.json
+          set +e
+          node scripts/compat-diff.mjs "$RUNNER_TEMP/prev.json" "$RUNNER_TEMP/head.json" \
+            $([ "$ALLOW_BREAKING" = true ] && echo --allow-breaking) > "$RUNNER_TEMP/compat.md"
+          status=$?
+          tee -a "$GITHUB_STEP_SUMMARY" < "$RUNNER_TEMP/compat.md"
+          exit $status
+
+      - name: Version commit, pin commit and tag
+        id: cut
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          node scripts/release-bump.mjs "$VERSION"
+          git commit -am "release: v$VERSION"
+          PINNED=$(git rev-parse HEAD)
+          node scripts/release-pin.mjs "$PINNED"
+          node --test
+          git commit -am "release: pin v$VERSION to ${PINNED:0:7}"
+          git tag -a "v$VERSION" -m "v$VERSION"
+          node scripts/release-verify.mjs "v$VERSION"
+          echo "pinned=$PINNED" >> "$GITHUB_OUTPUT"
+
+      - name: Push main and the tag together
+        run: git push --atomic origin HEAD:main "v$VERSION"
+
+      - name: Smoke-test the published pin from a clean npm cache
+        env:
+          PINNED: ${{ steps.cut.outputs.pinned }}
+        run: |
+          set +e
+          out=$(npx -y --cache "$RUNNER_TEMP/npm-cache" "https://codeload.github.com/${GITHUB_REPOSITORY}/tar.gz/$PINNED" doctor --json)
+          echo "doctor exit $?"
+          set -e
+          # No Google sign-in on the runner, so doctor reports ok:false; it must still print its JSON contract.
+          echo "$out" | node -e 'const d = JSON.parse(require("fs").readFileSync(0, "utf8")); if (!d.checks?.node?.ok) process.exit(1);'
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PINNED: ${{ steps.cut.outputs.pinned }}
+          PREV: ${{ steps.prev.outputs.tag }}
+        run: |
+          {
+            echo "Install in Orca: \`orca plugin install ${GITHUB_REPOSITORY}@v$VERSION\`"
+            echo
+            echo "CLI pin: \`npx -y https://codeload.github.com/${GITHUB_REPOSITORY}/tar.gz/$PINNED <command> --json\`"
+            echo
+            [ -f "$RUNNER_TEMP/compat.md" ] && cat "$RUNNER_TEMP/compat.md"
+          } > "$RUNNER_TEMP/notes.md"
+          gh release create "v$VERSION" --title "v$VERSION" --notes-file "$RUNNER_TEMP/notes.md" \
+            --generate-notes ${PREV:+--notes-start-tag "$PREV"}
