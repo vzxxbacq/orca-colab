@@ -12,7 +12,6 @@ export const COLAB_OAUTH_CONFIG = Object.freeze({
   tokenEndpoint: "https://oauth2.googleapis.com/token",
   revokeEndpoint: "https://oauth2.googleapis.com/revoke",
   userInfoEndpoint: "https://www.googleapis.com/oauth2/v2/userinfo",
-  openVsxLatestUrl: "https://open-vsx.org/api/google/colab/latest",
   scopes: [
     "profile",
     "email",
@@ -22,13 +21,10 @@ export const COLAB_OAUTH_CONFIG = Object.freeze({
 
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
-const DEFAULT_DESKTOP_CLIENT_ID =
-  "1014160490159-cvot3bea7tgkp72a4m29h20d9ddo6bne.apps.googleusercontent.com";
-const DEFAULT_DESKTOP_CLIENT_SECRET = [
-  "GOCSPX",
-  "EF4FirbVQcLrDRvwjcpDXU",
-  "0iUq4",
-].join("-");
+// Orca Colab Community's own Desktop OAuth client (GCP project orca-colab-community). Desktop client
+// secrets are not confidential by Google's design; PKCE and the loopback redirect protect the flow.
+const DEFAULT_DESKTOP_CLIENT_ID = "744100990078-mbs5l25fle4cup2b3pphq8ovatdetvnn.apps.googleusercontent.com";
+const DEFAULT_DESKTOP_CLIENT_SECRET = "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";
 
 export function resolveOAuthClientConfig(homeDir = os.homedir()) {
   if (process.env.ORCA_COLAB_CLIENT_ID && process.env.ORCA_COLAB_CLIENT_SECRET) {
@@ -149,6 +145,7 @@ export function saveOAuthCredentials(account, credentials, homeDir = os.homedir(
     scope: credentials.scope || COLAB_OAUTH_CONFIG.scopes.join(" "),
     email: credentials.email || null,
     name: credentials.name || null,
+    clientId: credentials.clientId || null,
     updatedAt: new Date().toISOString(),
   };
   writeOAuthStore(store, homeDir);
@@ -166,6 +163,11 @@ export function removeOAuthCredentials(account = "default", homeDir = os.homedir
   return existed;
 }
 
+// A refresh token only works with the client that issued it; sign-ins from before v0.3.0 used another one.
+function issuedByCurrentClient(entry, homeDir) {
+  return entry.clientId === resolveOAuthClientConfig(homeDir).clientId;
+}
+
 export function readOAuthAccountStatus(account = "default", homeDir = os.homedir()) {
   const store = readOAuthStore(homeDir);
   const key = resolveOAuthAccountKey(account, store, homeDir);
@@ -177,6 +179,16 @@ export function readOAuthAccountStatus(account = "default", homeDir = os.homedir
       email: null,
       name: null,
       updatedAt: null,
+    };
+  }
+  if (!issuedByCurrentClient(entry, homeDir)) {
+    return {
+      account: key,
+      authenticated: false,
+      reauthRequired: true,
+      email: entry.email || null,
+      name: entry.name || null,
+      updatedAt: entry.updatedAt || null,
     };
   }
   return {
@@ -311,6 +323,9 @@ export async function getValidAccessToken({
   const resolvedKey = resolveOAuthAccountKey(account, store, homeDir);
   const stored = store.accounts?.[resolvedKey];
   if (!stored || typeof stored.refreshToken !== "string" || !stored.refreshToken) {
+    return null;
+  }
+  if (!issuedByCurrentClient(stored, homeDir)) {
     return null;
   }
 
@@ -489,7 +504,7 @@ export async function runLoopbackOAuthFlow({
       fetchImpl,
     });
     const profile = await fetchGoogleUserProfile(tokens.accessToken, { fetchImpl });
-    const credentials = { ...tokens, email: profile.email, name: profile.name };
+    const credentials = { ...tokens, email: profile.email, name: profile.name, clientId };
     if (!persist) {
       // The caller stores these elsewhere (for example on a remote Orca server).
       return { persisted: false, account, addAccount, email: profile.email, name: profile.name, credentials };

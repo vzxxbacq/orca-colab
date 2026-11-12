@@ -17,11 +17,14 @@ import {
 } from "../bin/lib/colab-api-client.mjs";
 import { ensureColabHome, writeConfig } from "../bin/lib/colab-home.mjs";
 import {
+  resolveOAuthClientConfig,
   generatePkcePair,
   getValidAccessToken,
   readOAuthAccountStatus,
   saveOAuthCredentials,
 } from "../bin/lib/colab-oauth.mjs";
+
+const CLIENT_ID = resolveOAuthClientConfig().clientId;
 
 function makeTempHome() {
   return mkdtempSync(path.join(os.tmpdir(), "orca-colab-api-test-"));
@@ -50,6 +53,7 @@ test("OAuth store saves 0600 credentials, refreshes expired tokens, and never le
       "default",
       {
         refreshToken: "refresh-secret-123",
+        clientId: CLIENT_ID,
         accessToken: "expired-access-token",
         expiryDate: 1000,
         email: "researcher@example.com",
@@ -248,6 +252,7 @@ test("up and down use Direct API without opening a browser when OAuth is connect
       "default",
       {
         refreshToken: "ref-1",
+        clientId: CLIENT_ID,
         accessToken: "valid-token",
         expiryDate: Date.now() + 3600_000,
         email: "user@example.com",
@@ -359,6 +364,7 @@ test("Tailscale-free mode: up and execCommandOverTty work with only Google OAuth
       "default",
       {
         refreshToken: "ref-ts-free",
+        clientId: CLIENT_ID,
         accessToken: "valid-ts-free-token",
         expiryDate: Date.now() + 3600_000,
         email: "notailscale@example.com",
@@ -457,6 +463,7 @@ test("Multi-account OAuth supports listing, switching default, and automatic acc
       "default",
       {
         refreshToken: "ref-acc1",
+        clientId: CLIENT_ID,
         accessToken: "tok-acc1",
         expiryDate: Date.now() + 3600_000,
         email: "acc1@example.com",
@@ -467,6 +474,7 @@ test("Multi-account OAuth supports listing, switching default, and automatic acc
       "acc2@example.com",
       {
         refreshToken: "ref-acc2",
+        clientId: CLIENT_ID,
         accessToken: "tok-acc2",
         expiryDate: Date.now() + 3600_000,
         email: "acc2@example.com",
@@ -572,6 +580,7 @@ test("Re-running up on the same runtime preserves createdAt and replacing a runt
       "default",
       {
         refreshToken: "ref-reup",
+        clientId: CLIENT_ID,
         accessToken: "valid-reup-token",
         expiryDate: Date.now() + 3600_000,
         email: "reup@example.com",

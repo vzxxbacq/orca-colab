@@ -1,10 +1,13 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { COLAB_OAUTH_CONFIG } from "./colab-oauth.mjs";
 
+const PACKAGE_VERSION = JSON.parse(
+  readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+).version;
+
 export const COLAB_HEADERS = Object.freeze({
-  "X-Colab-Client-Agent": "vscode",
-  "X-Colab-VS-Code-App-Name": "Orca",
-  "X-Colab-VS-Code-Extension-Version": "0.9.7",
+  "User-Agent": `orca-colab/${PACKAGE_VERSION}`,
   Accept: "application/json",
 });
 

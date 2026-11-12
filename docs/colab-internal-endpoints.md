@@ -9,15 +9,16 @@ on OpenVSX.
 - **`ColabGapiDomain`**: `https://colab.pa.googleapis.com`
 - **`ColabPublicApiDomain`**: `https://colaboratory.googleapis.com`
 
-Required headers on API requests:
+Headers orca-colab sends on API requests (it identifies as itself, never as the VS Code extension):
 
 ```http
 Authorization: Bearer <access_token>
 Accept: application/json
-X-Colab-Client-Agent: vscode
-X-Colab-VS-Code-App-Name: Orca
-X-Colab-VS-Code-Extension-Version: 0.9.7
+User-Agent: orca-colab/<version>
 ```
+
+OAuth uses Orca Colab Community's own Desktop client (GCP project `orca-colab-community`); all three
+scopes are non-sensitive there. `ORCA_COLAB_CLIENT_ID` / `ORCA_COLAB_CLIENT_SECRET` override it.
 
 ## 2. OAuth 2.0 PKCE Loopback (`src/auth/flows/loopback.ts`, `src/auth/scopes.ts`)
 
@@ -106,7 +107,6 @@ X-Colab-VS-Code-Extension-Version: 0.9.7
 - **Headers**:
   ```http
   X-Colab-Runtime-Proxy-Token: <connectionInfo.token>
-  X-Colab-Client-Agent: vscode
   ```
 - **Protocol**:
   - Client sends JSON frames: `{"data": "<shell input>\n"}` or `{"cols": 120, "rows": 40}`.
