@@ -1127,13 +1127,6 @@
                 <span>Login Server (Headscale)</span>
                 <span class="row" style="gap: 4px">
                   <span
-                    id="useFeihaoServerChip"
-                    class="chip"
-                    style="padding: 1px 6px; font-size: 10px"
-                  >
-                    hs.feihao.xyz
-                  </span>
-                  <span
                     id="useDetectedServerChip"
                     class="chip hidden"
                     style="padding: 1px 6px; font-size: 10px"
@@ -1145,7 +1138,7 @@
               <input
                 id="setupLoginServerInput"
                 type="text"
-                placeholder="Optional: https://hs.feihao.xyz"
+                placeholder="Optional: https://headscale.example.com"
               />
             </div>
 
@@ -1780,22 +1773,12 @@
         });
       });
 
-      // Quick-fill Headscale URL chips
-      document
-        .getElementById("useFeihaoServerChip")
-        .addEventListener("click", () => {
-          document.getElementById("setupLoginServerInput").value =
-            "https://hs.feihao.xyz";
-        });
-
       document
         .getElementById("useDetectedServerChip")
         .addEventListener("click", () => {
           const input = document.getElementById("setupLoginServerInput");
-          const detected =
-            dashboardState?.doctor?.checks?.tailscale?.detectedLoginServer ||
-            "https://hs.feihao.xyz";
-          input.value = detected;
+          const detected = dashboardState?.doctor?.checks?.tailscale?.detectedLoginServer;
+          if (detected) input.value = detected;
         });
 
       function renderAgentSkills(skills) {
@@ -2037,7 +2020,7 @@
         const detectedServer =
           checks.tailscale?.detectedLoginServer || "";
         const chipEl = document.getElementById("useDetectedServerChip");
-        if (detectedServer && detectedServer !== "https://hs.feihao.xyz") {
+        if (detectedServer) {
           chipEl.textContent = detectedServer.replace(/^https?:\/\//, "");
           chipEl.classList.remove("hidden");
         } else {
