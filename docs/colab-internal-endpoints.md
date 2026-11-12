@@ -20,6 +20,12 @@ User-Agent: orca-colab/<version>
 OAuth uses Orca Colab Community's own Desktop client (GCP project `orca-colab-community`); all three
 scopes are non-sensitive there. `ORCA_COLAB_CLIENT_ID` / `ORCA_COLAB_CLIENT_SECRET` override it.
 
+`colab.pa.googleapis.com/v1/user-info` rejects third-party clients (`ACCESS_TOKEN_SCOPE_INSUFFICIENT`), so
+the compute-unit balance comes from `GET https://colab.research.google.com/tun/m/ccu-info?authuser=0`
+(verified 2026-11-12 with the project's client): `)]}'`-prefixed JSON with `currentBalance`,
+`consumptionRateHourly`, `assignmentsCount`, `eligibleGpus`, `eligibleTpus`; no subscription tier.
+Runtimes still go through the public `colaboratory.googleapis.com/v1beta` API.
+
 ## 2. OAuth 2.0 PKCE Loopback (`src/auth/flows/loopback.ts`, `src/auth/scopes.ts`)
 
 - **Authorization endpoint**: `https://accounts.google.com/o/oauth2/v2/auth`

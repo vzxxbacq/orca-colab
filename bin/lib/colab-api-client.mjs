@@ -342,31 +342,30 @@ export async function assignRuntime({
   throw lastError || new Error("Colab runtime assignment failed.");
 }
 
+// colab.pa.googleapis.com/v1/user-info rejects third-party OAuth clients; the session backend behind
+// colab.research.google.com/tun/m accepts any token with the colaboratory scope. It reports no tier.
 export async function getConsumptionUserInfo({
   accessToken,
-  gapiDomain = COLAB_OAUTH_CONFIG.colabGapiDomain,
+  apiDomain = COLAB_OAUTH_CONFIG.colabApiDomain,
   fetchImpl = fetch,
   signal,
 } = {}) {
-  const url = new URL("/v1/user-info", gapiDomain);
-  url.searchParams.set("get_ccu_consumption_info", "true");
+  const url = new URL("/tun/m/ccu-info", apiDomain);
+  url.searchParams.set("authuser", "0");
   const info = await colabJsonRequest(url, { accessToken, fetchImpl, signal });
   return {
-    subscriptionTier: info.subscriptionTier || "SUBSCRIPTION_TIER_UNSPECIFIED",
-    paidComputeUnitsBalance:
-      typeof info.paidComputeUnitsBalance === "number"
-        ? info.paidComputeUnitsBalance
-        : null,
+    subscriptionTier: null,
+    paidComputeUnitsBalance: typeof info.currentBalance === "number" ? info.currentBalance : null,
     consumptionRateHourly:
       typeof info.consumptionRateHourly === "number"
         ? info.consumptionRateHourly
         : null,
     assignmentsCount:
       typeof info.assignmentsCount === "number" ? info.assignmentsCount : null,
-    eligibleAccelerators: Array.isArray(info.eligibleAccelerators)
-      ? info.eligibleAccelerators
-      : [],
-    freeCcuQuotaInfo: info.freeCcuQuotaInfo || null,
+    eligibleAccelerators: [
+      ...(Array.isArray(info.eligibleGpus) ? info.eligibleGpus : []),
+      ...(Array.isArray(info.eligibleTpus) ? info.eligibleTpus : []),
+    ],
   };
 }
 

@@ -93,14 +93,13 @@ test("OAuth store saves 0600 credentials, refreshes expired tokens, and never le
       stderr: io.stderr,
       homeDir,
       fetchImpl: async (url) => {
-        if (String(url).includes("/v1/user-info")) {
+        if (String(url).includes("/tun/m/ccu-info")) {
           return {
             ok: true,
             status: 200,
             text: async () =>
               JSON.stringify({
-                subscriptionTier: "SUBSCRIPTION_TIER_PRO",
-                paidComputeUnitsBalance: 88.5,
+                currentBalance: 88.5,
                 consumptionRateHourly: 1.96,
               }),
           };
@@ -116,7 +115,7 @@ test("OAuth store saves 0600 credentials, refreshes expired tokens, and never le
     const parsed = JSON.parse(io.stdoutText);
     assert.equal(parsed.authenticated, true);
     assert.equal(parsed.email, "researcher@example.com");
-    assert.equal(parsed.subscriptionTier, "SUBSCRIPTION_TIER_PRO");
+    assert.equal(parsed.subscriptionTier, null);
     assert.equal(parsed.estimatedBalanceCu, 88.5);
     assert.equal(parsed.assignedRuntimesCount, 1);
     assert.equal("accessToken" in parsed, false);
@@ -343,8 +342,7 @@ test("up and down use Direct API without opening a browser when OAuth is connect
         status: 200,
         text: async () =>
           JSON.stringify({
-            subscriptionTier: "SUBSCRIPTION_TIER_PRO",
-            paidComputeUnitsBalance: 74.25,
+            currentBalance: 74.25,
             consumptionRateHourly: 1.96,
           }),
       }),
@@ -493,8 +491,7 @@ test("Multi-account OAuth supports listing, switching default, and automatic acc
         status: 200,
         text: async () =>
           JSON.stringify({
-            subscriptionTier: "SUBSCRIPTION_TIER_PRO",
-            paidComputeUnitsBalance: 50,
+            currentBalance: 50,
             runtimes: [],
           }),
       }),
@@ -690,8 +687,7 @@ test("Re-running up on the same runtime preserves createdAt and replacing a runt
         status: 200,
         text: async () =>
           JSON.stringify({
-            subscriptionTier: "SUBSCRIPTION_TIER_PRO_PLUS",
-            paidComputeUnitsBalance: 98.06,
+            currentBalance: 98.06,
             consumptionRateHourly: 1.94,
             assignmentsCount: 1,
           }),

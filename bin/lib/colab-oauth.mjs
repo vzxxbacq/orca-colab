@@ -6,7 +6,6 @@ import { openUrlInSystemBrowser } from "./open-url.mjs";
 
 export const COLAB_OAUTH_CONFIG = Object.freeze({
   colabApiDomain: "https://colab.research.google.com",
-  colabGapiDomain: "https://colab.pa.googleapis.com",
   colabPublicApiDomain: "https://colaboratory.googleapis.com",
   authEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
   tokenEndpoint: "https://oauth2.googleapis.com/token",
