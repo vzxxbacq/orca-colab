@@ -12,7 +12,7 @@ Use disposable Google Colab GPU runtimes directly from the local machine while k
 Prefer `orca-colab` if installed on `PATH` (or `node bin/orca-colab.mjs` inside the repo); otherwise run:
 
 ```sh
-npx -y github:vzxxbacq/orca-colab#v0.2.5 <command> --json
+npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/85b32e00d93b5d598ac0bd470363bfd3ac76c12b <command> --json
 ```
 
 Always pass `--json` and parse **stdout** only (progress and diagnostics go to `stderr` prefixed with `[colab]`).

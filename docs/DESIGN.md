@@ -13,7 +13,7 @@ Three deliverables, one repo:
 | Deliverable | Who uses it | What it is |
 |---|---|---|
 | `skills/colab-gpu/SKILL.md` | the agent | Procedure: when to reach for Colab, how to run the one-time setup with the user, the per-session flow, how to run work and fetch results, hygiene. Installed with `npx skills add vzxxbacq/orca-colab`. |
-| `bin/orca-colab.mjs` (+ `bin/lib/`) | the agent (via the skill) and the user | Zero-dependency Node CLI. `doctor`, `setup`, `up`, `status`, `run`, `sync`, `pull`, `forward`, `down`. Every command has `--json`. Run as `npx -y github:vzxxbacq/orca-colab#<tag> <cmd>` or `npm i -g`. |
+| `bin/orca-colab.mjs` (+ `bin/lib/`) | the agent (via the skill) and the user | Zero-dependency Node CLI. `doctor`, `setup`, `up`, `status`, `run`, `sync`, `pull`, `forward`, `down`. Every command has `--json`. Run as `npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/<release-sha> <cmd>` or `npm i -g`. |
 | Orca plugin (`orca-plugin.json`, `worker/`, `panel/`) | the user, in Orca's UI | Panel showing sessions, GPU, age and prerequisites; a "Start Colab session" command that opens an Orca terminal running `orca-colab up`; status bar item with the live session count. |
 | `notebooks/orca-colab-bootstrap.ipynb` | runs inside Colab | Joins the tailnet, starts `sshd`, reports the GPU. |
 
@@ -150,7 +150,7 @@ stdout; everything else on stderr, so agents can parse safely.
 Frontmatter `name: colab-gpu`, `description` that triggers on: GPU, CUDA, training, fine-tuning, model
 inference too heavy for the laptop, "Colab", "run this on a GPU". Body sections:
 
-1. **Resolve the CLI**: prefer `orca-colab` on PATH, else `npx -y github:vzxxbacq/orca-colab#<tag>`.
+1. **Resolve the CLI**: prefer `orca-colab` on PATH, else `npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/<release-sha>`.
    Always pass `--json` and read stdout only.
 2. **First run with the user**: run `doctor`; for each failure give the user the one action; run `setup`
    in an Orca terminal the user can see (`orca terminal` from the orca-cli skill, or ask them). Explain
@@ -228,7 +228,7 @@ No outputs committed. No pip packages.
     "statusBarItems": [{ "id": "colab-sessions", "icon": "zap", "text": "Colab", "command": "colab.showPanel" }],
     "settings": [
       { "key": "autoStopIdleMinutes", "title": "Auto-stop idle sessions after (minutes)", "type": "integer", "default": 20, "minimum": 0 },
-      { "key": "cliCommand", "title": "orca-colab command", "type": "string", "default": "npx -y github:vzxxbacq/orca-colab#v0.2.5" }
+      { "key": "cliCommand", "title": "orca-colab command", "type": "string", "default": "npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/85b32e00d93b5d598ac0bd470363bfd3ac76c12b" }
     ]
   },
   "capabilities": [
