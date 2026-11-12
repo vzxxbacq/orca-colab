@@ -383,6 +383,18 @@ export function resolveTargetAccount({ store, account = "default", addAccount = 
   return targetAccount;
 }
 
+const COLAB_SCOPE = "https://www.googleapis.com/auth/colaboratory";
+
+function callbackPage(title, text, color) {
+  return `<!doctype html><meta charset="utf-8"><title>${title}</title><body style="font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div style="background:#1e293b;border:1px solid #334155;border-radius:12px;padding:28px 36px;max-width:440px;text-align:center"><h2 style="margin:0 0 8px;color:${color}">${title}</h2><p style="margin:0;color:#94a3b8;font-size:14px">${text}</p></div></body>`;
+}
+
+// Google's granular consent lists extra scopes as checkboxes that start unticked, so a sign-in can succeed
+// without Colab access.
+export function grantedColabScope(scope) {
+  return String(scope || "").split(/\s+/).includes(COLAB_SCOPE);
+}
+
 export async function runLoopbackOAuthFlow({
   account = "default",
   addAccount = false,
@@ -439,11 +451,8 @@ export async function runLoopbackOAuthFlow({
         return;
       }
 
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(
-        `<!doctype html><meta charset="utf-8"><title>Signed in to Google Colab</title><body style="font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div style="background:#1e293b;border:1px solid #334155;border-radius:12px;padding:28px 36px;max-width:440px;text-align:center"><h2 style="margin:0 0 8px;color:#38bdf8">Signed in to Google Colab</h2><p style="margin:0;color:#94a3b8;font-size:14px">orca-colab is now connected. You can close this browser tab and return to Orca.</p></div></body>`,
-      );
-      resolveCode(code);
+      // The page waits for the token exchange so it can say whether Colab access was actually granted.
+      resolveCode({ code, res });
     } catch (err) {
       rejectCode(err);
     }
@@ -493,16 +502,46 @@ export async function runLoopbackOAuthFlow({
   });
 
   try {
-    const code = await Promise.race([codePromise, timeoutPromise, abortPromise]);
-    const tokens = await exchangeAuthorizationCode({
-      code,
-      codeVerifier,
-      redirectUri,
-      homeDir,
-      clientId,
-      clientSecret,
-      fetchImpl,
-    });
+    const { code, res } = await Promise.race([codePromise, timeoutPromise, abortPromise]);
+    let tokens;
+    try {
+      tokens = await exchangeAuthorizationCode({
+        code,
+        codeVerifier,
+        redirectUri,
+        homeDir,
+        clientId,
+        clientSecret,
+        fetchImpl,
+      });
+    } catch (err) {
+      res.writeHead(500, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(callbackPage("Google Colab sign-in failed", "Return to Orca for details.", "#f87171"));
+      throw err;
+    }
+    if (!grantedColabScope(tokens.scope)) {
+      res.writeHead(403, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(
+        callbackPage(
+          "Colab access was not granted",
+          "Google's consent page lists Colab access as a checkbox that starts unticked. Sign in again from Orca and tick &ldquo;Read, write and delete your Colab resources&rdquo; (or Select all).",
+          "#fbbf24",
+        ),
+      );
+      const err = new Error(
+        "Google did not grant Colab access: on the consent page, tick 'Read, write and delete your Colab resources' (or Select all), then sign in again.",
+      );
+      err.code = "COLAB_SCOPE_NOT_GRANTED";
+      throw err;
+    }
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(
+      callbackPage(
+        "Signed in to Google Colab",
+        "orca-colab is now connected. You can close this browser tab and return to Orca.",
+        "#38bdf8",
+      ),
+    );
     const profile = await fetchGoogleUserProfile(tokens.accessToken, { fetchImpl });
     const credentials = { ...tokens, email: profile.email, name: profile.name, clientId };
     if (!persist) {

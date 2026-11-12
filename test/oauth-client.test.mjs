@@ -7,6 +7,8 @@ import { COLAB_HEADERS } from "../bin/lib/colab-api-client.mjs";
 import {
   getValidAccessToken,
   readOAuthAccountStatus,
+  readOAuthStore,
+  runLoopbackOAuthFlow,
   resolveOAuthClientConfig,
   saveOAuthCredentials,
 } from "../bin/lib/colab-oauth.mjs";
@@ -32,4 +34,30 @@ test("Colab API requests no longer identify as the VS Code extension", () => {
     Object.keys(COLAB_HEADERS).filter((h) => /vs-?code|client-agent/i.test(h)),
     [],
   );
+});
+
+test("a sign-in where the Colab checkbox was left unticked fails and stores nothing", async (t) => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "orca-colab-oauth-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  let page;
+  const fetchImpl = async () => ({
+    ok: true,
+    json: async () => ({
+      access_token: "a",
+      refresh_token: "r",
+      expires_in: 3600,
+      scope: "openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile",
+    }),
+  });
+  const openBrowser = async (authUrl) => {
+    const redirect = new URL(authUrl).searchParams.get("redirect_uri");
+    const state = new URL(authUrl).searchParams.get("state");
+    page = fetch(`${redirect}/?state=${encodeURIComponent(state)}&code=c`);
+  };
+
+  await assert.rejects(runLoopbackOAuthFlow({ homeDir: home, openBrowser, fetchImpl }), {
+    code: "COLAB_SCOPE_NOT_GRANTED",
+  });
+  assert.equal((await page).status, 403);
+  assert.deepEqual(readOAuthStore(home).accounts, {});
 });

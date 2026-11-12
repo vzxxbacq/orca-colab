@@ -21,7 +21,7 @@ Always pass `--json` and parse **stdout** only (progress and diagnostics go to `
 
 1. Run `doctor --json`:
    - Inspect `ok`, `mode` (`"direct-api"` or `"tailscale-ssh"`), `checks.oauth`, and `policy` (`allowedGpus`, `maxConcurrentSessions`).
-   - If `ok === false`, ask the user to sign in once via `orca-colab auth login` (or click **Sign in with Google** in the Orca Colab panel). No Tailscale setup is required in Direct API mode.
+   - If `ok === false`, ask the user to sign in once via `orca-colab auth login` (or click **Sign in with Google** in the Orca Colab panel), ticking the Colab permission on Google's consent page (it starts unticked). No Tailscale setup is required in Direct API mode.
 2. Run `status --json` (or `ls --json`) to discover any already-active GPU sessions (`name`, `gpu`, `rateKey`, `cuPerHour`, `reachable`, `ageSeconds`).
 3. Run `credits --json` (or `credits calibrate --json`) to check the user's approximate Compute Units balance (`estimatedBalanceCu`) and monthly budget (`budgetCu`, `estimatedBudgetUsedPercent`).
 

@@ -269,7 +269,7 @@ export async function run(
         log(`Calibrated account '${account}' via Orca browser: ${balanceCu} CU.`, stderr);
       } catch (err) {
         throw new CliError(
-          `Automatic calibration unavailable (${err instanceof Error ? err.message : String(err)}). Run 'orca-colab auth login' for direct API calibration, or enter balance manually with 'orca-colab credits set <cu>'.`,
+          `Automatic calibration unavailable (${err instanceof Error ? err.message : String(err)}). Colab's balance endpoint does not accept orca-colab's Google sign-in, so open your Colab compute-units page in Orca's browser and retry, or enter the balance with 'orca-colab credits set <cu>'.`,
         );
       }
     }
