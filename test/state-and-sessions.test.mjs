@@ -37,8 +37,11 @@ test("writeConfig writes 0600 config atomically inside 0700 home and drops the o
   });
 
   const paths = getColabPaths(tmpHome);
-  assert.equal(statSync(paths.baseDir).mode & 0o777, 0o700);
-  assert.equal(statSync(paths.configPath).mode & 0o777, 0o600);
+  // Windows has no POSIX mode bits; the files inherit the profile folder's ACL there.
+  if (process.platform !== "win32") {
+    assert.equal(statSync(paths.baseDir).mode & 0o777, 0o700);
+    assert.equal(statSync(paths.configPath).mode & 0o777, 0o600);
+  }
   assert.deepEqual(readdirSync(paths.baseDir).sort(), ["config.json", "sessions"]);
   assert.deepEqual(readConfig(tmpHome), written);
 });

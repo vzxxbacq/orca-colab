@@ -38,7 +38,7 @@ test("sync unpacks the workspace over /colab/tty and records remoteRoot in the s
     stdout: io.stdout,
     stderr: io.stderr,
     env: {},
-    cwd: "/Users/alice/workspace/toy-train",
+    cwd: path.resolve("/Users/alice/workspace/toy-train"),
     homeDir: tmpHome,
     spawnProcess: () => ({ status: 0, stdout: Buffer.from("tar-bytes"), stderr: Buffer.alloc(0) }),
     execTty: async (req) => {
@@ -51,7 +51,7 @@ test("sync unpacks the workspace over /colab/tty and records remoteRoot in the s
   assert.deepEqual(JSON.parse(io.stdoutText), {
     ok: true,
     session: "orca-colab-sync1",
-    localPath: "/Users/alice/workspace/toy-train",
+    localPath: path.resolve("/Users/alice/workspace/toy-train"),
     remoteRoot: "/content/orca/toy-train",
     method: "colab-tty-tar",
   });
