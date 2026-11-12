@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Orca Colab Privacy</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+<h1>Privacy policy</h1>
+<p class="muted">Orca Colab Community · last updated 12 November 2026</p>
+
+<p>Orca Colab Community ("the app") is an open-source plugin and command-line tool that runs entirely on your own computer. This policy explains what it does with your Google data.</p>
+
+<h2>Data the app accesses</h2>
+<p>When you sign in with Google, the app requests these permissions:</p>
+<ul>
+<li><strong>Email address and basic profile</strong> (<code>userinfo.email</code>, <code>userinfo.profile</code>): used only to label the signed-in account in the app, so you can tell several accounts apart.</li>
+<li><strong>Colab</strong> (<code>auth/colaboratory</code>): used to create, list and delete Colab runtimes in your account, to run commands on them, and to read your Colab compute-unit balance, each time you or a coding agent you run asks the app to do so.</li>
+</ul>
+
+<h2>Where your data is stored</h2>
+<p>Your Google access and refresh tokens, email address and name are stored only on your computer, in <code>~/.orca-colab/google-oauth.json</code>, with file permissions that allow only your user account to read it. The app talks directly from your computer to Google's servers.</p>
+<p>The project operates no servers and collects no data. Nothing about you, your Google account or your Colab usage is sent to the developers or to any third party. The app contains no analytics or tracking.</p>
+<p>If you use the app with a remote Orca server you control, the app sends your tokens, encrypted, to that server so it can act for you there. They are stored on that server in the same way and go nowhere else.</p>
+
+<h2>Sharing</h2>
+<p>The app does not sell, share or transfer your Google user data, and does not use it for advertising, for training AI models, or for any purpose other than the features described above.</p>
+<p>The app's use of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
+
+<h2>Removing your data</h2>
+<ul>
+<li>Run <code>orca-colab auth logout</code>, or sign out in the Orca panel, to delete the tokens from your computer.</li>
+<li>To also withdraw the app's access on Google's side, remove "Orca Colab Community" at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</li>
+<li>Deleting the <code>~/.orca-colab</code> folder removes everything the app stored.</li>
+</ul>
+
+<h2>Changes and contact</h2>
+<p>Changes to this policy are published on this page and in the <a href="https://github.com/vzxxbacq/orca-colab">source repository</a>. Questions: <a href="https://github.com/vzxxbacq/orca-colab/issues">open a GitHub issue</a>.</p>
+
+<footer class="muted"><a href="index.html">Home</a> · Unofficial community project; not affiliated with or endorsed by Google.</footer>
+</main>
+</body>
+</html>
