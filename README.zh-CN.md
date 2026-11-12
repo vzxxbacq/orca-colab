@@ -7,6 +7,8 @@
 让 [Orca](https://github.com/stablyai/orca) 中的本地 Coding Agent 将 Google Colab GPU 作为自治远程算力后端使用。
 工作区、Agent 和凭据都留在本机；Colab 只是一台由 Agent 自行开启、使用、释放的一次性 GPU 机器。
 
+> **非官方社区项目。** 在 Orca 中名为 *Orca Colab Community*。与 Google 无关联，也未获 Google 认可；"Google Colab" 是 Google LLC 的商标。
+
 ## 你将获得
 
 - **Agent 自治算力**：Agent 自动检查策略、按需开启或并发扩容运行时、同步工作区、安装依赖、提交任务并在空闲时释放 GPU，
