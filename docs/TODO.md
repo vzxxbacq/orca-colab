@@ -62,58 +62,32 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
 - [x] **M2.2 Task Manager (`job` CLI).** `bin/lib/task-store.mjs` and `bin/commands/job.mjs` (`job submit`, `job ls`, `job logs`, `job stop`) storing task state in `~/.orca-colab/tasks/<id>.json` and streaming live output to `~/.orca-colab/tasks/<id>.log`. — Done: implemented foreground/detached task submission, live log streaming, and remote process termination (`test/task-manager.test.mjs`).
 - [x] **M2.3 Orca Plugin + Enhanced Task & Output Panel.** `orca-plugin.json` per DESIGN, `worker/main.mjs` (sessions + tasks + live task output streaming + ledger watch, status bar text and tone, `colab.up`/`colab.down`, idle watchdog), `panel/index.html` with GPU runtime control, Task Manager, Live Task Output Console, and Credit stewardship. `orca plugin validate .` → 0. — Done: implemented `orca-plugin.json`, `worker/main.mjs`, and `panel/index.html`; verified `orca plugin validate .` exits 0.
 - [x] **M2.4 Idle watchdog (D14) & Budget alerts.** Worker reads `lastActivityAt`/`activePids` and running tasks, samples GPU utilisation over SSH every 5 min, requires three consecutive <5 % samples **and** no activity/live pid for `autoStopIdleMinutes`, then notify → 5-min grace → `down`; `up --keep` exemption; budget alerts at 80 % / 100 %. Test the decision function with hardcoded sample sequences. — Done: implemented `bin/lib/idle-watchdog.mjs` and verified 40-min single-low-sample exemption and budget alerts (`test/idle-watchdog-and-plugin.test.mjs`).
-- [~] claude **M2.5 Remote-host bridge (D18).** When the focused Orca workspace lives on a remote Orca server
-      (`workspace.list` row has a `hostId`), the worker in the desktop client stops reading its own
-      `~/.orca-colab/` and instead drives `orca-colab watch` inside one background terminal of that
-      workspace (`terminal.create` / `terminal.send` / `terminal.read`), so sessions, tasks, live output,
-      credits and Google sign-in all reflect and land on the server. Local workspaces keep the fs path.
-      `bin/lib/bridge-frames.mjs` (gzip+base64 chunked frames that survive pty wrapping and the 2000-line
-      read window), `bin/lib/dashboard-snapshot.mjs` and `bin/lib/panel-actions.mjs` (shared by worker and
-      `watch`), `bin/commands/watch.mjs`, `auth login --no-browser` + redirect-URL replay for sign-in on the
-      server, `terminal:read` capability, `remoteCliCommand` setting, panel mode badge and paste box.
-      Verified locally: `node --test` (41), `orca plugin validate .` → 0, `watch` round trip over stdin.
-      Human steps: (1) in the desktop Orca, reload the plugin from this branch and approve the new
-      fingerprint (it now asks to read terminals); (2) set the plugin setting "orca-colab command on
-      remote Orca servers" to `node /Users/user/orca/projects/orca-colab/bin/orca-colab.mjs`; (3) focus
-      the server-hosted project: the top bar should show `Server · <host>`, a `Colab Bridge` terminal
-      should appear in that workspace within a few seconds (created through the local `orca` CLI), and
-      the Agent Runs list should show the server's tasks; if instead a card asks you to run `watch` by
-      hand, send the output of `orca plugin dev request . colab.debugWorkspace --data '{}'`;
-      (4) click Sign in with Google, open the link, approve, paste the redirected URL, confirm the
-      account appears; (5) switch to a local project and confirm the badge says `Local`.
-- [ ] Orca browser research (D16): confirm Google sign-in and Colab cell execution work inside Orca's
-      embedded browser (`orca tab create --url`), note any UA or popup issues, and record how `up` should
-      detect "running inside Orca" (`ORCA_WORKTREE_ID || ORCA_WORKSPACE_ID || ORCA_PANE_KEY`). Then switch `up` to open the notebook there (`--system-browser` to
-      override).
-- [ ] Browser calibration, step 1 (research): open Colab in Orca's browser with DevTools network
-      capture, open the Resources pane, record the request that returns compute units (URL, method,
-      headers, response shape). Write it to `docs/colab-internal-endpoints.md` with the capture date.
-- [ ] Browser calibration, step 2: `credits calibrate --browser` using `orca tab create --url --json` (keep `browserPageId`) + `orca eval --expression --page <id>
-      --expect-url` to run a
-      same-origin page-context `fetch` of that endpoint and parse the JSON; fallback to pane text;
-      fallback to a clear "enter manually" message. Panel Calibrate button. Never fail `up`/`down` on it.
-- [ ] Multiple accounts (D15): per-account balance in panel. `auth login --add` and `up --account` exist.
-- [ ] Linux (`xdg-open`, `orca-ide` wording) and Windows (`start`, bsdtar for `sync`/`pull`).
-- [ ] Abort: SIGTERM/SIGINT during `up` leaves no partial session file; test by aborting the signal.
+- [x] **M2.5 Remote-host bridge (D18).** Worker drives `orca-colab watch` inside one background `Colab Bridge`
+      terminal on remote Orca servers (`bin/lib/bridge-frames.mjs`, `bin/commands/watch.mjs`,
+      `bin/lib/credential-envelope.mjs` X25519+AES-256-GCM sealed OAuth import, `test/watch-bridge.test.mjs`). — Done (`v0.2.0`–`v0.2.5`).
+- [x] **M2.6 Community catalog review fixes (`v0.3.0`, issue #2).** Own Desktop OAuth client (`orca-colab-community`)
+      with non-spoofed `User-Agent`, public Colab + `/tun/m/ccu-info` endpoints (`docs/colab-internal-endpoints.md`),
+      Tailscale/SSH/notebook paths dropped (D19, D20), opt-in skill install & removal in the panel, personal Headscale preset removed, `npx` commands pinned to full commit SHA, and
+      unofficial `Orca Colab Community` naming/disclaimer. — Done (`v0.3.0`).
+- [x] ~~Orca browser notebook research (D16) & browser DOM calibration~~ — Superseded 2026-11-12: notebook path
+      removed in D19; CCU balance and burn rate come directly from `GET /tun/m/ccu-info?authuser=0` over OAuth.
+- [x] **Multiple accounts (D15).** `auth login --add`, `auth switch`, `up --account`, `creditsByAccount` in
+      `DashboardSnapshotBuilder`, and per-account balance + active runtime count in the panel. — Done.
 - [x] ~~`doctor` auth-key age warning; Headscale `loginServer`~~ — Dropped 2026-11-12 with the Tailscale path (DESIGN D19).
-- [ ] CI: `node --test`; manifest check against Orca's JSON schema (fetch the schema file in the workflow).
-- [ ] Add the `orca-plugin` GitHub topic once the plugin exists.
-- [x] `pull` for Direct API sessions. — Done 2026-11-12: packs on the runtime, downloads from Jupyter
+- [x] **Add the `orca-plugin` GitHub topic.** — Done (`vzxxbacq/orca-colab` carries topic `orca-plugin`).
+- [x] **`pull` for Direct API sessions.** — Done 2026-11-12: packs on the runtime, downloads from Jupyter
       `/files` over HTTPS (DESIGN D20); Tailscale/SSH paths, `setup`, `forward` and the notebook removed (D19).
+- [ ] **Abort handling**: wire `SIGINT`/`SIGTERM` in `bin/orca-colab.mjs` to an `AbortController` signal so
+      aborting `up` cleans up `assign.lock` and leaves no partial session file; add unit test.
+- [x] **CI/CD.** — Done 2026-11-12 (#9): `node --test` on Ubuntu/macOS/Windows × Node 20/22, manifest schema
+      check, backward-compatibility diff on PRs (`breaking-change` label), Release and tag-verify workflows.
+- [ ] **Cross-platform verification**: Linux (`xdg-open`, `orca-ide` binary lookup) and Windows (`bsdtar` path handling for `sync`/`pull`).
 
 ## M3 — Drive automation
-- [x] ~~Drive copy of the bootstrap notebook~~ — Dropped 2026-11-12: no notebook since v0.3.0.
+- [x] ~~Drive copy of the bootstrap notebook~~ — Dropped 2026-11-12: no notebook since `v0.3.0`.
 
 ## M4 — Colab Enterprise
 - [ ] Runtime templates listing, `up --enterprise --gpu a100`.
 
 ## M5 — Remote-workspace mode (only if asked)
-- [ ] Second recipe `recipes/colab-remote-workspace.json`; needs a new bootstrap (the notebook was removed in v0.3.0); see facts § VM recipes.
-
-## Decisions pending
-- `remoteRoot` default: `/content/orca/<basename>`. Keeps Colab's sample data and Drive mounts separate.
-- Default rate table values need a source. Current numbers are the community-observed Nov 2026 figures;
-  mark them "approximate" in the UI and let the first live test (M1.13) refine T4 from an actual
-  before/after reading of the Resources pane.
-- Should `run` default to `tmux` sessions for long jobs so a dropped SSH does not kill training? Leaning
-  yes: `run --detach NAME` → `tmux new -d -s NAME`, `run --attach NAME`. Decide in M1.7.
+- [ ] Second recipe `recipes/colab-remote-workspace.json`; needs a new bootstrap (the notebook was removed in `v0.3.0`); see facts § VM recipes.
