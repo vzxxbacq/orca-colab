@@ -1,0 +1,30 @@
+name: Verify tag
+
+# Tags pushed by hand (the Release workflow's own tags start no workflow) must still be well-formed releases.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test
+      - name: Versions, pins and pinned CLI files match the tag
+        run: node scripts/release-verify.mjs "$GITHUB_REF_NAME"
+      - name: Smoke-test the published pin from a clean npm cache
+        run: |
+          PINNED=$(node -e 'import("./scripts/release-pin.mjs").then((m) => console.log(m.readPins()[0].ref))')
+          set +e
+          out=$(npx -y --cache "$RUNNER_TEMP/npm-cache" "https://codeload.github.com/${GITHUB_REPOSITORY}/tar.gz/$PINNED" doctor --json)
+          set -e
+          echo "$out" | node -e 'const d = JSON.parse(require("fs").readFileSync(0, "utf8")); if (!d.checks?.node?.ok) process.exit(1);'

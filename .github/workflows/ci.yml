@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, node ${{ matrix.node }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: [20, 22]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: node --test
+
+  manifest:
+    name: manifest and packaging
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Validate orca-plugin.json against Orca's schema
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/orca-plugin.schema.json" \
+            https://raw.githubusercontent.com/stablyai/orca/main/docs/schemas/plugins/orca-plugin.v2.schema.json
+          npx -y -p ajv-cli@5 -p ajv-formats@3 ajv validate --spec=draft2020 --strict=false -c ajv-formats \
+            -s "$RUNNER_TEMP/orca-plugin.schema.json" -d orca-plugin.json
+      - name: Versions agree and there are no runtime dependencies
+        run: |
+          node -e '
+            const pkg = require("./package.json");
+            const manifest = require("./orca-plugin.json");
+            if (pkg.version !== manifest.version) throw new Error(`package.json ${pkg.version} != orca-plugin.json ${manifest.version}`);
+            if (Object.keys(pkg.dependencies ?? {}).length) throw new Error("bin/ and worker/ must stay dependency-free (AGENTS.md)");
+          '
+
+  compat:
+    name: backward compatibility
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Extract the base and head contracts
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git worktree add "$RUNNER_TEMP/base" "$BASE_SHA"
+          node scripts/compat-contract.mjs "$RUNNER_TEMP/base" --allow-missing > "$RUNNER_TEMP/base.json"
+          node scripts/compat-contract.mjs . > "$RUNNER_TEMP/head.json"
+      - name: Compare (label the PR `breaking-change` once the owner has approved a break)
+        env:
+          ALLOW_BREAKING: ${{ contains(github.event.pull_request.labels.*.name, 'breaking-change') && '--allow-breaking' || '' }}
+        run: |
+          set +e
+          node scripts/compat-diff.mjs "$RUNNER_TEMP/base.json" "$RUNNER_TEMP/head.json" $ALLOW_BREAKING > "$RUNNER_TEMP/compat.md"
+          status=$?
+          cat "$RUNNER_TEMP/compat.md" | tee -a "$GITHUB_STEP_SUMMARY"
+          exit $status

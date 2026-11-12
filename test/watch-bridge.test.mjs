@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { FrameAssembler } from "../bin/lib/bridge-frames.mjs";
 import { readLedgerEvents } from "../bin/lib/credit-ledger.mjs";
 import { sealForRecipient } from "../bin/lib/credential-envelope.mjs";
@@ -54,7 +54,7 @@ test("watch answers a call over stdin with a res frame and emits snap frames", a
     [
       "--input-type=module",
       "-e",
-      `import { main } from ${JSON.stringify(CLI)}; await main(["watch", "--no-watchdog"], { homeDir: ${JSON.stringify(tmpHome)} }); process.exit(0);`,
+      `import { main } from ${JSON.stringify(pathToFileURL(CLI).href)}; await main(["watch", "--no-watchdog"], { homeDir: ${JSON.stringify(tmpHome)} }); process.exit(0);`,
     ],
     { stdio: ["pipe", "pipe", "pipe"] },
   );

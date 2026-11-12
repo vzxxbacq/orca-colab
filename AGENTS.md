@@ -60,6 +60,24 @@ node --test                               # unit tests
 
 Run `node --test` (and, once the plugin exists, `orca plugin validate .`) before every push.
 
+## CI/CD (GitHub Actions, GitHub-hosted runners)
+
+- `.github/workflows/ci.yml` on every PR and push to `main`:
+  - `test`: `node --test` on Ubuntu, macOS and Windows × Node 20 and 22.
+  - `manifest`: `orca-plugin.json` against Orca's published JSON schema; versions agree; no runtime deps.
+  - `compat` (PRs): `scripts/compat-contract.mjs` extracts the public contract (commands, flags,
+    subcommands, exit codes, offline `--json` key paths, session/config/task/ledger formats, `watch`
+    protocol and panel actions, plugin id/settings/commands/capabilities/`engines.orca`) from the PR and
+    from its base; `scripts/compat-diff.mjs` fails on anything removed or changed, on a new capability and
+    on a raised `engines.orca`. After the owner approves a break, add the `breaking-change` label to the
+    PR (or bump the major version); the job re-runs on labelling and lists the breaks in its summary.
+- `.github/workflows/release.yml` (Actions → Release → Run workflow, on `main`, input `version`) performs the
+  two-commit release below, checks compatibility against the previous tag (`allow_breaking` input for an
+  approved break; `confirm_major` for `X.0.0`), pushes `main` and the tag atomically, smoke-runs the
+  published `npx` pin from a clean cache and creates the GitHub release. Prefer it to releasing by hand.
+- `.github/workflows/tag-verify.yml` runs `scripts/release-verify.mjs` and the smoke run on tags pushed by
+  hand.
+
 ## Testing against real Colab
 
 The human owner has Colab access and signs in with `orca-colab auth login` when asked (agents cannot
@@ -78,13 +96,15 @@ verifiable locally first (JSON contract, fake `execTty` / `fetchImpl` injections
   1. `release: vX.Y.Z; ...` — bump `version` in `package.json` and `orca-plugin.json`; pins unchanged.
   2. `release: pin vX.Y.Z to <short sha>` — run `node scripts/release-pin.mjs HEAD` (it refuses if `bin/`
      or `package.json` changed since that commit), run `node --test`, commit, and tag **this** commit
-     `vX.Y.Z`. The tag's CLI files are identical to the pinned commit's.
+     `vX.Y.Z`. The tag's CLI files are identical to the pinned commit's. `node scripts/release-verify.mjs
+     vX.Y.Z` checks all of this; the Release workflow runs every step.
 - Commit messages: `area: what changed` (`pull: download the archive from Jupyter /files`).
 
 ## Releases: what needs the owner's approval
 
 - **Patch and minor releases** (`vX.Y.Z` → `vX.Y.Z+1` or `vX.Y+1.0`) may be tagged and pushed without
-  asking, after `node --test` and `orca plugin validate .` pass.
+  asking, after `node --test` and `orca plugin validate .` pass and the compatibility check reports no
+  unapproved break.
 - **Major releases** (`vX.0.0`) need the owner's explicit approval first. Propose the version, the reason
   and the changelog, then stop and wait. Never tag or push a major version on your own.
 - **Breaking changes need advance warning**, in the same message that proposes the work, before any code
