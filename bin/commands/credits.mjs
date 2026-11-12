@@ -7,7 +7,7 @@ import {
   writeJson,
 } from "../lib/cli-output.mjs";
 import { getConsumptionUserInfo } from "../lib/colab-api-client.mjs";
-import { locateOrcaBinary } from "../lib/colab-browser-automation.mjs";
+import { locateOrcaBinary } from "../lib/orca-binary.mjs";
 import { readConfig } from "../lib/colab-home.mjs";
 import { getValidAccessToken } from "../lib/colab-oauth.mjs";
 import {
@@ -102,7 +102,7 @@ export async function syncCreditsFromColabApi({
   );
   if (ccu.assignmentsCount === 0) {
     for (const s of accountActive) {
-      if (s.colabRuntime?.id && !s.ip) {
+      if (s.colabRuntime?.id) {
         deleteSession(s.name, homeDir);
         recordSessionEndEvent(s, {
           cause: "colab-died",

@@ -41,7 +41,6 @@ export function normalizeSession(input) {
     name: input.name,
     account: typeof input.account === "string" && input.account ? input.account : "default",
     hostname: typeof input.hostname === "string" ? input.hostname : input.name,
-    ip: typeof input.ip === "string" ? input.ip : "",
     gpu: input.gpu ?? null,
     rateKey: typeof input.rateKey === "string" && input.rateKey ? input.rateKey : "unknown",
     cuPerHour: typeof input.cuPerHour === "number" ? input.cuPerHour : 2,
@@ -53,7 +52,6 @@ export function normalizeSession(input) {
     keep: Boolean(input.keep),
     state: input.state === "zombie" ? "zombie" : "active",
     remoteRoot: typeof input.remoteRoot === "string" ? input.remoteRoot : null,
-    forwards: Array.isArray(input.forwards) ? input.forwards : [],
   };
 
   if (typeof input.transport === "string" && input.transport) {
@@ -173,4 +171,15 @@ export function selectDefaultSession(sessions, requestedName = null) {
 export function resolveSession({ sessionName = null, homeDir = os.homedir() } = {}) {
   const sessions = listSessions(homeDir);
   return selectDefaultSession(sessions, sessionName);
+}
+
+// Sessions started before v0.3.0 over Tailscale may lack the runtime proxy that every command now uses.
+export function requireColabRuntime(session) {
+  const runtime = session?.colabRuntime;
+  if (!runtime?.baseUrl || !runtime?.token) {
+    throw new CliError(
+      `session ${session?.name} has no Colab runtime proxy (started by an older orca-colab over Tailscale); run 'orca-colab down --session ${session?.name}' and 'orca-colab up' again`,
+    );
+  }
+  return { baseUrl: runtime.baseUrl, proxyToken: runtime.token };
 }

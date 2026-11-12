@@ -2,7 +2,6 @@ import os from "node:os";
 import { run as runCreditsCommand } from "../commands/credits.mjs";
 import { run as runDownCommand } from "../commands/down.mjs";
 import { stopTaskById, submitTask } from "../commands/job.mjs";
-import { run as runSetupCommand } from "../commands/setup.mjs";
 import { run as runUpCommand } from "../commands/up.mjs";
 import { getConsumptionUserInfo } from "./colab-api-client.mjs";
 import {
@@ -172,22 +171,6 @@ export function createPanelActions({
       return {};
     },
 
-    async setupConfig(input = {}) {
-      const authKey = String(input?.authKey || "").trim();
-      if (!authKey) {
-        throw new Error("Tailscale auth key is required.");
-      }
-      const args = ["--auth-key", authKey, "--non-interactive", "--no-open"];
-      if (input?.loginServer && String(input.loginServer).trim()) {
-        args.push("--login-server", String(input.loginServer).trim());
-      }
-      if (input?.notebookUrl && String(input.notebookUrl).trim()) {
-        args.push("--notebook-url", String(input.notebookUrl).trim());
-      }
-      await runSetupCommand(args, { json: true, stdout: NULL_STREAM, stderr: NULL_STREAM, env, homeDir });
-      return {};
-    },
-
     async updatePolicy(input = {}) {
       const existing = readConfig(homeDir) || {};
       const currentPolicy = resolveAgentPolicy(existing);
@@ -329,7 +312,6 @@ export const PANEL_ACTION_NAMES = Object.freeze([
   "oauthReplay",
   "authSwitch",
   "authLogout",
-  "setupConfig",
   "updatePolicy",
   "startSession",
   "stopSession",

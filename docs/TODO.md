@@ -92,27 +92,23 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
       --expect-url` to run a
       same-origin page-context `fetch` of that endpoint and parse the JSON; fallback to pane text;
       fallback to a clear "enter manually" message. Panel Calibrate button. Never fail `up`/`down` on it.
-- [ ] Multiple accounts (D15): `setup --account <label>` appends to the existing `accounts[]`,
-      `up --account`, per-account balance in panel. The shape already exists since M1.2.
-- [ ] Linux (`xdg-open`, `wl-copy`/`xclip`, `orca-ide` wording) and Windows (`clip.exe`, `start`, no
-      rsync → tar fallback, ssh from OpenSSH-for-Windows).
+- [ ] Multiple accounts (D15): per-account balance in panel. `auth login --add` and `up --account` exist.
+- [ ] Linux (`xdg-open`, `orca-ide` wording) and Windows (`start`, bsdtar for `sync`/`pull`).
 - [ ] Abort: SIGTERM/SIGINT during `up` leaves no partial session file; test by aborting the signal.
-- [ ] `doctor` warns at 83 days from `authKeyCreatedAt` (written by `setup`, already in the config schema).
-- [ ] Headscale: `loginServer` end to end.
+- [x] ~~`doctor` auth-key age warning; Headscale `loginServer`~~ — Dropped 2026-11-12 with the Tailscale path (DESIGN D19).
 - [ ] CI: `node --test`; manifest check against Orca's JSON schema (fetch the schema file in the workflow).
 - [ ] Add the `orca-plugin` GitHub topic once the plugin exists.
-- [ ] `pull` for Direct API sessions: it only knows rsync/ssh tar, so a `colab-tty` session (no tailnet IP)
-      fails with `root@: Permission denied`. Mirror `sync`'s `colab-tty-tar` path in reverse. Found 2026-11-12.
+- [x] `pull` for Direct API sessions. — Done 2026-11-12: packs on the runtime, downloads from Jupyter
+      `/files` over HTTPS (DESIGN D20); Tailscale/SSH paths, `setup`, `forward` and the notebook removed (D19).
 
 ## M3 — Drive automation
-- [ ] OAuth PKCE loopback (`drive.file`), token at `~/.orca-colab/google-token.json` 0600.
-- [ ] `setup --drive` creates the prefilled copy; `up` polls the copy's outputs for the tailnet IP.
+- [x] ~~Drive copy of the bootstrap notebook~~ — Dropped 2026-11-12: no notebook since v0.3.0.
 
 ## M4 — Colab Enterprise
-- [ ] Runtime templates listing, `up --enterprise --gpu a100`, execution job that runs the bootstrap.
+- [ ] Runtime templates listing, `up --enterprise --gpu a100`.
 
 ## M5 — Remote-workspace mode (only if asked)
-- [ ] Second recipe `recipes/colab-remote-workspace.json` reusing the notebook; see facts § VM recipes.
+- [ ] Second recipe `recipes/colab-remote-workspace.json`; needs a new bootstrap (the notebook was removed in v0.3.0); see facts § VM recipes.
 
 ## Decisions pending
 - `remoteRoot` default: `/content/orca/<basename>`. Keeps Colab's sample data and Drive mounts separate.

@@ -17,7 +17,7 @@
 - **人只设边界**：一键登录 Google，选择允许的 GPU 级别（T4、L4、A100、CPU），限制并发运行时数量和月度计算单元预算，
   Agent 无法越界。
 - **多运行时、多 Session**：多块 GPU 并行，可命名、可用 `--session` 逐条指定，并支持多个 Google 账号切换。
-- **免配置直连**：通过 Colab Direct API 直连，无需 Tailscale 或手动操作浏览器（为自定义镜像保留可选的 Tailscale SSH 模式）。
+- **只用公网接口**：全部通过 HTTPS 访问 Google 的 Colab API 和运行时自带的代理，不需要 VPN、tailnet、SSH 或开放端口；`pull` 可把结果（含二进制文件）下载回本机。
 - **远程 Orca 服务器（Beta）**：项目位于 Orca 服务器上时，面板通过 Bridge Terminal 跟随显示该服务器的运行时、任务和算力。
   详见[下文](#远程-orca-服务器beta)。
 
@@ -72,9 +72,14 @@ orca-colab up --gpu T4 [--new] [--name <name>] [--account <account>] --json
 orca-colab job submit --name "Train" --wait --json -- <cmd>
 orca-colab run --json -- <cmd>
 orca-colab sync [path] --json
-orca-colab pull <remote> <local> --json
+orca-colab pull <remote> <localDir> --json
 orca-colab down [--all] --json
 ```
+
+**下载结果。** `orca-colab pull outputs ./results --json` 会在运行时上把 `outputs`（相对于同步目录，也可以是
+`/content/model.pt` 这样的绝对路径）打成 tar.gz，用运行时的代理 token 通过 HTTPS 从运行时自带的 Jupyter
+服务下载，再解压到 `./results/outputs`。任何大小和类型的文件都按字节原样到达，不需要任何内网可达。
+不支持端口转发：要访问运行时上的服务，用 `orca-colab run -- curl -s localhost:<端口>/...`。
 
 ## 远程 Orca 服务器（Beta）
 

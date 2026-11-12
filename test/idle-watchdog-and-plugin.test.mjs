@@ -49,7 +49,7 @@ test("worker/main.mjs activates and registers commands and panel handlers cleanl
     assert.equal(registeredCommands.has("colab.down"), true);
     assert.equal(registeredCommands.has("colab.showPanel"), true);
     assert.equal(registeredPanels.has("colab.dashboard"), true);
-    assert.equal(registeredPanels.has("colab.setupConfig"), true);
+    assert.equal(registeredPanels.has("colab.setupConfig"), false);
     assert.equal(registeredPanels.has("colab.submitTask"), true);
     assert.equal(registeredPanels.has("colab.getTaskLogs"), true);
     assert.equal(statusBarState?.id, "colab-sessions");

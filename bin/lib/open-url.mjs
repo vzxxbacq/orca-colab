@@ -1,9 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { findExecutableOnPath } from "./tailscale-cli.mjs";
-
-export const BOOTSTRAP_NOTEBOOK_COLAB_URL =
-  "https://colab.research.google.com/github/vzxxbacq/orca-colab/blob/main/notebooks/orca-colab-bootstrap.ipynb";
+import { findExecutableOnPath } from "./executable-lookup.mjs";
 
 export function isRunningInsideOrca(env = process.env) {
   return Boolean(

@@ -317,7 +317,7 @@ export async function run(
             );
           }
         } catch (err) {
-          if (err?.status === 404 && !s.ip) {
+          if (err?.status === 404) {
             deleteSession(s.name, homeDir);
             recordSessionEndEvent(s, {
               cause: "colab-died",

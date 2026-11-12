@@ -20,9 +20,6 @@ export function getColabPaths(homeDir = os.homedir()) {
     baseDir,
     configPath: path.join(baseDir, "config.json"),
     oauthPath: path.join(baseDir, "google-oauth.json"),
-    privateKeyPath: path.join(baseDir, "id_ed25519"),
-    publicKeyPath: path.join(baseDir, "id_ed25519.pub"),
-    knownHostsPath: path.join(baseDir, "known_hosts"),
     sessionsDir: path.join(baseDir, "sessions"),
     tasksDir: path.join(baseDir, "tasks"),
     ledgerPath: path.join(baseDir, "ledger.jsonl"),
@@ -103,27 +100,15 @@ export function normalizeConfig(input = {}) {
     ? input.accounts
     : [{ label: "default" }];
 
-  const accounts = rawAccounts.map((acc) => {
-    const entry = { label: String(acc?.label || "default") };
-    if (typeof acc?.notebookUrl === "string" && acc.notebookUrl.trim() !== "") {
-      entry.notebookUrl = acc.notebookUrl.trim();
-    }
-    return entry;
-  });
+  const accounts = rawAccounts.map((acc) => ({ label: String(acc?.label || "default") }));
 
   const defaultAccount =
     typeof input.defaultAccount === "string" && input.defaultAccount.trim() !== ""
       ? input.defaultAccount.trim()
       : accounts[0].label;
 
+  // Fields from the Tailscale era (authKey, loginServer, tags, notebookUrl) are dropped on the next write.
   const config = {
-    authKey: typeof input.authKey === "string" ? input.authKey : "",
-    authKeyCreatedAt:
-      typeof input.authKeyCreatedAt === "string" ? input.authKeyCreatedAt : null,
-    tags:
-      Array.isArray(input.tags) && input.tags.length > 0
-        ? input.tags.map(String)
-        : ["tag:orca-colab"],
     remoteRootBase:
       typeof input.remoteRootBase === "string" && input.remoteRootBase.trim() !== ""
         ? input.remoteRootBase.trim()
@@ -131,10 +116,6 @@ export function normalizeConfig(input = {}) {
     accounts,
     defaultAccount,
   };
-
-  if (typeof input.loginServer === "string" && input.loginServer.trim() !== "") {
-    config.loginServer = input.loginServer.trim();
-  }
 
   if (Array.isArray(input.allowedGpus) && input.allowedGpus.length > 0) {
     config.allowedGpus = input.allowedGpus.map((g) =>
@@ -167,23 +148,6 @@ export function writeConfig(config, homeDir = os.homedir()) {
   const normalized = normalizeConfig(config);
   writeJsonAtomic(configPath, normalized, { mode: 0o600 });
   return normalized;
-}
-
-export function isValidAuthKey(authKey, loginServer = null) {
-  if (typeof authKey !== "string") {
-    return false;
-  }
-  const trimmed = authKey.trim();
-  if (!trimmed || /\s/.test(trimmed)) {
-    return false;
-  }
-  if (trimmed.startsWith("tskey-")) {
-    return true;
-  }
-  if (loginServer && String(loginServer).trim() !== "") {
-    return trimmed.length >= 16;
-  }
-  return false;
 }
 
 export function resolveAccount(config, requestedLabel) {

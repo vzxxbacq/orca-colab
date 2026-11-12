@@ -22,17 +22,6 @@ import {
   selectDefaultSession,
   writeSession,
 } from "../lib/session-store.mjs";
-import { waitForSshPortClosed } from "../lib/ssh-banner-probe.mjs";
-import { execSshCapture } from "../lib/ssh-exec.mjs";
-
-function defaultKillPid(pid) {
-  try {
-    process.kill(pid, "SIGTERM");
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 export async function run(
   argv,
@@ -42,13 +31,9 @@ export async function run(
     stderr,
     homeDir,
     signal = null,
-    runSsh = null,
-    waitPortClosed = waitForSshPortClosed,
-    killPid = defaultKillPid,
     onSessionEnd = recordSessionEndEvent,
     deleteRuntimeFn = defaultDeleteRuntime,
     fetchImpl = fetch,
-    waitTimeoutMs = 30_000,
     nowIso = () => new Date().toISOString(),
   },
 ) {
@@ -105,12 +90,6 @@ export async function run(
   let anyZombie = false;
 
   for (const session of targets) {
-    for (const fwd of session.forwards) {
-      if (fwd.pid) {
-        killPid(fwd.pid);
-      }
-    }
-
     let deletedByApi = false;
     let apiAccessToken = null;
     if (session.colabRuntime?.id) {
@@ -131,35 +110,12 @@ export async function run(
           deletedByApi = true;
         }
       } catch {
-        // Fall through to SSH sentinel + port check if API call fails.
+        // Reported below as a zombie the user can delete in Colab.
       }
     }
 
-    if (session.ip) {
-      try {
-        execSshCapture({
-          ip: session.ip,
-          remoteCommand:
-            "mkdir -p /root/.orca-colab && touch /root/.orca-colab/unassign",
-          homeDir,
-          timeoutMs: 8000,
-          runSsh,
-        });
-      } catch {
-        // Proceed to port check even if SSH failed because runtime already died.
-      }
-    }
-
-    const closed = deletedByApi
-      ? true
-      : session.ip
-        ? await waitPortClosed({
-            host: session.ip,
-            port: 22,
-            timeoutMs: waitTimeoutMs,
-            signal,
-          })
-        : true;
+    // Sessions from the old Tailscale flow have no runtime id to delete; only the local record is left.
+    const closed = deletedByApi || !session.colabRuntime?.id;
 
     if (closed) {
       deleteSession(session.name, homeDir);
@@ -207,15 +163,14 @@ export async function run(
         {
           ...session,
           state: "zombie",
-          forwards: [],
           lastActivityAt: nowIso(),
         },
         homeDir,
       );
       const action =
-        "Open the Colab notebook tab and choose Runtime -> Disconnect and delete runtime.";
+        "Run 'orca-colab auth login' and retry 'orca-colab down', or delete the runtime at colab.research.google.com (Runtime -> Disconnect and delete runtime).";
       log(
-        `warning: ${session.name} (${session.ip}) did not close port 22 within 30s; marked state=zombie. ${action}`,
+        `warning: could not release ${session.name} through the Colab API; marked state=zombie. ${action}`,
         stderr,
       );
       results.push({
@@ -223,7 +178,7 @@ export async function run(
         session: session.name,
         released: false,
         state: "zombie",
-        reason: "port-22-still-open",
+        reason: "api-delete-failed",
         action,
       });
     }

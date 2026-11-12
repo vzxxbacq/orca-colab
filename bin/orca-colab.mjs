@@ -12,7 +12,6 @@ import {
 
 const COMMANDS = new Set([
   "doctor",
-  "setup",
   "auth",
   "up",
   "status",
@@ -21,7 +20,6 @@ const COMMANDS = new Set([
   "job",
   "sync",
   "pull",
-  "forward",
   "down",
   "credits",
   "ledger",
@@ -32,17 +30,15 @@ const COMMANDS = new Set([
 const HELP_TEXT = `Usage: orca-colab <command> [options]
 
 Commands:
-  doctor     Check local prerequisites (Tailscale, ssh, rsync, git, config)
-  setup      Configure Tailscale auth key, SSH keypair and bootstrap notebook
-  auth       Sign in with Google OAuth (Colab VS Code Direct API, Passkey supported)
-  up         Start or connect to a Colab GPU session (browserless with OAuth, or notebook)
+  doctor     Check local prerequisites (node, git, tar, Google sign-in)
+  auth       Sign in with Google OAuth (Passkey supported)
+  up         Start or connect to a Colab GPU runtime through the Colab API
   status     List sessions and check reachability (alias: ls)
   ls         Alias for status
-  run        Execute a command on the active Colab session over SSH
+  run        Execute a command on the active Colab session
   job        Submit, list, stream logs, and stop GPU compute tasks
   sync       Push workspace files to the Colab session
   pull       Fetch files from the Colab session to the local workspace
-  forward    Forward a local port to the Colab session
   down       Release the Colab runtime and clean up local session state
   credits    Show estimated compute-unit balance, burn rate and budget
   ledger     Show session and calibration history

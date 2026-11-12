@@ -16,39 +16,7 @@ import { runDoctor } from "./doctor.mjs";
 import { evaluateSessionIdleState } from "./idle-watchdog.mjs";
 import { readRateTable } from "./rate-table.mjs";
 import { listSessions } from "./session-store.mjs";
-import { probeSshBannerOnce } from "./ssh-banner-probe.mjs";
-import { execSshCapture } from "./ssh-exec.mjs";
 import { listTasks, readTaskLog } from "./task-store.mjs";
-
-export function queryLiveGpuMetricsViaSsh(ip, homeDir = os.homedir()) {
-  try {
-    const res = execSshCapture({
-      ip,
-      remoteCommand:
-        "nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits",
-      homeDir,
-      timeoutMs: 4000,
-    });
-    if (res.exitCode !== 0 || !res.stdout.trim()) {
-      return null;
-    }
-    const parts = res.stdout
-      .trim()
-      .split("\n")[0]
-      .split(",")
-      .map((s) => Number(s.trim()));
-    if (parts.length >= 3 && parts.every((n) => Number.isFinite(n))) {
-      return {
-        gpuUtilizationPercent: parts[0],
-        vramUsedMiB: parts[1],
-        vramTotalMiB: parts[2],
-      };
-    }
-  } catch {
-    // Ignore transient SSH probe failure.
-  }
-  return null;
-}
 
 export function pickActiveTask(tasks, selectedTaskId = null) {
   return (
@@ -245,16 +213,9 @@ export class DashboardSnapshotBuilder {
       nowMs: Date.now(),
     });
 
-    let reachable = s.state !== "zombie";
+    const reachable = s.state !== "zombie";
     let liveMetrics = this.liveMetricsBySession.get(s.name) || null;
     if (includeLiveMetrics && s.state !== "zombie") {
-      if (s.ip) {
-        const probe = await probeSshBannerOnce({ host: s.ip, port: 22, timeoutMs: 2500 }).catch(
-          () => ({ ok: false }),
-        );
-        reachable = Boolean(probe?.ok);
-      }
-
       if (s.colabRuntime?.baseUrl && s.colabRuntime?.token) {
         try {
           const resInfo = await getRuntimeResources({
@@ -280,14 +241,7 @@ export class DashboardSnapshotBuilder {
           };
           this.liveMetricsBySession.set(s.name, liveMetrics);
         } catch {
-          // Fall back to SSH nvidia-smi below when an IP is present.
-        }
-      }
-
-      if (!liveMetrics && s.ip && reachable) {
-        liveMetrics = queryLiveGpuMetricsViaSsh(s.ip, homeDir);
-        if (liveMetrics) {
-          this.liveMetricsBySession.set(s.name, liveMetrics);
+          // Keep the last metrics; the next poll retries.
         }
       }
     }

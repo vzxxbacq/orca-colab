@@ -1,8 +1,9 @@
 # orca-colab — agent instructions
 
 A skill, a CLI and a thin Orca plugin that let a coding agent running locally in Orca set up a Google
-Colab GPU runtime together with the user and use it as a compute backend over the user's tailnet.
-Agents, the workspace and credentials stay local; Colab is a disposable GPU box reached over SSH.
+Colab GPU runtime together with the user and use it as a compute backend. Agents, the workspace and
+credentials stay local; Colab is a disposable GPU box reached only through public HTTPS/WSS endpoints
+(the Colab API and the runtime's proxy). Never assume a VPN, tailnet, SSH or inbound port (DESIGN D19).
 
 Read in this order before touching code:
 
@@ -19,7 +20,6 @@ Read in this order before touching code:
 skills/colab-gpu/SKILL.md   the agent-facing procedure (agentskills layout; npx skills add vzxxbacq/orca-colab)
 skills/colab-gpu/references/cli.md   command table the skill links to
 bin/orca-colab.mjs          CLI entry; bin/commands/<name>.mjs per command; bin/lib/ concept modules
-notebooks/orca-colab-bootstrap.ipynb   the notebook the user runs inside Colab
 orca-plugin.json, worker/, panel/      thin Orca plugin (M2): sessions panel, status bar, terminal launcher
 docs/                       design, verified Orca facts, TODO
 ```
@@ -28,10 +28,13 @@ docs/                       design, verified Orca facts, TODO
 
 - **Zero runtime dependencies** in `bin/` and `worker/`. Node builtins only. The CLI runs on the user's
   machine through `npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/<release sha>`, so install time must stay near zero.
-- **Credentials never leave the user's machine** except the SSH public key pasted into Colab. No Google
-  OAuth in milestone 1. No tokens embedded in the notebook or the repo.
+- **Credentials never leave the user's machine.** Google tokens live only in
+  `~/.orca-colab/google-oauth.json` (0600); the runtime proxy token only in the session file. No user
+  token is ever embedded in the repo. The app's own Desktop OAuth client ID and secret in
+  `bin/lib/colab-oauth.mjs` are not user credentials: Google treats installed-app client secrets as
+  public (PKCE + loopback protect the flow).
 - **Cross-platform CLI**: macOS, Linux, Windows. Use `os.homedir()`, never `$HOME`; spawn with argv
-  arrays, never shell strings; locate `tailscale` by its known install paths when not on PATH.
+  arrays, never shell strings.
 - **Agent-parsable output**: with `--json`, stdout carries exactly one JSON object and nothing else.
   Progress, prompts and errors go to stderr with the `[colab]` prefix. Exit codes are part of the
   contract (see DESIGN § CLI); the skill depends on them.
@@ -40,15 +43,12 @@ docs/                       design, verified Orca facts, TODO
 - **Credits are estimates.** Every number derived from the ledger is labelled approximate and shows its
   calibration age. Never present a projected balance as a fact, in the UI or in `--json` (`estimated`
   prefix on field names).
-- **Secrets**: the Tailscale auth key lives only in `~/.orca-colab/config.json` (0600) and in the user's
-  own notebook copy. Never log it, never put it in `--json` output, never commit a notebook with it.
+- **Secrets**: never log a Google token or a runtime proxy token, and never put one in `--json` output.
 - **No comments that restate code.** One line, why not how, only where the code cannot say it.
 - **No file names like `utils`, `helpers`, `common`.** Name files after the concept they hold
-  (`tailscale-peer-wait.mjs`, `ssh-keypair.mjs`, `session-store.mjs`).
+  (`jupyter-files.mjs`, `credential-envelope.mjs`, `session-store.mjs`).
 - **Tests**: add one only when it would fail if your change were reverted and it hardcodes its expected
   values. Use `node --test`. Never test timing, copy, or third-party behaviour.
-- **Notebook edits**: edit `notebooks/*.ipynb` as JSON by hand or with `jupyter nbconvert --clear-output`;
-  never commit cell outputs or execution counts.
 
 ## Commands
 
@@ -62,11 +62,10 @@ Run `node --test` (and, once the plugin exists, `orca plugin validate .`) before
 
 ## Testing against real Colab
 
-The human owner has Colab access, a signed-in Tailscale client and will press Run in Colab, create the
-Tailscale auth key and save the Drive notebook copy when asked. Agents cannot do those. When a task needs
-a live Colab run, finish everything verifiable locally (doctor, key generation, clipboard, JSON contract,
-timeout paths with a fake `tailscale status` fixture, a fake SSH banner server), then stop and write
-exactly what the human must do in the TODO item.
+The human owner has Colab access and signs in with `orca-colab auth login` when asked (agents cannot
+click through Google's consent page). Once signed in, an agent can run the whole flow itself: prefer
+`up --gpu CPU` for checks that do not need a GPU, and always `down` afterwards. Finish everything
+verifiable locally first (JSON contract, fake `execTty` / `fetchImpl` injections in tests).
 
 ## Git
 
@@ -80,7 +79,7 @@ exactly what the human must do in the TODO item.
   2. `release: pin vX.Y.Z to <short sha>` — run `node scripts/release-pin.mjs HEAD` (it refuses if `bin/`
      or `package.json` changed since that commit), run `node --test`, commit, and tag **this** commit
      `vX.Y.Z`. The tag's CLI files are identical to the pinned commit's.
-- Commit messages: `area: what changed` (`up: wait for tailscale peer before probing ssh`).
+- Commit messages: `area: what changed` (`pull: download the archive from Jupyter /files`).
 
 ## Releases: what needs the owner's approval
 

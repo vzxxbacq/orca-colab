@@ -13,7 +13,6 @@ import {
 import { execCommandOverTty } from "../lib/colab-api-client.mjs";
 import { withSessionActivity } from "../lib/session-activity.mjs";
 import { readSession, resolveSession } from "../lib/session-store.mjs";
-import { buildSshExecArgs, execSshCapture } from "../lib/ssh-exec.mjs";
 import {
   appendTaskLog,
   generateTaskId,
@@ -34,11 +33,11 @@ export async function executeTaskInline(
     homeDir = os.homedir(),
     cwd = process.cwd(),
     env = process.env,
-    spawnChild = spawn,
     streamToStdout = false,
     stdout = process.stdout,
     stderr = process.stderr,
     withActivity = withSessionActivity,
+    execTty = execCommandOverTty,
   } = {},
 ) {
   const task = readTask(taskId, homeDir, { reconcile: false });
@@ -129,7 +128,7 @@ export async function executeTaskInline(
     );
 
     let exitCode;
-    if (!session.ip && session.colabRuntime?.baseUrl && session.colabRuntime?.token) {
+    if (session.colabRuntime?.baseUrl && session.colabRuntime?.token) {
       writeTask(
         {
           ...task,
@@ -140,7 +139,7 @@ export async function executeTaskInline(
         homeDir,
       );
       try {
-        const ttyRes = await execCommandOverTty({
+        const ttyRes = await execTty({
           baseUrl: session.colabRuntime.baseUrl,
           proxyToken: session.colabRuntime.token,
           command: remoteScript,
@@ -162,64 +161,12 @@ export async function executeTaskInline(
         exitCode = 1;
       }
     } else {
-      const sshArgs = buildSshExecArgs({
-        ip: session.ip,
-        remoteCommand: [remoteScript],
+      appendTaskLog(
+        task.id,
+        `\n[task ${task.id}] session ${session.name} has no Colab runtime proxy; run 'orca-colab down' and 'orca-colab up' again\n`,
         homeDir,
-        tty: false,
-      });
-
-      exitCode = await new Promise((resolve) => {
-        const child = spawnChild("ssh", sshArgs, {
-          stdio: ["ignore", "pipe", "pipe"],
-          env,
-        });
-
-        writeTask(
-          {
-            ...task,
-            cwd: effectiveCwd,
-            localPid: child.pid || process.pid,
-            status: "running",
-          },
-          homeDir,
-        );
-
-        child.stdout?.on("data", (chunk) => {
-          const text = chunk.toString("utf8");
-          appendTaskLog(task.id, text, homeDir);
-          if (streamToStdout) {
-            stdout.write(text);
-          }
-        });
-
-        child.stderr?.on("data", (chunk) => {
-          const text = chunk.toString("utf8");
-          appendTaskLog(task.id, text, homeDir);
-          if (streamToStdout) {
-            stderr.write(text);
-          }
-        });
-
-        child.on("error", (err) => {
-          appendTaskLog(
-            task.id,
-            `\n[task ${task.id}] ssh error: ${err.message}\n`,
-            homeDir,
-          );
-          resolve(1);
-        });
-
-        child.on("close", (code, sig) => {
-          if (typeof code === "number") {
-            resolve(code);
-          } else if (sig) {
-            resolve(143);
-          } else {
-            resolve(1);
-          }
-        });
-      });
+      );
+      exitCode = 1;
     }
 
     const latest = readTask(task.id, homeDir, { reconcile: false }) || task;
@@ -268,6 +215,7 @@ export async function submitTask(
     localCwd = process.cwd(),
     env = process.env,
     spawnChild = spawn,
+    execTty = execCommandOverTty,
     stdout = process.stdout,
     stderr = process.stderr,
     streamToStdout = false,
@@ -320,10 +268,10 @@ export async function submitTask(
       homeDir,
       cwd: localCwd,
       env,
-      spawnChild,
       streamToStdout,
       stdout,
       stderr,
+      execTty,
     });
     const finalTask = readTask(initialTask.id, homeDir);
     return { task: finalTask, exitCode };
@@ -356,7 +304,6 @@ export function stopTaskById(
   taskId,
   {
     homeDir = os.homedir(),
-    runSsh = null,
     killProcess = (pid) => {
       try {
         process.kill(pid, "SIGTERM");
@@ -366,6 +313,7 @@ export function stopTaskById(
       }
     },
     nowIso = () => new Date().toISOString(),
+    execTty = execCommandOverTty,
   } = {},
 ) {
   const task = readTask(taskId, homeDir, { reconcile: false });
@@ -378,20 +326,8 @@ export function stopTaskById(
   }
 
   const session = readSession(task.sessionName, homeDir);
-  if (session?.ip) {
-    try {
-      execSshCapture({
-        ip: session.ip,
-        remoteCommand: `pkill -TERM -f "ORCA_TASK_ID=${task.id}" || true`,
-        homeDir,
-        timeoutMs: 6000,
-        runSsh,
-      });
-    } catch {
-      // Ignore remote pkill failure if session already closed.
-    }
-  } else if (session?.colabRuntime?.baseUrl && session?.colabRuntime?.token) {
-    execCommandOverTty({
+  if (session?.colabRuntime?.baseUrl && session?.colabRuntime?.token) {
+    execTty({
       baseUrl: session.colabRuntime.baseUrl,
       proxyToken: session.colabRuntime.token,
       command: `pkill -TERM -f "ORCA_TASK_ID=${task.id}" || true`,
@@ -426,7 +362,7 @@ export async function run(
     env = process.env,
     homeDir = os.homedir(),
     spawnChild = spawn,
-    runSsh = null,
+    execTty = execCommandOverTty,
   } = {},
 ) {
   const dashDash = argv.indexOf("--");
@@ -466,7 +402,6 @@ export async function run(
       homeDir: effectiveHomeDir,
       cwd,
       env,
-      spawnChild,
       streamToStdout: false,
     });
   }
@@ -506,6 +441,7 @@ export async function run(
         localCwd: cwd,
         env,
         spawnChild,
+        execTty,
         stdout,
         stderr,
         streamToStdout: Boolean(opts.wait && !json),
@@ -621,7 +557,7 @@ export async function run(
     }
     const stopped = stopTaskById(taskId, {
       homeDir: effectiveHomeDir,
-      runSsh,
+      execTty,
     });
     if (json) {
       writeJson({ ok: true, task: stopped }, stdout);

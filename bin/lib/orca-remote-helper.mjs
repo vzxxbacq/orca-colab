@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { locateOrcaBinary } from "./colab-browser-automation.mjs";
+import { locateOrcaBinary } from "./orca-binary.mjs";
 
 // The plugin host API on a desktop client cannot see workspaces that live on a remote Orca server, but
 // the local `orca` CLI can: it resolves the focused worktree and manages its terminals through the same

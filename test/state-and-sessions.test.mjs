@@ -16,7 +16,7 @@ import {
   writeSession,
 } from "../bin/lib/session-store.mjs";
 
-test("writeConfig writes 0600 config atomically inside 0700 home with default account shape", (t) => {
+test("writeConfig writes 0600 config atomically inside 0700 home and drops the old Tailscale auth key", (t) => {
   const tmpHome = mkdtempSync(path.join(os.tmpdir(), "orca-colab-home-"));
   t.after(() => rmSync(tmpHome, { recursive: true, force: true }));
 
@@ -31,9 +31,6 @@ test("writeConfig writes 0600 config atomically inside 0700 home with default ac
   );
 
   assert.deepEqual(written, {
-    authKey: "tskey-auth-k123456",
-    authKeyCreatedAt: "2026-11-09T00:00:00.000Z",
-    tags: ["tag:orca-colab"],
     remoteRootBase: "/content/orca",
     accounts: [{ label: "default" }],
     defaultAccount: "default",
@@ -53,7 +50,6 @@ test("session-store persists sessions atomically and selects the only or newest 
   const older = writeSession(
     {
       name: "orca-colab-aaa111",
-      ip: "100.64.0.10",
       gpu: { name: "Tesla T4", memoryMiB: 15360 },
       rateKey: "T4",
       cuPerHour: 1.96,
@@ -70,7 +66,6 @@ test("session-store persists sessions atomically and selects the only or newest 
   const newer = writeSession(
     {
       name: "orca-colab-bbb222",
-      ip: "100.64.0.11",
       gpu: { name: "NVIDIA A100-SXM4-40GB", memoryMiB: 40960 },
       rateKey: "A100",
       cuPerHour: 11.77,
@@ -82,7 +77,6 @@ test("session-store persists sessions atomically and selects the only or newest 
   writeSession(
     {
       name: "orca-colab-ccc333",
-      ip: "100.64.0.12",
       createdAt: "2026-11-09T13:00:00.000Z",
       state: "zombie",
     },

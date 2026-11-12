@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { FrameAssembler } from "../bin/lib/bridge-frames.mjs";
 import { sealForRecipient } from "../bin/lib/credential-envelope.mjs";
 import { getRuntime } from "../bin/lib/colab-api-client.mjs";
-import { locateOrcaBinary } from "../bin/lib/colab-browser-automation.mjs";
+import { locateOrcaBinary } from "../bin/lib/orca-binary.mjs";
 import { ensureColabHome } from "../bin/lib/colab-home.mjs";
 import { getValidAccessToken, readOAuthAccountStatus, runLoopbackOAuthFlow } from "../bin/lib/colab-oauth.mjs";
 import { recordSessionEndEvent, resolveDeadSessionEndIso } from "../bin/lib/credit-ledger.mjs";
@@ -405,7 +405,7 @@ class LocalBridge {
             );
           }
         } catch (err) {
-          if (err?.status === 404 && !s.ip) {
+          if (err?.status === 404) {
             deleteSession(s.name, homeDir);
             recordSessionEndEvent(s, {
               cause: "colab-died",
@@ -1649,11 +1649,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
     orca.panels.handle(`colab.${name}`, async (input = {}) => {
       const bridge = await resolveBridge();
       const result = await bridge.call(name, input);
-      const out = await finish(bridge, result);
-      if (name === "setupConfig") {
-        out.doctor = out.dashboard.doctor;
-      }
-      return out;
+      return finish(bridge, result);
     });
   }
 
@@ -1792,14 +1788,14 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
       return {
         ok: false,
         code: "NO_ACTIVE_SESSION",
-        message: "No active Colab GPU runtime. Launch a GPU session first to open an SSH shell.",
+        message: "No active Colab GPU runtime. Launch a GPU session first to open a shell.",
       };
     }
     const targetSession = input?.session || activeSessions[0]?.name;
     const cli = await resolveCliCommand(orca, { remote: bridge.kind === "remote" });
     const cmd = targetSession ? `${cli} run --session ${targetSession} -- bash -l` : input?.command || `${cli} status`;
     await openTerminalWithCommand({
-      title: input?.title || (targetSession ? `SSH: ${targetSession}` : "Colab Shell"),
+      title: input?.title || (targetSession ? `Colab: ${targetSession}` : "Colab Shell"),
       command: cmd,
     });
     return { ok: true };
