@@ -7,6 +7,8 @@
 Use Google Colab GPUs as an autonomous compute backend for local coding agents in [Orca](https://github.com/stablyai/orca).
 Your workspace, agent and credentials stay on your machine; Colab is a disposable GPU box the agent starts, uses and releases.
 
+> **Unofficial community project.** Listed in Orca as *Orca Colab Community*. Not affiliated with or endorsed by Google; "Google Colab" is a trademark of Google LLC.
+
 ## What you get
 
 - **Agents manage compute**: the agent checks your policy, provisions or scales parallel runtimes, syncs the
