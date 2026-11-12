@@ -101,6 +101,8 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
 - [ ] Headscale: `loginServer` end to end.
 - [ ] CI: `node --test`; manifest check against Orca's JSON schema (fetch the schema file in the workflow).
 - [ ] Add the `orca-plugin` GitHub topic once the plugin exists.
+- [ ] `pull` for Direct API sessions: it only knows rsync/ssh tar, so a `colab-tty` session (no tailnet IP)
+      fails with `root@: Permission denied`. Mirror `sync`'s `colab-tty-tar` path in reverse. Found 2026-11-12.
 
 ## M3 — Drive automation
 - [ ] OAuth PKCE loopback (`drive.file`), token at `~/.orca-colab/google-token.json` 0600.
