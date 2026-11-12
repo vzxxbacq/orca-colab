@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -53,6 +53,9 @@ test("worker/main.mjs activates and registers commands and panel handlers cleanl
     assert.equal(registeredPanels.has("colab.submitTask"), true);
     assert.equal(registeredPanels.has("colab.getTaskLogs"), true);
     assert.equal(statusBarState?.id, "colab-sessions");
+    for (const dir of [".agents", ".claude", ".gemini"]) {
+      assert.equal(existsSync(path.join(tmpHome, dir)), false, `activation wrote ~/${dir}`);
+    }
 
     const snap = await registeredPanels.get("colab.dashboard")({});
     assert.equal(typeof snap.doctor?.ok, "boolean");

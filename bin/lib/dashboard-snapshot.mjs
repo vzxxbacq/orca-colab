@@ -84,10 +84,9 @@ export function readProvisioningLock(homeDir = os.homedir()) {
 // Holds the per-session caches (GPU samples, last live metrics, doctor) that make a snapshot cheap to
 // rebuild every poll. One instance per ~/.orca-colab home.
 export class DashboardSnapshotBuilder {
-  constructor({ homeDir = os.homedir(), env = process.env, skillSync = null, origin = null } = {}) {
+  constructor({ homeDir = os.homedir(), env = process.env, origin = null } = {}) {
     this.homeDir = homeDir;
     this.env = env;
-    this.skillSync = skillSync;
     this.origin = origin;
     this.gpuUtilSamplesBySession = new Map();
     this.liveMetricsBySession = new Map();
@@ -221,7 +220,6 @@ export class DashboardSnapshotBuilder {
       oauthAccounts,
       doctor: this.doctor(),
       policy: resolveAgentPolicy(config),
-      skillSync: this.skillSync,
       provisioning: effectiveProvisioning,
       auth: authByAccount[defaultAccount] || { account: defaultAccount, authenticated: false },
       authByAccount,

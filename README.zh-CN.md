@@ -29,7 +29,7 @@
 orca plugin install github:vzxxbacq/orca-colab
 ```
 
-插件自带 `colab-gpu` Agent Skill。只装 Skill 或本地开发插件：
+插件自带 `colab-gpu` Agent Skill，但不会自动安装：在面板设置页展开 **Agent Skill**，勾选目录（`~/.agents/skills`、`~/.claude/skills`、`~/.gemini/config/skills`）后点 Install；Remove 可再移除。不装插件只装 Skill，或本地开发插件：
 
 ```sh
 npx skills add vzxxbacq/orca-colab

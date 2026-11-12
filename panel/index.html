@@ -1154,6 +1154,29 @@
             </button>
           </div>
         </details>
+
+        <details id="agentSkillDetails" class="helper-details" style="padding: 10px 12px">
+          <summary style="display: flex; align-items: center; justify-content: space-between">
+            <span class="row" style="gap: 5px">
+              <span class="fold-chevron"></span>
+              <span>Agent Skill (Optional) · Install colab-gpu for local agents</span>
+            </span>
+            <span id="agentSkillBadge" class="badge neutral">Not installed</span>
+          </summary>
+
+          <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 10px">
+            <div class="muted" style="font-size: 11px">
+              Copies <span class="mono">SKILL.md</span> and <span class="mono">references/cli.md</span> into the
+              folders you tick, on this machine, so coding agents there know how to use Colab. Nothing is
+              written until you press Install; Remove deletes only a <span class="mono">colab-gpu</span> skill.
+            </div>
+            <div id="agentSkillList" style="display: flex; flex-direction: column; gap: 6px"></div>
+            <div class="row" style="gap: 6px">
+              <button id="installAgentSkillBtn" class="primary" style="flex: 1">Install to selected</button>
+              <button id="removeAgentSkillBtn" class="ghost" style="flex: 1">Remove from selected</button>
+            </div>
+          </div>
+        </details>
       </div>
 
       <!-- ================================================================= -->
@@ -1774,6 +1797,77 @@
             "https://hs.feihao.xyz";
           input.value = detected;
         });
+
+      function renderAgentSkills(skills) {
+        const list = document.getElementById("agentSkillList");
+        const checked = new Set(
+          [...list.querySelectorAll("input[type=checkbox]:checked")].map((el) => el.value),
+        );
+        const fresh = list.children.length === 0;
+        list.innerHTML = skills
+          .map((s) => {
+            const state = s.foreign
+              ? "other skill here"
+              : s.installed
+                ? s.current
+                  ? "installed"
+                  : "installed, outdated"
+                : "not installed";
+            const on = fresh ? !s.foreign : checked.has(s.id);
+            return `<label class="row" style="gap: 6px; font-size: 11px; align-items: center">
+              <input type="checkbox" value="${esc(s.id)}" ${on ? "checked" : ""} ${s.foreign ? "disabled" : ""} />
+              <span class="mono" style="flex: 1; overflow: hidden; text-overflow: ellipsis">${esc(s.dir)}</span>
+              <span class="muted">${esc(state)}</span>
+            </label>`;
+          })
+          .join("");
+        const installed = skills.filter((s) => s.installed);
+        const badge = document.getElementById("agentSkillBadge");
+        badge.textContent = installed.length
+          ? `Installed (${installed.length}/${skills.length})`
+          : "Not installed";
+        badge.className = `badge ${installed.length ? "ok" : "neutral"}`;
+      }
+
+      async function refreshAgentSkills() {
+        try {
+          renderAgentSkills(await callWorker("colab.agentSkills", {}));
+        } catch (err) {
+          showNotice(err?.message || String(err), "error");
+        }
+      }
+
+      async function runAgentSkillAction(name, verb) {
+        const targets = [
+          ...document.querySelectorAll("#agentSkillList input[type=checkbox]:checked"),
+        ].map((el) => el.value);
+        if (targets.length === 0) {
+          showNotice("Tick at least one folder.", "warn");
+          return;
+        }
+        try {
+          const res = await callWorker(name, { targets });
+          renderAgentSkills(res.skills);
+          const failed = res.results.filter((r) => !r.ok);
+          if (failed.length) {
+            showNotice(failed.map((r) => `${r.dir}: ${r.error}`).join("; "), "error");
+          } else {
+            showNotice(`${verb} ${res.results.map((r) => r.dir).join(", ")}`, "info");
+          }
+        } catch (err) {
+          showNotice(err?.message || String(err), "error");
+        }
+      }
+
+      document
+        .getElementById("agentSkillDetails")
+        .addEventListener("toggle", (e) => e.target.open && refreshAgentSkills());
+      document
+        .getElementById("installAgentSkillBtn")
+        .addEventListener("click", () => runAgentSkillAction("colab.installAgentSkill", "Installed the skill in"));
+      document
+        .getElementById("removeAgentSkillBtn")
+        .addEventListener("click", () => runAgentSkillAction("colab.removeAgentSkill", "Removed the skill from"));
 
       function renderTaskOutputBox(payload) {
         const tag = document.getElementById("outputTaskTag");
@@ -3020,6 +3114,7 @@
       });
 
       refreshAll(true);
+      refreshAgentSkills();
       })();
     </script>
   </body>

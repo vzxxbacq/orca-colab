@@ -32,7 +32,7 @@ From the Orca Community Plugins marketplace (Settings → Plugins → `vzxxbacq.
 orca plugin install github:vzxxbacq/orca-colab
 ```
 
-The plugin bundles the `colab-gpu` agent skill. To install only the skill, or to develop the plugin locally:
+The plugin bundles the `colab-gpu` agent skill but never installs it on its own: open **Agent Skill** in the panel's setup view, tick the folders (`~/.agents/skills`, `~/.claude/skills`, `~/.gemini/config/skills`) and press Install; Remove takes it out again. To install only the skill without the plugin, or to develop the plugin locally:
 
 ```sh
 npx skills add vzxxbacq/orca-colab
