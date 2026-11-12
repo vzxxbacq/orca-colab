@@ -42,7 +42,7 @@ CLI 无需单独安装，Agent 通过 `npx -y https://codeload.github.com/vzxxba
 
 ### 2. 配置
 
-1. 在 Orca 右侧打开 **Colab GPU** 面板，点击 **Sign in with Google**。
+1. 在 Orca 右侧打开 **Colab GPU** 面板，点击 **Sign in with Google**。在 Google 授权页上勾选 **Read, write and delete your Colab resources**（或"全选"），Google 默认不勾选这一项。
 2. 在 **Guardrails & CU** 中设置允许的 GPU 级别与并发上限。
 3. 直接让 Agent 执行 GPU 任务即可。
 

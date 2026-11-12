@@ -45,7 +45,7 @@ The CLI needs no install step; agents call it as `npx -y https://codeload.github
 
 ### 2. Configure
 
-1. Open the **Colab GPU** panel in Orca and click **Sign in with Google**.
+1. Open the **Colab GPU** panel in Orca and click **Sign in with Google**. On Google's consent page, tick **Read, write and delete your Colab resources** (or **Select all**); Google leaves it unticked by default.
 2. Set allowed GPU tiers and concurrency limits under **Guardrails & CU**.
 3. Ask your agent to run any GPU task.
 

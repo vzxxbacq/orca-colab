@@ -330,7 +330,9 @@ export async function run(
         writeJson(payload, stdout);
       } else {
         log(
-          `Account '${account}': not signed in with Google OAuth (run 'orca-colab auth login').`,
+          base.reauthRequired
+            ? `Account '${base.account}': signed in before orca-colab switched to its own Google OAuth client; run 'orca-colab auth login' once more.`
+            : `Account '${account}': not signed in with Google OAuth (run 'orca-colab auth login').`,
           stderr,
         );
       }

@@ -9,15 +9,22 @@ on OpenVSX.
 - **`ColabGapiDomain`**: `https://colab.pa.googleapis.com`
 - **`ColabPublicApiDomain`**: `https://colaboratory.googleapis.com`
 
-Required headers on API requests:
+Headers orca-colab sends on API requests (it identifies as itself, never as the VS Code extension):
 
 ```http
 Authorization: Bearer <access_token>
 Accept: application/json
-X-Colab-Client-Agent: vscode
-X-Colab-VS-Code-App-Name: Orca
-X-Colab-VS-Code-Extension-Version: 0.9.7
+User-Agent: orca-colab/<version>
 ```
+
+OAuth uses Orca Colab Community's own Desktop client (GCP project `orca-colab-community`); all three
+scopes are non-sensitive there. `ORCA_COLAB_CLIENT_ID` / `ORCA_COLAB_CLIENT_SECRET` override it.
+
+`colab.pa.googleapis.com/v1/user-info` rejects third-party clients (`ACCESS_TOKEN_SCOPE_INSUFFICIENT`), so
+the compute-unit balance comes from `GET https://colab.research.google.com/tun/m/ccu-info?authuser=0`
+(verified 2026-11-12 with the project's client): `)]}'`-prefixed JSON with `currentBalance`,
+`consumptionRateHourly`, `assignmentsCount`, `eligibleGpus`, `eligibleTpus`; no subscription tier.
+Runtimes still go through the public `colaboratory.googleapis.com/v1beta` API.
 
 ## 2. OAuth 2.0 PKCE Loopback (`src/auth/flows/loopback.ts`, `src/auth/scopes.ts`)
 
@@ -106,7 +113,6 @@ X-Colab-VS-Code-Extension-Version: 0.9.7
 - **Headers**:
   ```http
   X-Colab-Runtime-Proxy-Token: <connectionInfo.token>
-  X-Colab-Client-Agent: vscode
   ```
 - **Protocol**:
   - Client sends JSON frames: `{"data": "<shell input>\n"}` or `{"cols": 120, "rows": 40}`.

@@ -175,7 +175,7 @@ export async function syncCreditsFromColabApi({
   return {
     event,
     balanceCu,
-    subscriptionTier: ccu.subscriptionTier || "free",
+    subscriptionTier: ccu.subscriptionTier || null,
     consumptionRateHourly: ccu.consumptionRateHourly,
     assignmentsCount: ccu.assignmentsCount,
   };
@@ -246,7 +246,7 @@ export async function run(
         if (synced) {
           liveEvent = synced.event;
           log(
-            `Calibrated account '${account}' via Colab API: ${synced.balanceCu} CU (${synced.subscriptionTier}).`,
+            `Calibrated account '${account}' via Colab API: ${synced.balanceCu} CU${synced.subscriptionTier ? ` (${synced.subscriptionTier})` : ""}.`,
             stderr,
           );
           calibrated = true;
@@ -269,7 +269,7 @@ export async function run(
         log(`Calibrated account '${account}' via Orca browser: ${balanceCu} CU.`, stderr);
       } catch (err) {
         throw new CliError(
-          `Automatic calibration unavailable (${err instanceof Error ? err.message : String(err)}). Run 'orca-colab auth login' for direct API calibration, or enter balance manually with 'orca-colab credits set <cu>'.`,
+          `Automatic calibration unavailable (${err instanceof Error ? err.message : String(err)}). Sign in with 'orca-colab auth login' (tick the Colab permission), or enter the balance with 'orca-colab credits set <cu>'.`,
         );
       }
     }
