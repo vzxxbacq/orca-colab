@@ -3,13 +3,14 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { PIN_FILES, readPins } from "../scripts/release-pin.mjs";
 
 const REPO_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
 );
 
-test("skills/colab-gpu/SKILL.md and references/cli.md follow agentskills layout and pin v0.2.5", () => {
+test("skills/colab-gpu/SKILL.md and references/cli.md follow agentskills layout", () => {
   const skillPath = path.join(REPO_ROOT, "skills", "colab-gpu", "SKILL.md");
   const refPath = path.join(
     REPO_ROOT,
@@ -24,10 +25,6 @@ test("skills/colab-gpu/SKILL.md and references/cli.md follow agentskills layout 
 
   const skillText = readFileSync(skillPath, "utf8");
   assert.match(skillText, /^---\nname: colab-gpu\ndescription: .+\n---/s);
-  assert.equal(
-    skillText.includes("npx -y github:vzxxbacq/orca-colab#v0.2.5"),
-    true,
-  );
   assert.equal(skillText.includes("references/cli.md"), true);
 
   const refText = readFileSync(refPath, "utf8");
@@ -47,4 +44,11 @@ test("skills/colab-gpu/SKILL.md and references/cli.md follow agentskills layout 
   ]) {
     assert.equal(refText.includes(`\`${cmd}`), true);
   }
+});
+
+test("every npx pin names the same full commit SHA, never a tag", () => {
+  const pins = readPins();
+  assert.deepEqual([...new Set(pins.map((p) => p.file))], PIN_FILES);
+  assert.equal(new Set(pins.map((p) => p.ref)).size, 1);
+  assert.match(pins[0].ref, /^[0-9a-f]{40}$/);
 });

@@ -27,7 +27,7 @@ docs/                       design, verified Orca facts, TODO
 ## Hard rules
 
 - **Zero runtime dependencies** in `bin/` and `worker/`. Node builtins only. The CLI runs on the user's
-  machine through `npx -y github:vzxxbacq/orca-colab#<tag>`, so install time must stay near zero.
+  machine through `npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/<release sha>`, so install time must stay near zero.
 - **Credentials never leave the user's machine** except the SSH public key pasted into Colab. No Google
   OAuth in milestone 1. No tokens embedded in the notebook or the repo.
 - **Cross-platform CLI**: macOS, Linux, Windows. Use `os.homedir()`, never `$HOME`; spawn with argv
@@ -70,9 +70,16 @@ exactly what the human must do in the TODO item.
 
 ## Git
 
-- Work on a branch per TODO item, open a PR to `main`, squash-merge. Tag releases `vX.Y.Z` and bump
-  `version` in `package.json` (and `orca-plugin.json` once it exists) in the same commit; the skill and
-  the plugin pin that tag in their `npx` commands.
+- Work on a branch per TODO item, open a PR to `main`, squash-merge.
+- Releases pin a **full commit SHA, never a tag**, in every `npx` command (plugin default, worker, skill,
+  READMEs, DESIGN), because tags can move after the Orca review. The pin is the codeload tarball URL,
+  because npm 10 cannot fetch `github:vzxxbacq/orca-colab#<40-hex sha>`. A commit
+  cannot contain its own SHA, so a release is two commits made directly on `main` (never squashed, so the
+  pinned SHA stays reachable):
+  1. `release: vX.Y.Z; ...` — bump `version` in `package.json` and `orca-plugin.json`; pins unchanged.
+  2. `release: pin vX.Y.Z to <short sha>` — run `node scripts/release-pin.mjs HEAD` (it refuses if `bin/`
+     or `package.json` changed since that commit), run `node --test`, commit, and tag **this** commit
+     `vX.Y.Z`. The tag's CLI files are identical to the pinned commit's.
 - Commit messages: `area: what changed` (`up: wait for tailscale peer before probing ssh`).
 
 ## Releases: what needs the owner's approval
