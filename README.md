@@ -19,8 +19,8 @@ Your workspace, agent and credentials stay on your machine; Colab is a disposabl
   concurrent runtimes and the monthly Compute Unit budget. The agent cannot step outside them.
 - **Multiple runtimes and sessions**: run several GPUs side by side, name them, address them per command
   with `--session`, and switch between Google accounts.
-- **Direct API connection**: connects to Colab's runtime API without Tailscale or manual browser steps
-  (an optional Tailscale SSH mode is kept for custom images).
+- **Public endpoints only**: everything goes over HTTPS to Google's Colab API and the runtime's own
+  proxy; no VPN, tailnet, SSH or open ports. `pull` downloads results (binary-safe) from the runtime.
 - **Remote Orca servers (beta)**: the panel follows a project that lives on an Orca server and shows that
   server's runtimes, runs and credits through a Bridge Terminal. See [below](#remote-orca-servers-beta).
 
@@ -76,9 +76,16 @@ orca-colab up --gpu T4 [--new] [--name <name>] [--account <account>] --json
 orca-colab job submit --name "Train" --wait --json -- <cmd>
 orca-colab run --json -- <cmd>
 orca-colab sync [path] --json
-orca-colab pull <remote> <local> --json
+orca-colab pull <remote> <localDir> --json
 orca-colab down [--all] --json
 ```
+
+**Downloading results.** `orca-colab pull outputs ./results --json` packs `outputs` (relative to the synced
+folder, or an absolute path such as `/content/model.pt`) into a tar.gz on the runtime, downloads it over
+HTTPS from the runtime's own Jupyter server with the runtime's proxy token, and unpacks it into
+`./results/outputs`. Files of any size and type arrive byte for byte; nothing needs to be reachable on
+your network. There is no port forwarding: to query a service running on the runtime, use
+`orca-colab run -- curl -s localhost:<port>/...`.
 
 ## Remote Orca servers (Beta)
 

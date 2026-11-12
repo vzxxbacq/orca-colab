@@ -11,12 +11,9 @@ import {
 } from "../lib/cli-output.mjs";
 import { execCommandOverTty } from "../lib/colab-api-client.mjs";
 import { readConfig } from "../lib/colab-home.mjs";
-import {
-  resolveRemoteRoot,
-  runSyncTransfer,
-} from "../lib/file-transfer.mjs";
+import { resolveRemoteRoot } from "../lib/file-transfer.mjs";
 import { withSessionActivity } from "../lib/session-activity.mjs";
-import { resolveSession, writeSession } from "../lib/session-store.mjs";
+import { requireColabRuntime, resolveSession, writeSession } from "../lib/session-store.mjs";
 import { shellQuote } from "./run.mjs";
 
 export async function run(
@@ -28,8 +25,8 @@ export async function run(
     env,
     cwd,
     homeDir,
-    findBinary = undefined,
-    spawnProcess = undefined,
+    spawnProcess = spawnSync,
+    execTty = execCommandOverTty,
     withActivity = withSessionActivity,
   },
 ) {
@@ -63,62 +60,50 @@ export async function run(
     remoteRootBase: config?.remoteRootBase ?? "/content/orca",
   });
 
+  const { baseUrl, proxyToken } = requireColabRuntime(session);
   const execute = async () => {
     log(
       `Syncing ${localDir} -> ${session.name}:${remoteRoot}...`,
       stderr,
     );
 
+    const resolvedLocal = path.resolve(localDir);
+    const tarArgs = ["-czf", "-", "--exclude=.git"];
+    if (existsSync(path.join(resolvedLocal, ".gitignore"))) {
+      tarArgs.push(`--exclude-from=${path.join(resolvedLocal, ".gitignore")}`);
+    }
+    if (existsSync(path.join(resolvedLocal, ".colabignore"))) {
+      tarArgs.push(`--exclude-from=${path.join(resolvedLocal, ".colabignore")}`);
+    }
+    tarArgs.push("-C", resolvedLocal, ".");
+
+    const tarRes = spawnProcess("tar", tarArgs, {
+      stdio: ["ignore", "pipe", "pipe"],
+      maxBuffer: 256 * 1024 * 1024,
+    });
+
     let res;
-    if (!session.ip && session.colabRuntime?.baseUrl && session.colabRuntime?.token) {
-      const resolvedLocal = path.resolve(localDir);
-      const tarArgs = ["-czf", "-", "--exclude=.git"];
-      if (existsSync(path.join(resolvedLocal, ".gitignore"))) {
-        tarArgs.push(`--exclude-from=${path.join(resolvedLocal, ".gitignore")}`);
-      }
-      if (existsSync(path.join(resolvedLocal, ".colabignore"))) {
-        tarArgs.push(`--exclude-from=${path.join(resolvedLocal, ".colabignore")}`);
-      }
-      tarArgs.push("-C", resolvedLocal, ".");
-
-      const spawnFn = spawnProcess ?? spawnSync;
-      const tarRes = spawnFn("tar", tarArgs, {
-        stdio: ["ignore", "pipe", "pipe"],
-        maxBuffer: 256 * 1024 * 1024,
-      });
-
-      if (tarRes?.status !== 0) {
-        res = {
-          ok: false,
-          method: "colab-tty-tar",
-          exitCode: tarRes?.status ?? 1,
-          stderr: tarRes?.stderr ? tarRes.stderr.toString("utf8") : "tar failed",
-        };
-      } else {
-        const cleanRemote = remoteRoot.replace(/\/+$/, "");
-        const ttyRes = await execCommandOverTty({
-          baseUrl: session.colabRuntime.baseUrl,
-          proxyToken: session.colabRuntime.token,
-          command: `mkdir -p ${shellQuote(cleanRemote)} && tar -xzf - -C ${shellQuote(cleanRemote)}`,
-          stdinBase64: Buffer.from(tarRes.stdout).toString("base64"),
-        });
-        res = {
-          ok: ttyRes.ok,
-          method: "colab-tty-tar",
-          exitCode: ttyRes.exitCode,
-          stderr: ttyRes.stdout || "",
-        };
-      }
+    if (tarRes?.status !== 0) {
+      res = {
+        ok: false,
+        method: "colab-tty-tar",
+        exitCode: tarRes?.status ?? 1,
+        stderr: tarRes?.stderr ? tarRes.stderr.toString("utf8") : "tar failed",
+      };
     } else {
-      res = runSyncTransfer({
-        localDir,
-        ip: session.ip,
-        remoteRoot,
-        homeDir,
-        env,
-        ...(findBinary ? { findBinary } : {}),
-        ...(spawnProcess ? { spawnProcess } : {}),
+      const cleanRemote = remoteRoot.replace(/\/+$/, "");
+      const ttyRes = await execTty({
+        baseUrl,
+        proxyToken,
+        command: `mkdir -p ${shellQuote(cleanRemote)} && tar -xzf - -C ${shellQuote(cleanRemote)}`,
+        stdinBase64: Buffer.from(tarRes.stdout).toString("base64"),
       });
+      res = {
+        ok: ttyRes.ok,
+        method: "colab-tty-tar",
+        exitCode: ttyRes.exitCode,
+        stderr: ttyRes.stdout || "",
+      };
     }
 
     if (!res.ok) {

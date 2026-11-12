@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { parseArgs } from "node:util";
 import { CliError, writeJson } from "../lib/cli-output.mjs";
 import {
@@ -6,8 +5,7 @@ import {
   runInteractiveTtySession,
 } from "../lib/colab-api-client.mjs";
 import { withSessionActivity } from "../lib/session-activity.mjs";
-import { resolveSession } from "../lib/session-store.mjs";
-import { buildSshExecArgs } from "../lib/ssh-exec.mjs";
+import { requireColabRuntime, resolveSession } from "../lib/session-store.mjs";
 import {
   appendTaskLog,
   generateTaskId,
@@ -74,7 +72,7 @@ export async function run(
     stderr,
     homeDir,
     stdinIsTTY = Boolean(process.stdin.isTTY),
-    spawnSsh = spawnSync,
+    execTty = execCommandOverTty,
     withActivity = withSessionActivity,
   },
 ) {
@@ -118,137 +116,108 @@ export async function run(
     attach: opts.attach ?? null,
   });
 
+  requireColabRuntime(session);
   const execute = async () => {
-    if (!session.ip && session.colabRuntime?.baseUrl && session.colabRuntime?.token) {
-      const joinedCmd = cmdArgs.join(" ").trim();
-      const isInteractiveShell =
-        stdinIsTTY &&
-        !json &&
-        !opts.detach &&
-        (joinedCmd === "bash" || joinedCmd === "bash -l" || joinedCmd === "sh");
+    const joinedCmd = cmdArgs.join(" ").trim();
+    const isInteractiveShell =
+      stdinIsTTY &&
+      !json &&
+      !opts.detach &&
+      (joinedCmd === "bash" || joinedCmd === "bash -l" || joinedCmd === "sh");
 
-      if (isInteractiveShell) {
-        return await runInteractiveTtySession({
-          baseUrl: session.colabRuntime.baseUrl,
-          proxyToken: session.colabRuntime.token,
-          cwd: effectiveCwd,
-        });
-      }
+    if (isInteractiveShell) {
+      return await runInteractiveTtySession({
+        baseUrl: session.colabRuntime.baseUrl,
+        proxyToken: session.colabRuntime.token,
+        cwd: effectiveCwd,
+      });
+    }
 
-      const taskId = generateTaskId();
-      const startedAt = new Date().toISOString();
-      const taskRecord = writeTask(
-        {
-          id: taskId,
-          name: joinedCmd.slice(0, 64) || "orca-colab run",
-          command: cmdArgs,
-          sessionName: session.name,
-          account: session.account || "default",
-          cwd: effectiveCwd,
-          status: "running",
-          createdAt: startedAt,
-          startedAt,
-          localPid: process.pid,
+    const taskId = generateTaskId();
+    const startedAt = new Date().toISOString();
+    const taskRecord = writeTask(
+      {
+        id: taskId,
+        name: joinedCmd.slice(0, 64) || "orca-colab run",
+        command: cmdArgs,
+        sessionName: session.name,
+        account: session.account || "default",
+        cwd: effectiveCwd,
+        status: "running",
+        createdAt: startedAt,
+        startedAt,
+        localPid: process.pid,
+      },
+      homeDir,
+    );
+    appendTaskLog(
+      taskId,
+      `[task ${taskId}] started at ${startedAt} on ${session.name} (${session.gpu?.name || "GPU"})\n$ ${joinedCmd}\n`,
+      homeDir,
+    );
+
+    let res;
+    try {
+      res = await execTty({
+        baseUrl: session.colabRuntime.baseUrl,
+        proxyToken: session.colabRuntime.token,
+        command: remoteScript,
+        cwd: effectiveCwd,
+        onOutput: (chunk) => {
+          appendTaskLog(taskId, chunk, homeDir);
+          if (!json) {
+            stdout.write(chunk);
+          }
         },
-        homeDir,
-      );
-      appendTaskLog(
-        taskId,
-        `[task ${taskId}] started at ${startedAt} on ${session.name} (${session.gpu?.name || "GPU"})\n$ ${joinedCmd}\n`,
-        homeDir,
-      );
-
-      let res;
-      try {
-        res = await execCommandOverTty({
-          baseUrl: session.colabRuntime.baseUrl,
-          proxyToken: session.colabRuntime.token,
-          command: remoteScript,
-          cwd: effectiveCwd,
-          onOutput: (chunk) => {
-            appendTaskLog(taskId, chunk, homeDir);
-            if (!json) {
-              stdout.write(chunk);
-            }
-          },
-        });
-      } catch (err) {
-        const finishedAt = new Date().toISOString();
-        appendTaskLog(
-          taskId,
-          `\n[task ${taskId}] failed at ${finishedAt}: ${err?.message || err}\n`,
-          homeDir,
-        );
-        writeTask(
-          {
-            ...taskRecord,
-            status: "failed",
-            exitCode: 1,
-            finishedAt,
-          },
-          homeDir,
-        );
-        throw err;
-      }
-
+      });
+    } catch (err) {
       const finishedAt = new Date().toISOString();
       appendTaskLog(
         taskId,
-        `\n[task ${taskId}] ${res.exitCode === 0 ? "succeeded" : "failed"} at ${finishedAt} (exit code ${res.exitCode})\n`,
+        `\n[task ${taskId}] failed at ${finishedAt}: ${err?.message || err}\n`,
         homeDir,
       );
       writeTask(
         {
           ...taskRecord,
-          status: res.exitCode === 0 ? "succeeded" : "failed",
-          exitCode: res.exitCode,
+          status: "failed",
+          exitCode: 1,
           finishedAt,
         },
         homeDir,
       );
-
-      if (json) {
-        writeJson(
-          {
-            ok: res.ok,
-            session: session.name,
-            exitCode: res.exitCode,
-            stdout: res.stdout,
-            stderr: res.stderr,
-          },
-          stdout,
-        );
-      }
-      return res.exitCode;
+      throw err;
     }
 
-    const sshArgs = buildSshExecArgs({
-      ip: session.ip,
-      remoteCommand: [remoteScript],
+    const finishedAt = new Date().toISOString();
+    appendTaskLog(
+      taskId,
+      `\n[task ${taskId}] ${res.exitCode === 0 ? "succeeded" : "failed"} at ${finishedAt} (exit code ${res.exitCode})\n`,
       homeDir,
-      tty: Boolean(stdinIsTTY && !json && !opts.detach),
-    });
+    );
+    writeTask(
+      {
+        ...taskRecord,
+        status: res.exitCode === 0 ? "succeeded" : "failed",
+        exitCode: res.exitCode,
+        finishedAt,
+      },
+      homeDir,
+    );
 
-    const res = spawnSsh("ssh", sshArgs, {
-      encoding: "utf8",
-      stdio: json ? ["ignore", "pipe", "pipe"] : "inherit",
-    });
-    const exitCode = typeof res?.status === "number" ? res.status : 1;
     if (json) {
       writeJson(
         {
-          ok: exitCode === 0,
+          ok: res.ok,
           session: session.name,
-          exitCode,
-          stdout: res?.stdout ?? "",
-          stderr: res?.stderr ?? "",
+          exitCode: res.exitCode,
+          stdout: res.stdout,
+          stderr: res.stderr,
         },
         stdout,
       );
-    } else if (res?.stderr && typeof res.stderr === "string") {
-      stderr.write(res.stderr);
     }
-    return exitCode;
+    return res.exitCode;
   };
 
   if (withActivity) {

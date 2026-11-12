@@ -20,7 +20,6 @@ test("cli help --json lists all dispatched commands", async () => {
   assert.deepEqual(JSON.parse(io.stdoutText), {
     commands: [
       "doctor",
-      "setup",
       "auth",
       "up",
       "status",
@@ -29,7 +28,6 @@ test("cli help --json lists all dispatched commands", async () => {
       "job",
       "sync",
       "pull",
-      "forward",
       "down",
       "credits",
       "ledger",

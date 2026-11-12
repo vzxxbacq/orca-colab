@@ -30,13 +30,11 @@ test("skills/colab-gpu/SKILL.md and references/cli.md follow agentskills layout"
   const refText = readFileSync(refPath, "utf8");
   for (const cmd of [
     "doctor",
-    "setup",
     "up",
     "status",
     "run",
     "sync",
     "pull",
-    "forward",
     "down",
     "credits",
     "ledger",

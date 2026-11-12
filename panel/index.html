@@ -1000,26 +1000,22 @@
 
       <!-- ================================================================= -->
       <!-- VIEW 1: STEP-BY-STEP SETUP HELPER WIZARD                          -->
-      <!-- Shown automatically on first run (!oauthOk && !config.ok)         -->
+      <!-- Shown automatically on first run (not signed in to Google)       -->
       <!-- ================================================================= -->
       <div id="viewWizard" style="display: flex; flex-direction: column; gap: 10px">
         <div class="wizard-hero">
           <h2>Welcome to Colab GPU Helper</h2>
           <p>
             Sign in with your Google account to provision Colab GPUs and run
-            algorithm tasks directly—no Tailscale required.
+            tasks through the Colab API.
           </p>
         </div>
 
         <!-- 2-Mode Progress Strip -->
-        <div class="stepper" style="grid-template-columns: repeat(2, 1fr)">
+        <div class="stepper" style="grid-template-columns: 1fr">
           <div id="stepPill3" class="step-pill current">
             <span class="step-num" id="stepNum3">1</span>
             <span>Google Colab Sign-In (Required)</span>
-          </div>
-          <div id="stepPill2" class="step-pill">
-            <span class="step-num" id="stepNum2">2</span>
-            <span>Tailscale P2P SSH (Optional)</span>
           </div>
         </div>
 
@@ -1065,89 +1061,6 @@
           Continue to GPU Launch Helper →
         </button>
 
-        <!-- Optional Advanced Section: Tailscale / Headscale P2P SSH -->
-        <details class="helper-details" style="padding: 10px 12px">
-          <summary style="display: flex; align-items: center; justify-content: space-between">
-            <span class="row" style="gap: 5px">
-              <span class="fold-chevron"></span>
-              <span>Advanced (Optional) · Configure Tailscale P2P SSH</span>
-            </span>
-            <span id="step2Badge" class="badge neutral">Optional</span>
-          </summary>
-
-          <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 10px">
-            <div class="muted" style="font-size: 11px">
-              Only needed if you also want the Colab container to join your
-              Tailscale / Headscale tailnet with a dedicated <span class="mono">100.x.y.z</span> IP.
-            </div>
-
-            <div class="row-between">
-              <span style="font-weight: 600; font-size: 11px">Local Prerequisites</span>
-              <span id="step1Badge" class="badge neutral">Checking</span>
-            </div>
-            <div id="stepPill1" class="hidden"><span id="stepNum1"></span></div>
-            <div class="env-grid">
-              <div class="env-item">
-                <div class="env-item-label">
-                  <span>Tailscale</span>
-                  <span id="envTsIcon">•</span>
-                </div>
-                <div class="env-item-val" id="envTsVal">--</div>
-              </div>
-              <div class="env-item">
-                <div class="env-item-label">
-                  <span>OpenSSH</span>
-                  <span id="envSshIcon">•</span>
-                </div>
-                <div class="env-item-val" id="envSshVal">--</div>
-              </div>
-              <div class="env-item">
-                <div class="env-item-label">
-                  <span>Workspace Sync</span>
-                  <span id="envRsyncIcon">•</span>
-                </div>
-                <div class="env-item-val" id="envRsyncVal">--</div>
-              </div>
-            </div>
-
-            <div class="form-group" style="margin-bottom: 4px">
-              <label class="form-label">
-                <span>Tailscale / Headscale Pre-Auth Key</span>
-                <span id="sshKeyStatusText" class="muted" style="font-weight: 400"></span>
-              </label>
-              <input
-                id="setupAuthKeyInput"
-                type="password"
-                placeholder="Optional: tskey-auth-... or Headscale pre-auth key"
-              />
-            </div>
-
-            <div class="form-group">
-              <label class="form-label">
-                <span>Login Server (Headscale)</span>
-                <span class="row" style="gap: 4px">
-                  <span
-                    id="useDetectedServerChip"
-                    class="chip hidden"
-                    style="padding: 1px 6px; font-size: 10px"
-                  >
-                    Detected
-                  </span>
-                </span>
-              </label>
-              <input
-                id="setupLoginServerInput"
-                type="text"
-                placeholder="Optional: https://headscale.example.com"
-              />
-            </div>
-
-            <button id="saveSetupBtn" style="width: 100%">
-              Save Optional Tailscale Key &amp; SSH Keypair
-            </button>
-          </div>
-        </details>
-
         <details id="agentSkillDetails" class="helper-details" style="padding: 10px 12px">
           <summary style="display: flex; align-items: center; justify-content: space-between">
             <span class="row" style="gap: 5px">
@@ -1180,7 +1093,7 @@
         <div id="launcherContextBanner" class="banner warn hidden">
           <span id="launcherContextText">
             No active GPU session. Launch a Colab GPU runtime below to run tasks
-            or open SSH.
+            or open a shell.
           </span>
         </div>
 
@@ -1191,8 +1104,7 @@
                 Launch a Colab GPU Runtime
               </div>
               <div class="muted" style="font-size: 11px; margin-top: 2px">
-                Select an accelerator to allocate a Google Colab VM over your
-                tailnet.
+                Select an accelerator to allocate a Google Colab runtime.
               </div>
             </div>
             <span class="badge info">No Active Session</span>
@@ -1559,7 +1471,7 @@
           </div>
 
           <button id="openWizardFromSettingsBtn" class="ghost" style="width: 100%">
-            ⚙ Open Setup &amp; Tailscale Helper
+            ⚙ Open Setup &amp; Agent Skill
           </button>
         </div>
       </div>
@@ -1773,14 +1685,6 @@
         });
       });
 
-      document
-        .getElementById("useDetectedServerChip")
-        .addEventListener("click", () => {
-          const input = document.getElementById("setupLoginServerInput");
-          const detected = dashboardState?.doctor?.checks?.tailscale?.detectedLoginServer;
-          if (detected) input.value = detected;
-        });
-
       function renderAgentSkills(skills) {
         const list = document.getElementById("agentSkillList");
         const checked = new Set(
@@ -1884,9 +1788,8 @@
 
         const doc = snap.doctor;
         const checks = doc?.checks || {};
-        const configOk = Boolean(checks.config?.ok);
         const oauthOk = Boolean(snap.auth?.authenticated);
-        const readyToLaunch = oauthOk || configOk;
+        const readyToLaunch = oauthOk;
         const activeSessions = (snap.sessions || []).filter(
           (s) => s.state !== "zombie",
         );
@@ -1928,16 +1831,14 @@
         } else if (activeSessions.length === 0) {
           hintBox.classList.add("hidden");
           dot.className = "status-dot";
-          statusTxt.textContent = oauthOk
-            ? "Google Connected · No Active GPU"
-            : "Tailscale Ready · No Active GPU";
+          statusTxt.textContent = "Google Connected · No Active GPU";
         } else {
           hintBox.classList.add("hidden");
           const s0 = activeSessions[0];
           const gpuName =
             s0.rateKey && s0.rateKey !== "unknown" ? s0.rateKey : "GPU";
           dot.className = "status-dot ok";
-          statusTxt.textContent = `${gpuName} Active · ${s0.ip || "Direct API"}`;
+          statusTxt.textContent = `${gpuName} Active · Direct API`;
         }
         if (snap.bridge?.pendingOps > 0) {
           statusTxt.textContent += " · syncing…";
@@ -1972,64 +1873,6 @@
         // -------------------------------------------------------------------
         // Populate View 1: Setup Helper Wizard
         // -------------------------------------------------------------------
-        const tsOk = Boolean(checks.tailscale?.ok);
-        const sshOk = Boolean(checks.ssh?.ok && checks.sshKeygen?.ok);
-        const rsyncOk = Boolean(checks.rsync?.ok);
-        const step1Ok = tsOk && sshOk;
-
-        document.getElementById("envTsIcon").textContent = tsOk ? "✓" : "•";
-        document.getElementById("envTsIcon").style.color = tsOk
-          ? "var(--ok)"
-          : "var(--muted)";
-        document.getElementById("envTsVal").textContent = tsOk
-          ? checks.tailscale.selfHostName || "Connected"
-          : checks.tailscale?.backendState || "Optional";
-
-        document.getElementById("envSshIcon").textContent = sshOk ? "✓" : "•";
-        document.getElementById("envSshIcon").style.color = sshOk
-          ? "var(--ok)"
-          : "var(--muted)";
-        document.getElementById("envSshVal").textContent = sshOk
-          ? "Ready"
-          : "Missing";
-
-        document.getElementById("envRsyncIcon").textContent = rsyncOk
-          ? "✓"
-          : "•";
-        document.getElementById("envRsyncIcon").style.color = rsyncOk
-          ? "var(--ok)"
-          : "var(--warn)";
-        document.getElementById("envRsyncVal").textContent = rsyncOk
-          ? "rsync ready"
-          : "tar stream";
-
-        const step1Badge = document.getElementById("step1Badge");
-        step1Badge.className = `badge ${step1Ok ? "ok" : "neutral"}`;
-        step1Badge.textContent = step1Ok ? "Ready" : "Optional";
-
-        const step2Badge = document.getElementById("step2Badge");
-        step2Badge.className = `badge ${configOk ? "ok" : "neutral"}`;
-        step2Badge.textContent = configOk ? "Configured" : "Optional";
-
-        document.getElementById("sshKeyStatusText").textContent = checks.config
-          ?.sshKeyPresent
-          ? "SSH key: ~/.orca-colab/id_ed25519 ✓"
-          : "SSH key generated on save";
-
-        const loginSrvInput = document.getElementById("setupLoginServerInput");
-        const detectedServer =
-          checks.tailscale?.detectedLoginServer || "";
-        const chipEl = document.getElementById("useDetectedServerChip");
-        if (detectedServer) {
-          chipEl.textContent = detectedServer.replace(/^https?:\/\//, "");
-          chipEl.classList.remove("hidden");
-        } else {
-          chipEl.classList.add("hidden");
-        }
-        if (!loginSrvInput.value && checks.config?.configPresent && checks.config?.loginServer) {
-          loginSrvInput.value = checks.config.loginServer;
-        }
-
         const oauthAccounts = Array.isArray(snap.oauthAccounts)
           ? snap.oauthAccounts
           : oauthOk && snap.auth
@@ -2103,9 +1946,6 @@
           `step-pill ${oauthOk ? "done" : "current"}`;
         document.getElementById("stepNum3").textContent = oauthOk ? "✓" : "1";
 
-        document.getElementById("stepPill2").className =
-          `step-pill ${configOk ? "done" : ""}`;
-        document.getElementById("stepNum2").textContent = configOk ? "✓" : "2";
 
         const finishBtn = document.getElementById("finishWizardBtn");
         finishBtn.classList.toggle("hidden", !readyToLaunch);
@@ -2276,7 +2116,7 @@
                 ${s.keep ? `<span class="badge info">KEEP</span>` : ""}
               </div>
               <div class="row">
-                <button onclick="window.__openSsh('${esc(s.name)}')" title="Open interactive Colab shell">
+                <button onclick="window.__openShell('${esc(s.name)}')" title="Open interactive Colab shell">
                   &gt;_ Terminal
                 </button>
                 <button onclick="window.__toggleKeep('${esc(s.name)}')">
@@ -2289,7 +2129,7 @@
             </div>
             <div class="runtime-meta">
               ${oauthAccounts.length > 1 && sessAccEmail ? `<span>Account: <strong>${esc(sessAccEmail)}</strong></span>` : ""}
-              <span class="mono">${esc(s.ip || "Direct API (/colab/tty)")}</span>
+              <span class="mono">Direct API (/colab/tty)</span>
               <span>Uptime: ${formatDuration(s.ageSeconds)}</span>
               <span>Burn: ≈ ${s.costSoFarCu ?? 0} CU (${s.cuPerHour ?? 0} CU/h)</span>
               ${gpuUtil !== null ? `<span>GPU Load: <strong>${gpuUtil}%</strong></span>` : ""}
@@ -2350,7 +2190,7 @@
                           ${s.keep ? `<span class="badge info" style="font-size:9px;padding:1px 5px">KEEP</span>` : ""}
                         </div>
                         <div class="row" style="gap:4px;flex-shrink:0" onclick="event.stopPropagation()">
-                          <button style="padding:2px 6px;font-size:10px" onclick="window.__openSsh('${esc(s.name)}')">&gt;_</button>
+                          <button style="padding:2px 6px;font-size:10px" onclick="window.__openShell('${esc(s.name)}')">&gt;_</button>
                           <button style="padding:2px 6px;font-size:10px" onclick="window.__toggleKeep('${esc(s.name)}')">${s.keep ? "Unkeep" : "Keep"}</button>
                           <button class="danger" style="padding:2px 6px;font-size:10px" onclick="window.__stopSession('${esc(s.name)}')">Stop</button>
                         </div>
@@ -2565,10 +2405,10 @@
                 <div class="card">
                   <div class="card-header">
                     <div class="card-title">${esc(s.name)} · ${esc(s.gpu?.name || s.rateKey)}</div>
-                    <span class="badge ok">${s.ip ? "SSH Connected" : "Direct API Connected"}</span>
+                    <span class="badge ok">Direct API Connected</span>
                   </div>
                   <div class="muted mono" style="font-size:11px;margin-bottom:8px">
-                    ${s.ip ? `ssh -i ~/.orca-colab/id_ed25519 root@${esc(s.ip)}` : `orca-colab run --session ${esc(s.name)} -- bash -l`}
+                    orca-colab run --session ${esc(s.name)} -- bash -l
                   </div>
                   <div class="row-between" style="font-size:11px;margin-bottom:4px">
                     <span class="muted">GPU Load</span>
@@ -2679,42 +2519,6 @@
       document
         .getElementById("refreshBtn")
         .addEventListener("click", () => refreshAll(true));
-
-      // Step 2: Save Tailscale Auth Key & SSH Key
-      document
-        .getElementById("saveSetupBtn")
-        .addEventListener("click", async () => {
-          const authKey = document
-            .getElementById("setupAuthKeyInput")
-            .value.trim();
-          const loginServer = document
-            .getElementById("setupLoginServerInput")
-            .value.trim();
-          if (!authKey) {
-            showNotice("Please paste your Tailscale or Headscale Pre-Auth Key.", "warn");
-            return;
-          }
-          const btn = document.getElementById("saveSetupBtn");
-          btn.disabled = true;
-          btn.textContent = "Saving & Generating SSH Keypair...";
-          try {
-            const res = await callWorker("colab.setupConfig", {
-              authKey,
-              loginServer: loginServer || undefined,
-            });
-            document.getElementById("setupAuthKeyInput").value = "";
-            showNotice(
-              "Saved Tailscale Auth Key and generated ~/.orca-colab/id_ed25519!",
-              "ok",
-            );
-            renderAll(res.dashboard);
-          } catch (err) {
-            showNotice(err?.message || String(err), "error");
-          } finally {
-            btn.disabled = false;
-            btn.textContent = "Save Auth Key & Generate SSH Keypair";
-          }
-        });
 
       // Step 3: Google OAuth Sign-In (supports adding multiple accounts)
       async function handleGoogleSignIn(btnEl, { addAccount = false } = {}) {
@@ -2879,10 +2683,10 @@
         });
 
       // Global inline handlers for dynamic cards
-      window.__openSsh = async (sessionName) => {
+      window.__openShell = async (sessionName) => {
         const res = await callWorker("colab.openTerminal", {
           session: sessionName,
-          title: `SSH: ${sessionName}`,
+          title: `Colab: ${sessionName}`,
         });
         if (res?.code === "NO_ACTIVE_SESSION") {
           window.__goLaunchHelper(res.message);

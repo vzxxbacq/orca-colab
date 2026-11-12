@@ -18,23 +18,24 @@ function makeBuffers() {
   };
 }
 
-test("run defaults to session remoteRoot, adds -tt on TTY and propagates remote exit code", async (t) => {
+const RUNTIME = { id: "r-1", endpoint: "r-1", baseUrl: "https://8080-m.colab.dev", token: "proxy-tok" };
+
+test("run sends the command with env and remoteRoot over /colab/tty and propagates the remote exit code", async (t) => {
   const tmpHome = mkdtempSync(path.join(os.tmpdir(), "orca-colab-run-"));
   t.after(() => rmSync(tmpHome, { recursive: true, force: true }));
 
   writeSession(
     {
       name: "orca-colab-run1",
-      ip: "100.64.0.55",
       createdAt: "2026-11-09T10:00:00.000Z",
       remoteRoot: "/content/orca/my-repo",
+      colabRuntime: RUNTIME,
     },
     tmpHome,
   );
 
   const calls = [];
   const io = makeBuffers();
-
   const code = await runCmd(
     ["--env", "WANDB_MODE=offline", "--", "python", "train.py", "--lr", "0.001"],
     {
@@ -42,10 +43,10 @@ test("run defaults to session remoteRoot, adds -tt on TTY and propagates remote 
       stdout: io.stdout,
       stderr: io.stderr,
       homeDir: tmpHome,
-      stdinIsTTY: true,
-      spawnSsh: (bin, args, opts) => {
-        calls.push({ bin, args, stdio: opts.stdio });
-        return { status: 42 };
+      stdinIsTTY: false,
+      execTty: async ({ baseUrl, proxyToken, command, cwd }) => {
+        calls.push({ baseUrl, proxyToken, command, cwd });
+        return { ok: false, exitCode: 42, stdout: "", stderr: "" };
       },
     },
   );
@@ -53,41 +54,39 @@ test("run defaults to session remoteRoot, adds -tt on TTY and propagates remote 
   assert.equal(code, 42);
   assert.deepEqual(calls, [
     {
-      bin: "ssh",
-      args: [
-        "-i",
-        path.join(tmpHome, ".orca-colab", "id_ed25519"),
-        "-o",
-        "IdentitiesOnly=yes",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "StrictHostKeyChecking=accept-new",
-        "-o",
-        `UserKnownHostsFile=${path.join(tmpHome, ".orca-colab", "known_hosts")}`,
-        "-o",
-        "ConnectTimeout=10",
-        "-tt",
-        "root@100.64.0.55",
-        "export WANDB_MODE=offline && cd /content/orca/my-repo && python train.py --lr 0.001",
-      ],
-      stdio: "inherit",
+      baseUrl: "https://8080-m.colab.dev",
+      proxyToken: "proxy-tok",
+      command: "export WANDB_MODE=offline && cd /content/orca/my-repo && python train.py --lr 0.001",
+      cwd: "/content/orca/my-repo",
     },
   ]);
 });
 
-test("status and ls report session reachability and ageSeconds in JSON", async (t) => {
+test("run on a session from the Tailscale era says to restart it", async (t) => {
+  const tmpHome = mkdtempSync(path.join(os.tmpdir(), "orca-colab-run-"));
+  t.after(() => rmSync(tmpHome, { recursive: true, force: true }));
+  writeSession({ name: "orca-colab-old", ip: "100.64.0.55", createdAt: "2026-11-09T10:00:00.000Z" }, tmpHome);
+
+  const io = makeBuffers();
+  await assert.rejects(
+    runCmd(["--", "nvidia-smi"], { json: true, ...io, homeDir: tmpHome, execTty: async () => assert.fail("tty used") }),
+    /orca-colab down --session orca-colab-old/,
+  );
+});
+
+test("status and ls report reachability and ageSeconds in JSON without the runtime proxy token", async (t) => {
   const tmpHome = mkdtempSync(path.join(os.tmpdir(), "orca-colab-status-"));
   t.after(() => rmSync(tmpHome, { recursive: true, force: true }));
 
   writeSession(
     {
       name: "orca-colab-s1",
-      ip: "100.64.0.70",
       gpu: { name: "Tesla T4", memoryMiB: 15360 },
       rateKey: "T4",
       cuPerHour: 1.96,
       createdAt: "2026-11-09T10:00:00.000Z",
+      transport: "colab-tty",
+      colabRuntime: RUNTIME,
     },
     tmpHome,
   );
@@ -99,7 +98,6 @@ test("status and ls report session reachability and ageSeconds in JSON", async (
     stderr: io.stderr,
     homeDir: tmpHome,
     nowMs: () => Date.parse("2026-11-09T10:05:30.000Z"),
-    probeOnce: async ({ host }) => ({ ok: host === "100.64.0.70" }),
   });
 
   assert.equal(code, 0);
@@ -109,7 +107,6 @@ test("status and ls report session reachability and ageSeconds in JSON", async (
         name: "orca-colab-s1",
         account: "default",
         hostname: "orca-colab-s1",
-        ip: "100.64.0.70",
         gpu: { name: "Tesla T4", memoryMiB: 15360 },
         rateKey: "T4",
         cuPerHour: 1.96,
@@ -119,7 +116,8 @@ test("status and ls report session reachability and ageSeconds in JSON", async (
         keep: false,
         state: "active",
         remoteRoot: null,
-        forwards: [],
+        transport: "colab-tty",
+        colabRuntime: { id: "r-1", endpoint: "r-1", baseUrl: "https://8080-m.colab.dev", tokenExpiry: null },
         reachable: true,
         ageSeconds: 330,
       },

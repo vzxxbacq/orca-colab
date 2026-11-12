@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -31,7 +30,7 @@ test("job submit --wait streams live output to task log and records succeeded st
         name: "orca-colab-t401",
         account: "default",
         hostname: "orca-colab-t401",
-        ip: "100.64.100.15",
+        colabRuntime: { id: "r-1", endpoint: "r-1", baseUrl: "https://8080-m.colab.dev", token: "proxy-tok" },
         gpu: { name: "Tesla T4", memoryTotalMiB: 15360 },
         rateKey: "T4",
         cuPerHour: 1.96,
@@ -42,17 +41,10 @@ test("job submit --wait streams live output to task log and records succeeded st
       homeDir,
     );
 
-    const fakeSpawn = () => {
-      const proc = new EventEmitter();
-      proc.pid = 42424;
-      proc.stdout = new EventEmitter();
-      proc.stderr = new EventEmitter();
-      setTimeout(() => {
-        proc.stdout.emit("data", Buffer.from("Epoch 1/2: loss=0.412\n"));
-        proc.stdout.emit("data", Buffer.from("Epoch 2/2: loss=0.189\n"));
-        proc.emit("close", 0, null);
-      }, 10);
-      return proc;
+    const fakeTty = async ({ onOutput }) => {
+      onOutput("Epoch 1/2: loss=0.412\n");
+      onOutput("Epoch 2/2: loss=0.189\n");
+      return { ok: true, exitCode: 0, stdout: "" };
     };
 
     const submitIo = makeBuffers();
@@ -63,7 +55,7 @@ test("job submit --wait streams live output to task log and records succeeded st
         stdout: submitIo.stdout,
         stderr: submitIo.stderr,
         homeDir,
-        spawnChild: fakeSpawn,
+        execTty: fakeTty,
       },
     );
 
@@ -110,7 +102,7 @@ test("job submit detached and job stop marks task stopped and kills remote proce
         name: "orca-colab-t402",
         account: "default",
         hostname: "orca-colab-t402",
-        ip: "100.64.100.16",
+        colabRuntime: { id: "r-2", endpoint: "r-2", baseUrl: "https://8080-n.colab.dev", token: "proxy-tok" },
         gpu: { name: "Tesla T4", memoryTotalMiB: 15360 },
         rateKey: "T4",
         cuPerHour: 1.96,
@@ -147,9 +139,9 @@ test("job submit detached and job stop marks task stopped and kills remote proce
       stdout: stopIo.stdout,
       stderr: stopIo.stderr,
       homeDir,
-      runSsh: (_bin, args) => {
-        remoteKilledCmd = args.at(-1);
-        return { status: 0, stdout: "", stderr: "" };
+      execTty: async ({ command }) => {
+        remoteKilledCmd = command;
+        return { ok: true, exitCode: 0, stdout: "" };
       },
     });
 
