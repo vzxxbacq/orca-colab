@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, watch } from "node:fs";
+import { existsSync, watch } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,10 +21,10 @@ import { createPanelActions, PANEL_ACTION_NAMES } from "../bin/lib/panel-actions
 import { deleteSession, listSessions, readSession, writeSession } from "../bin/lib/session-store.mjs";
 import { createOrcaRemoteHelper } from "../bin/lib/orca-remote-helper.mjs";
 import { listTasks, readTaskLog } from "../bin/lib/task-store.mjs";
+import { inspectAgentSkills, installAgentSkill, removeAgentSkill } from "./agent-skill-install.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOCAL_CLI_PATH = path.resolve(__dirname, "..", "bin", "orca-colab.mjs");
-const BUNDLED_SKILL_DIR = path.resolve(__dirname, "..", "skills", "colab-gpu");
 const BRIDGE_TERMINAL_TITLE = "Colab Bridge";
 const isBridgeTitle = (title) => typeof title === "string" && title.startsWith(BRIDGE_TERMINAL_TITLE);
 const DEFAULT_CLI_COMMAND = "npx -y github:vzxxbacq/orca-colab#v0.2.5";
@@ -39,39 +39,6 @@ const ACTION_TIMEOUTS_MS = {
   submitTask: 120_000,
   calibrateCredits: 60_000,
 };
-
-export function syncBundledSkillToAgentDirs(homeDir = os.homedir()) {
-  const skillMdSrc = path.join(BUNDLED_SKILL_DIR, "SKILL.md");
-  const cliMdSrc = path.join(BUNDLED_SKILL_DIR, "references", "cli.md");
-  if (!existsSync(skillMdSrc)) {
-    return { installed: false, targets: [] };
-  }
-
-  const targetRoots = [
-    path.join(homeDir, ".agents", "skills", "colab-gpu"),
-    path.join(homeDir, ".claude", "skills", "colab-gpu"),
-    path.join(homeDir, ".gemini", "config", "skills", "colab-gpu"),
-  ];
-
-  const installedTargets = [];
-  for (const destDir of targetRoots) {
-    try {
-      const refDir = path.join(destDir, "references");
-      mkdirSync(refDir, { recursive: true });
-      copyFileSync(skillMdSrc, path.join(destDir, "SKILL.md"));
-      if (existsSync(cliMdSrc)) {
-        copyFileSync(cliMdSrc, path.join(refDir, "cli.md"));
-      }
-      installedTargets.push(destDir);
-    } catch {
-      // Non-fatal if a specific agent directory is read-only.
-    }
-  }
-  return {
-    installed: installedTargets.length > 0,
-    targets: installedTargets,
-  };
-}
 
 let cleanupFns = [];
 
@@ -290,7 +257,7 @@ function listFingerprint(snap) {
 
 // Reads ~/.orca-colab on this machine; used when the focused workspace is local.
 class LocalBridge {
-  constructor({ orca, homeDir, env, skillSync, notifyUser, onSnapshot }) {
+  constructor({ orca, homeDir, env, notifyUser, onSnapshot }) {
     this.kind = "local";
     this.orca = orca;
     this.homeDir = homeDir;
@@ -300,7 +267,6 @@ class LocalBridge {
     this.builder = new DashboardSnapshotBuilder({
       homeDir,
       env,
-      skillSync,
       origin: { kind: "local", host: os.hostname(), platform: process.platform },
     });
     this.actions = createPanelActions({ homeDir, env });
@@ -1338,7 +1304,6 @@ export class TerminalBridge {
 
 export default async function activate(orca, { homeDir = os.homedir() } = {}) {
   const paths = ensureColabHome(homeDir);
-  const skillSync = syncBundledSkillToAgentDirs(homeDir);
   const budgetNotifiedKeys = {};
   const remoteBridges = new Map();
   const bridgesByEnvironment = new Map();
@@ -1398,7 +1363,6 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
     orca,
     homeDir,
     env: process.env,
-    skillSync,
     notifyUser,
     onSnapshot: (snap, meta) => postFromBridge(localBridge)(snap, meta),
   });
@@ -1672,6 +1636,11 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
     const bridge = await resolveBridge();
     return (await bridge.snapshot()).doctor;
   });
+
+  // The skill goes into agent folders on this machine only when the user asks, from the panel.
+  orca.panels.handle("colab.agentSkills", async () => inspectAgentSkills(homeDir));
+  orca.panels.handle("colab.installAgentSkill", async (input = {}) => installAgentSkill(input?.targets, homeDir));
+  orca.panels.handle("colab.removeAgentSkill", async (input = {}) => removeAgentSkill(input?.targets, homeDir));
 
   const simpleActions = PANEL_ACTION_NAMES.filter(
     (n) => !["authLogin", "authImport", "startSession", "submitTask", "getTaskLogs", "oauthReplay"].includes(n),
