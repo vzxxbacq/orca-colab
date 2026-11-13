@@ -18,7 +18,11 @@ User-Agent: orca-colab/<version>
 ```
 
 OAuth uses Orca Colab Community's own Desktop client (GCP project `orca-colab-community`); all three
-scopes are non-sensitive there. `ORCA_COLAB_CLIENT_ID` / `ORCA_COLAB_CLIENT_SECRET` override it.
+scopes are non-sensitive there. Google requires the client secret on every token request (verified
+2026-11-13: a refresh without it returns `400 invalid_request "client_secret is missing."`), so the CLI
+sends code exchanges and refreshes to the token relay (`token-relay/`, DESIGN D21), which adds the
+secret. `ORCA_COLAB_CLIENT_ID` / `ORCA_COLAB_CLIENT_SECRET` switch to a user's own client and call Google
+directly. Revocation (`POST https://oauth2.googleapis.com/revoke`, form `token=…`) needs no secret.
 
 `colab.pa.googleapis.com/v1/user-info` rejects third-party clients (`ACCESS_TOKEN_SCOPE_INSUFFICIENT`), so
 the compute-unit balance comes from `GET https://colab.research.google.com/tun/m/ccu-info?authuser=0`

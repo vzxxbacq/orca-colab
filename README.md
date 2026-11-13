@@ -49,6 +49,20 @@ The CLI needs no install step; agents call it as `npx -y https://codeload.github
 2. Set allowed GPU tiers and concurrency limits under **Guardrails & CU**.
 3. Ask your agent to run any GPU task.
 
+### Google sign-in relay
+
+Signing in uses Orca Colab Community's own Google OAuth client. Google requires that client's secret on
+every token request, so instead of shipping it inside the CLI, a small Cloudflare Worker,
+`https://orca-colab-token-relay.fhq981014.workers.dev`, holds it. **The Worker does exactly one thing:**
+it takes the one-time authorization code your own machine received (or a refresh token), adds the client
+secret, sends that single request to `oauth2.googleapis.com/token` and returns Google's answer unchanged.
+It stores nothing, logs nothing (request logs are off), never calls any Colab API and cannot act on your
+account by itself. Its whole source is [`token-relay/src/index.mjs`](./token-relay/src/index.mjs).
+
+To bypass it, create your own Desktop OAuth client in Google Cloud and set `ORCA_COLAB_CLIENT_ID` and
+`ORCA_COLAB_CLIENT_SECRET`; orca-colab then talks to Google directly. `orca-colab auth logout` revokes
+your token at Google before deleting it from `~/.orca-colab`.
+
 ## What an agent run looks like
 
 A smoke test on a T4, exactly as the `colab-gpu` skill drives it:
