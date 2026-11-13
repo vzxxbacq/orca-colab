@@ -1,0 +1,23 @@
+# Deploy: CLOUDFLARE_API_TOKEN=… CLOUDFLARE_ACCOUNT_ID=… npx wrangler deploy (from this folder).
+# The secret is set once by the owner: npx wrangler secret put GOOGLE_CLIENT_SECRET
+name = "orca-colab-token-relay"
+main = "src/index.mjs"
+compatibility_date = "2026-11-01"
+workers_dev = true
+preview_urls = false
+
+[vars]
+GOOGLE_CLIENT_ID = "744100990078-mbs5l25fle4cup2b3pphq8ovatdetvnn.apps.googleusercontent.com"
+
+# Free-plan rate limiting: per client IP, so one abuser cannot spend the daily free quota for everyone.
+[[ratelimits]]
+name = "RATE_LIMITER"
+namespace_id = "1701"
+
+  [ratelimits.simple]
+  limit = 20
+  period = 60
+
+# No request logs or traces: the relay must not keep codes or tokens anywhere.
+[observability]
+enabled = false

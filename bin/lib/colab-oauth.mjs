@@ -20,10 +20,10 @@ export const COLAB_OAUTH_CONFIG = Object.freeze({
 
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
-// Orca Colab Community's own Desktop OAuth client (GCP project orca-colab-community). Desktop client
-// secrets are not confidential by Google's design; PKCE and the loopback redirect protect the flow.
+// Orca Colab Community's own Desktop OAuth client (GCP project orca-colab-community). Its secret lives
+// only in the token relay (token-relay/), which adds it to the two token requests and keeps nothing.
 const DEFAULT_DESKTOP_CLIENT_ID = "744100990078-mbs5l25fle4cup2b3pphq8ovatdetvnn.apps.googleusercontent.com";
-const DEFAULT_DESKTOP_CLIENT_SECRET = "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";
+export const DEFAULT_TOKEN_RELAY = "https://orca-colab-token-relay.fhq981014.workers.dev";
 
 export function resolveOAuthClientConfig(homeDir = os.homedir()) {
   if (process.env.ORCA_COLAB_CLIENT_ID && process.env.ORCA_COLAB_CLIENT_SECRET) {
@@ -41,8 +41,42 @@ export function resolveOAuthClientConfig(homeDir = os.homedir()) {
   }
   return {
     clientId: DEFAULT_DESKTOP_CLIENT_ID,
-    clientSecret: DEFAULT_DESKTOP_CLIENT_SECRET,
+    clientSecret: null,
+    relayUrl: process.env.ORCA_COLAB_TOKEN_RELAY || DEFAULT_TOKEN_RELAY,
   };
+}
+
+// With a user-supplied secret the request goes straight to Google; otherwise through the relay.
+async function postTokenGrant(grant, { clientId, clientSecret, relayUrl, fetchImpl }) {
+  if (clientSecret) {
+    return fetchImpl(COLAB_OAUTH_CONFIG.tokenEndpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ ...grant, client_id: clientId, client_secret: clientSecret }).toString(),
+    });
+  }
+  const { grant_type: grantType, ...rest } = grant;
+  const path = grantType === "refresh_token" ? "/refresh" : "/token";
+  return fetchImpl(`${String(relayUrl).replace(/\/+$/, "")}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(rest),
+  });
+}
+
+// Revoking the refresh token also ends every access token derived from it; no client secret needed.
+export async function revokeGoogleToken(token, { fetchImpl = fetch } = {}) {
+  if (!token) return false;
+  try {
+    const res = await fetchImpl(COLAB_OAUTH_CONFIG.revokeEndpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token }).toString(),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 export function generatePkcePair() {
@@ -167,6 +201,17 @@ function issuedByCurrentClient(entry, homeDir) {
   return entry.clientId === resolveOAuthClientConfig(homeDir).clientId;
 }
 
+// Sign-out revokes the refresh token at Google first, so a copy left in a backup or a synced folder stops
+// working too; the local entry is removed even when Google cannot be reached.
+export async function signOutOAuthAccount(account = "default", homeDir = os.homedir(), { fetchImpl = fetch } = {}) {
+  const store = readOAuthStore(homeDir);
+  const key = resolveOAuthAccountKey(account, store, homeDir);
+  const entry = store.accounts?.[key];
+  const revoked = entry ? await revokeGoogleToken(entry.refreshToken || entry.accessToken, { fetchImpl }) : false;
+  const removed = removeOAuthCredentials(key, homeDir);
+  return { account: key, removed, revoked };
+}
+
 export function readOAuthAccountStatus(account = "default", homeDir = os.homedir()) {
   const store = readOAuthStore(homeDir);
   const key = resolveOAuthAccountKey(account, store, homeDir);
@@ -212,24 +257,13 @@ export async function exchangeAuthorizationCode({
   codeVerifier,
   redirectUri,
   homeDir = os.homedir(),
-  clientId = resolveOAuthClientConfig(homeDir).clientId,
-  clientSecret = resolveOAuthClientConfig(homeDir).clientSecret,
+  clientConfig = resolveOAuthClientConfig(homeDir),
   fetchImpl = fetch,
 }) {
-  const body = new URLSearchParams({
-    client_id: clientId,
-    client_secret: clientSecret,
-    code,
-    code_verifier: codeVerifier,
-    grant_type: "authorization_code",
-    redirect_uri: redirectUri,
-  });
-
-  const response = await fetchImpl(COLAB_OAUTH_CONFIG.tokenEndpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString(),
-  });
+  const response = await postTokenGrant(
+    { grant_type: "authorization_code", code, code_verifier: codeVerifier, redirect_uri: redirectUri },
+    { ...clientConfig, fetchImpl },
+  );
 
   if (!response.ok) {
     const errText = await response.text().catch(() => "");
@@ -256,22 +290,13 @@ export async function exchangeAuthorizationCode({
 export async function refreshAccessToken({
   refreshToken,
   homeDir = os.homedir(),
-  clientId = resolveOAuthClientConfig(homeDir).clientId,
-  clientSecret = resolveOAuthClientConfig(homeDir).clientSecret,
+  clientConfig = resolveOAuthClientConfig(homeDir),
   fetchImpl = fetch,
 }) {
-  const body = new URLSearchParams({
-    client_id: clientId,
-    client_secret: clientSecret,
-    refresh_token: refreshToken,
-    grant_type: "refresh_token",
-  });
-
-  const response = await fetchImpl(COLAB_OAUTH_CONFIG.tokenEndpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString(),
-  });
+  const response = await postTokenGrant(
+    { grant_type: "refresh_token", refresh_token: refreshToken },
+    { ...clientConfig, fetchImpl },
+  );
 
   if (!response.ok) {
     const errText = await response.text().catch(() => "");
@@ -464,7 +489,8 @@ export async function runLoopbackOAuthFlow({
 
   const addressInfo = server.address();
   const redirectUri = `http://127.0.0.1:${addressInfo.port}`;
-  const { clientId, clientSecret } = resolveOAuthClientConfig(homeDir);
+  const clientConfig = resolveOAuthClientConfig(homeDir);
+  const { clientId } = clientConfig;
   const authUrl = buildGoogleAuthUrl({
     redirectUri,
     nonce,
@@ -509,8 +535,7 @@ export async function runLoopbackOAuthFlow({
         codeVerifier,
         redirectUri,
         homeDir,
-        clientId,
-        clientSecret,
+        clientConfig,
         fetchImpl,
       });
     } catch (err) {

@@ -46,6 +46,19 @@ CLI 无需单独安装，Agent 通过 `npx -y https://codeload.github.com/vzxxba
 2. 在 **Guardrails & CU** 中设置允许的 GPU 级别与并发上限。
 3. 直接让 Agent 执行 GPU 任务即可。
 
+### Google 登录中转
+
+登录使用 Orca Colab Community 自己的 Google OAuth client。Google 要求每次换取 token 都带上这个 client 的
+secret，为了不把它打包进 CLI，我们把它放在一个很小的 Cloudflare Worker 里：
+`https://orca-colab-token-relay.fhq981014.workers.dev`。**这个 Worker 只做一件事**：接收你本机拿到的一次性
+授权码（或 refresh token），补上 client secret，把这一个请求发给 `oauth2.googleapis.com/token`，再把
+Google 的回复原样返回。它不保存、不记录（请求日志已关闭）任何内容，从不调用 Colab 的任何接口，自己也无法操作
+你的账号。完整源码见 [`token-relay/src/index.mjs`](./token-relay/src/index.mjs)。
+
+如果不想经过它，可以在 Google Cloud 创建自己的桌面应用 OAuth client，设置 `ORCA_COLAB_CLIENT_ID` 和
+`ORCA_COLAB_CLIENT_SECRET`，orca-colab 就会直接连接 Google。`orca-colab auth logout` 会先在 Google 侧撤销
+token，再从 `~/.orca-colab` 删除。
+
 ## 一次 Agent 任务长什么样
 
 在 T4 上跑一次冒烟测试，就是 `colab-gpu` Skill 的标准流程：

@@ -28,11 +28,14 @@ docs/                       design, verified Orca facts, TODO
 
 - **Zero runtime dependencies** in `bin/` and `worker/`. Node builtins only. The CLI runs on the user's
   machine through `npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/<release sha>`, so install time must stay near zero.
-- **Credentials never leave the user's machine.** Google tokens live only in
-  `~/.orca-colab/google-oauth.json` (0600); the runtime proxy token only in the session file. No user
-  token is ever embedded in the repo. The app's own Desktop OAuth client ID and secret in
-  `bin/lib/colab-oauth.mjs` are not user credentials: Google treats installed-app client secrets as
-  public (PKCE + loopback protect the flow).
+- **Credentials stay on the user's machine.** Google tokens are stored only in
+  `~/.orca-colab/google-oauth.json` (0600); the runtime proxy token only in the session file. The one
+  exception is the token relay (`token-relay/`, DESIGN D21): token requests pass through it so it can add
+  the client secret, and it must never store, log or use them. Keep its scope to those two requests.
+- **The Google OAuth client secret is never committed.** It lives only as the Worker secret
+  `GOOGLE_CLIENT_SECRET` and in the owner's git-ignored `.env`. Never print it, never put it in code,
+  tests, docs or command output. The client ID is public and stays in `bin/lib/colab-oauth.mjs` and
+  `token-relay/wrangler.toml`.
 - **Cross-platform CLI**: macOS, Linux, Windows. Use `os.homedir()`, never `$HOME`; spawn with argv
   arrays, never shell strings.
 - **Agent-parsable output**: with `--json`, stdout carries exactly one JSON object and nothing else.

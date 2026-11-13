@@ -19,7 +19,7 @@ import {
   getValidAccessToken,
   listOAuthAccounts,
   readOAuthAccountStatus,
-  removeOAuthCredentials,
+  signOutOAuthAccount,
   resolveOAuthAccountKey,
   runLoopbackOAuthFlow,
 } from "../lib/colab-oauth.mjs";
@@ -67,7 +67,7 @@ export async function run(
     const noBrowser = Boolean(parsed.values["no-browser"]);
     log(
       noBrowser
-        ? `Open the URL below in any browser, then paste the http://127.0.0.1:... URL it redirects to into 'orca-colab auth redirect <url>' on this machine.`
+        ? `Open the URL below in any browser, then paste the http://127.0.0.1:... URL it redirects to into 'orca-colab auth redirect <url>' on this machine. That URL is a one-time key to your Colab: never send it to anyone or paste it into a site or chat.`
         : addAccount
         ? `Opening Google sign-in in your default browser to add an account (Passkey supported)...`
         : `Opening Google sign-in in your default browser for account '${account}' (Passkey supported)...`,
@@ -207,12 +207,15 @@ export async function run(
   if (sub === "logout") {
     if (parsed.values.all) {
       const all = listOAuthAccounts(homeDir);
+      let revokedCount = 0;
       for (const acc of all) {
-        removeOAuthCredentials(acc.account, homeDir);
+        const out = await signOutOAuthAccount(acc.account, homeDir, { fetchImpl });
+        if (out.revoked) revokedCount += 1;
       }
       const payload = {
         ok: true,
         removedCount: all.length,
+        revokedCount,
         authenticated: false,
         accounts: [],
       };
@@ -224,8 +227,7 @@ export async function run(
       return EXIT_OK;
     }
 
-    const targetKey = resolveOAuthAccountKey(account, null, homeDir);
-    const removed = removeOAuthCredentials(targetKey, homeDir);
+    const { account: targetKey, removed, revoked } = await signOutOAuthAccount(account, homeDir, { fetchImpl });
     const remaining = listOAuthAccounts(homeDir);
     if (removed && config?.defaultAccount === targetKey && remaining.length > 0) {
       setDefaultAccount(remaining[0].account, homeDir);
@@ -235,6 +237,7 @@ export async function run(
       account: targetKey,
       authenticated: false,
       removed,
+      revoked,
       accounts: remaining,
     };
     if (json) {
@@ -242,7 +245,9 @@ export async function run(
     } else {
       log(
         removed
-          ? `Signed out Google Colab OAuth credentials for account '${targetKey}'.`
+          ? revoked
+            ? `Signed out account '${targetKey}' and revoked its Google token.`
+            : `Removed account '${targetKey}' locally, but Google could not be reached to revoke the token; remove "Orca Colab Community" at https://myaccount.google.com/permissions.`
           : `No Google Colab OAuth credentials stored for account '${targetKey}'.`,
         stderr,
       );

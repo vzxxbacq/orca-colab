@@ -16,6 +16,7 @@ import {
 } from "../bin/lib/colab-api-client.mjs";
 import { ensureColabHome, writeConfig } from "../bin/lib/colab-home.mjs";
 import {
+  DEFAULT_TOKEN_RELAY,
   resolveOAuthClientConfig,
   generatePkcePair,
   getValidAccessToken,
@@ -70,8 +71,8 @@ test("OAuth store saves 0600 credentials, refreshes expired tokens, and never le
       account: "default",
       homeDir,
       fetchImpl: async (url, init) => {
-        assert.equal(url, "https://oauth2.googleapis.com/token");
-        assert.match(init.body, /refresh_token=refresh-secret-123/);
+        assert.equal(url, `${DEFAULT_TOKEN_RELAY}/refresh`);
+        assert.deepEqual(JSON.parse(init.body), { refresh_token: "refresh-secret-123" });
         return {
           ok: true,
           status: 200,

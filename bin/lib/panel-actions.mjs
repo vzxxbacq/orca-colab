@@ -15,7 +15,7 @@ import {
   getValidAccessToken,
   listOAuthAccounts,
   readOAuthStore,
-  removeOAuthCredentials,
+  signOutOAuthAccount,
   resolveOAuthAccountKey,
   resolveTargetAccount,
   runLoopbackOAuthFlow,
@@ -163,7 +163,7 @@ export function createPanelActions({
       const target = input?.account
         ? resolveOAuthAccountKey(input.account, null, homeDir)
         : resolveAccount(config).label;
-      removeOAuthCredentials(target, homeDir);
+      await signOutOAuthAccount(target, homeDir);
       const remaining = listOAuthAccounts(homeDir);
       if (remaining.length > 0 && resolveAccount(config).label === target) {
         setDefaultAccount(remaining[0].account, homeDir);
