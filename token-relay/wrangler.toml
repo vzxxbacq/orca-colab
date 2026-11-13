@@ -9,14 +9,15 @@ preview_urls = false
 [vars]
 GOOGLE_CLIENT_ID = "744100990078-mbs5l25fle4cup2b3pphq8ovatdetvnn.apps.googleusercontent.com"
 
-# Free-plan rate limiting: per client IP, so one abuser cannot spend the daily free quota for everyone.
-[[ratelimits]]
-name = "RATE_LIMITER"
-namespace_id = "1701"
+# Strict per-IP limit (RATE_RULES in src/index.mjs): one Durable Object per client IP, counts in memory.
+# The Workers Free plan only offers SQLite-backed Durable Objects, hence new_sqlite_classes; no rows are written.
+[[durable_objects.bindings]]
+name = "IP_LIMITER"
+class_name = "IpRateLimiter"
 
-  [ratelimits.simple]
-  limit = 20
-  period = 60
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["IpRateLimiter"]
 
 # No request logs or traces: the relay must not keep codes or tokens anywhere.
 [observability]

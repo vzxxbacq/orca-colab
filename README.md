@@ -57,7 +57,8 @@ every token request, so instead of shipping it inside the CLI, a small Cloudflar
 it takes the one-time authorization code your own machine received (or a refresh token), adds the client
 secret, sends that single request to `oauth2.googleapis.com/token` and returns Google's answer unchanged.
 It stores nothing, logs nothing (request logs are off), never calls any Colab API and cannot act on your
-account by itself. Its whole source is [`token-relay/src/index.mjs`](./token-relay/src/index.mjs).
+account by itself. To keep one client from using up its free quota, it counts requests per IP address in
+memory (30 a minute, 300 an hour). Its whole source is [`token-relay/src/index.mjs`](./token-relay/src/index.mjs).
 
 To bypass it, create your own Desktop OAuth client in Google Cloud and set `ORCA_COLAB_CLIENT_ID` and
 `ORCA_COLAB_CLIENT_SECRET`; orca-colab then talks to Google directly. `orca-colab auth logout` revokes

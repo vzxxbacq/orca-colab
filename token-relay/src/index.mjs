@@ -5,16 +5,51 @@ const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const MAX_BODY_BYTES = 4096;
 // The desktop flow only ever redirects to the user's own machine.
 const LOOPBACK_REDIRECT = /^http:\/\/127\.0\.0\.1:\d{1,5}\/?$/;
+// Per client IP. A person signs in rarely and refreshes about once an hour per account, so these only
+// bite a script hammering the relay; an office behind one IP still fits comfortably.
+export const RATE_RULES = [
+  { windowMs: 60_000, max: 30 },
+  { windowMs: 3_600_000, max: 300 },
+];
 const ABOUT =
   "orca-colab token relay. POST /token exchanges a PKCE authorization code, POST /refresh refreshes an " +
   "access token; both add the app's client secret and return Google's answer unchanged. Nothing is " +
   "stored or logged. Source: https://github.com/vzxxbacq/orca-colab/tree/main/token-relay\n";
 
-function json(status, body) {
+function json(status, body, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json", "cache-control": "no-store" },
+    headers: { "content-type": "application/json", "cache-control": "no-store", ...extraHeaders },
   });
+}
+
+// Fixed windows per rule; returns 0 when the request may pass, else the seconds until it may.
+export function takeRateToken(windows, now, rules = RATE_RULES) {
+  for (const rule of rules) {
+    const w = windows[rule.windowMs];
+    if (w && now - w.start < rule.windowMs && w.count >= rule.max) {
+      return Math.ceil((w.start + rule.windowMs - now) / 1000);
+    }
+  }
+  for (const rule of rules) {
+    const w = windows[rule.windowMs];
+    if (!w || now - w.start >= rule.windowMs) windows[rule.windowMs] = { start: now, count: 1 };
+    else w.count += 1;
+  }
+  return 0;
+}
+
+// One instance per client IP (idFromName), so every Cloudflare location sees the same count. Counts live
+// in memory only; an instance evicted after a quiet spell simply starts its windows again.
+export class IpRateLimiter {
+  constructor() {
+    this.windows = {};
+  }
+
+  async fetch() {
+    const retryAfter = takeRateToken(this.windows, Date.now());
+    return new Response(null, { status: retryAfter ? 429 : 204, headers: { "retry-after": String(retryAfter) } });
+  }
 }
 
 async function readJsonBody(request) {
@@ -61,10 +96,13 @@ export default {
     if (Number(request.headers.get("content-length") ?? 0) > MAX_BODY_BYTES) {
       return json(413, { error: "request_too_large" });
     }
-    if (env.RATE_LIMITER) {
-      const key = request.headers.get("cf-connecting-ip") ?? "unknown";
-      const { success } = await env.RATE_LIMITER.limit({ key });
-      if (!success) return json(429, { error: "rate_limited" });
+    if (env.IP_LIMITER) {
+      const ip = request.headers.get("cf-connecting-ip") ?? "unknown";
+      const verdict = await env.IP_LIMITER.get(env.IP_LIMITER.idFromName(ip)).fetch("https://limiter/");
+      if (verdict.status === 429) {
+        const retryAfter = verdict.headers.get("retry-after") ?? "60";
+        return json(429, { error: "rate_limited", retryAfterSeconds: Number(retryAfter) }, { "retry-after": retryAfter });
+      }
     }
     if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
       return json(503, { error: "relay_not_configured" });
