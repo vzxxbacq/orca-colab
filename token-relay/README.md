@@ -10,8 +10,10 @@ the client ID and secret added, returning Google's answer unchanged:
 | `POST /refresh` | `refresh_token` | `refresh_token` |
 
 Everything else is refused. It stores nothing, has request logs and traces disabled, and never calls a
-Colab API. Bodies over 4 KB are rejected; a per-IP rate limit is configured (Cloudflare's limiter is
-approximate). It runs on the Workers Free plan, which stops serving instead of billing past its quota.
+Colab API. Bodies over 4 KB are rejected. Each client IP may make 30 requests a minute and 300 an hour
+(`RATE_RULES`); one Durable Object per IP keeps the count in memory, so the limit is exact across all
+Cloudflare locations, and a 429 carries `retry-after`. It runs on the Workers Free plan, which stops
+serving instead of billing past its quota.
 
 Deploy (owner only, from this folder):
 

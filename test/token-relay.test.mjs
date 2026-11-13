@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import relay from "../token-relay/src/index.mjs";
+import relay, { takeRateToken } from "../token-relay/src/index.mjs";
 import {
   DEFAULT_TOKEN_RELAY,
   exchangeAuthorizationCode,
@@ -74,8 +74,40 @@ test("the relay refuses anything but the two loopback token requests, and rate-l
   assert.equal(await status(new Request("https://relay.example/token")), 404);
   assert.equal(await status(post("/refresh", { refresh_token: "x".repeat(5000) })), 400);
   assert.equal(await status(post("/token", ok), { GOOGLE_CLIENT_ID: "cid" }), 503);
-  const limited = { ...ENV, RATE_LIMITER: { limit: async ({ key }) => ({ success: key !== "203.0.113.9" }) } };
-  assert.equal(await status(post("/token", ok, { "cf-connecting-ip": "203.0.113.9" }), limited), 429);
+  const seen = [];
+  const limited = {
+    ...ENV,
+    IP_LIMITER: {
+      idFromName: (ip) => `id:${ip}`,
+      get: (id) => ({
+        fetch: async () => {
+          seen.push(id);
+          return new Response(null, { status: 429, headers: { "retry-after": "42" } });
+        },
+      }),
+    },
+  };
+  const res = await relay.fetch(post("/token", ok, { "cf-connecting-ip": "203.0.113.9" }), limited, null, { fetchImpl });
+  assert.equal(res.status, 429);
+  assert.equal(res.headers.get("retry-after"), "42");
+  assert.deepEqual(await res.json(), { error: "rate_limited", retryAfterSeconds: 42 });
+  assert.deepEqual(seen, ["id:203.0.113.9"]);
+});
+
+test("the per-IP limiter allows 30 a minute and 300 an hour, then says how long to wait", () => {
+  const windows = {};
+  const t0 = 1_000_000;
+  for (let i = 0; i < 30; i += 1) assert.equal(takeRateToken(windows, t0 + i), 0);
+  assert.equal(takeRateToken(windows, t0 + 30_000), 30);
+  assert.equal(takeRateToken(windows, t0 + 60_000), 0);
+  let now = t0 + 60_000;
+  let allowed = 31;
+  while (allowed < 300) {
+    now += 2_100;
+    if (takeRateToken(windows, now) === 0) allowed += 1;
+  }
+  assert.equal(takeRateToken(windows, now + 2_100), Math.ceil((t0 + 3_600_000 - now - 2_100) / 1000));
+  assert.equal(takeRateToken(windows, t0 + 3_600_000), 0);
 });
 
 test("the CLI sends token requests through the relay without a secret, or straight to Google with a user's own client", async (t) => {
