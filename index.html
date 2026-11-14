@@ -4,13 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
-<title>Orca Colab Community</title>
+<title>Colab GPU (Community) for Orca</title>
 <link rel="icon" type="image/png" href="icon.png">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <main>
-<a class="mark" href="index.html"><svg viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c6cf5"/><stop offset="1" stop-color="#4338ca"/></linearGradient><linearGradient id="bolt" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff7d6"/><stop offset="1" stop-color="#fbbf24"/></linearGradient></defs><rect width="512" height="512" rx="112" fill="url(#bg)"/><g fill="none" stroke="#fff" stroke-opacity=".22" stroke-width="10" stroke-linecap="round"><rect x="116" y="116" width="280" height="280" rx="40"/><path d="M176 116v-36M256 116v-36M336 116v-36M176 396v36M256 396v36M336 396v36M116 176h-36M116 256h-36M116 336h-36M396 176h36M396 256h36M396 336h36"/></g><path fill="url(#bolt)" d="M292 136 L178 290 h70 l-28 86 L348 222 h-72 z"/></svg><span class="brand">Orca Colab Community</span></a>
+<a class="mark" href="index.html"><svg viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c6cf5"/><stop offset="1" stop-color="#4338ca"/></linearGradient><linearGradient id="bolt" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff7d6"/><stop offset="1" stop-color="#fbbf24"/></linearGradient></defs><rect width="512" height="512" rx="112" fill="url(#bg)"/><g fill="none" stroke="#fff" stroke-opacity=".22" stroke-width="10" stroke-linecap="round"><rect x="116" y="116" width="280" height="280" rx="40"/><path d="M176 116v-36M256 116v-36M336 116v-36M176 396v36M256 396v36M336 396v36M116 176h-36M116 256h-36M116 336h-36M396 176h36M396 256h36M396 336h36"/></g><path fill="url(#bolt)" d="M292 136 L178 290 h70 l-28 86 L348 222 h-72 z"/></svg><span class="brand">Colab GPU (Community) for Orca</span></a>
 <h1>Colab GPUs,<br>run by <span>your agent</span></h1>
 <p class="sub">A community plugin and command-line tool that lets coding agents in <a href="https://github.com/stablyai/orca">Orca</a> use your own Google Colab GPU runtimes. Your workspace and credentials stay local.</p>
 <div class="chips">
@@ -35,7 +35,7 @@
 
 <section class="card">
 <h2>How sign-in works</h2>
-<p>You sign in with Google in your own browser. The resulting tokens are stored only on your computer, in <code>~/.orca-colab/google-oauth.json</code>, readable only by your user account. There is no Orca Colab Community server; nothing about your account is sent to the project.</p>
+<p>You sign in with Google in your own browser. The resulting tokens are stored only on your computer, in <code>~/.orca-colab/google-oauth.json</code>, readable only by your user account. The only server involved is a small <a href="privacy.html">sign-in relay</a> that adds the app's client secret to Google token requests and stores nothing; nothing about your account is kept by the project.</p>
 </section>
 
 <section class="card">
