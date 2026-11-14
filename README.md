@@ -1,13 +1,18 @@
-# orca-colab
+# Colab GPU for Orca: Google Colab GPUs for Claude Code, Codex and other AI coding agents
 
-[**English**](./README.md) | [**简体中文**](./README.zh-CN.md)
+[**English**](./README.md) | [**简体中文**](./README.zh-CN.md) · [**Install from the Orca plugin directory**](https://orca.dev/plugins/vzxxbacq/orca-colab)
 
 ![Colab GPUs, run by your agent](./assets/cover.png)
 
-Use Google Colab GPUs as an autonomous compute backend for local coding agents in [Orca](https://github.com/stablyai/orca).
-Your workspace, agent and credentials stay on your machine; Colab is a disposable GPU box the agent starts, uses and releases.
+Your coding agent needs a GPU; your laptop doesn't have one. **Colab GPU for Orca** lets Claude Code, Codex
+and any other agent in [Orca](https://github.com/stablyai/orca) start a Google Colab T4, L4 or A100 runtime
+on its own, sync the workspace, run training, fine-tuning or inference jobs, pull checkpoints and metrics
+back, and shut the runtime down when it's done, with live output and compute-unit tracking in an Orca panel.
+Your code, agents and credentials stay on your machine, and it runs on your own Colab account and
+compute units. No VPN, SSH or notebook to babysit.
 
-> **Unofficial community project.** Listed in Orca as *Colab GPU (Community) for Orca*. Not affiliated with or endorsed by Google; "Google Colab" is a trademark of Google LLC.
+Install it in Orca from the [plugin directory](https://orca.dev/plugins/vzxxbacq/orca-colab) (**Colab GPU (Community) for Orca**), or use the
+CLI alone with `npx`. A community project, not affiliated with Google.
 
 ## What you get
 
