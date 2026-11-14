@@ -4,7 +4,7 @@
   "execution": "trusted-worker",
   "id": "colab",
   "name": "Colab GPU (Community) for Orca",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Give Claude Code, Codex and your other Orca agents a Google Colab GPU: launch T4, L4 or A100 runtimes, sync code, run training jobs and pull results back.",
   "repository": "https://github.com/vzxxbacq/orca-colab",
   "license": "MIT",
