@@ -7,7 +7,7 @@
 Use Google Colab GPUs as an autonomous compute backend for local coding agents in [Orca](https://github.com/stablyai/orca).
 Your workspace, agent and credentials stay on your machine; Colab is a disposable GPU box the agent starts, uses and releases.
 
-> **Unofficial community project.** Listed in Orca as *Orca Colab Community*. Not affiliated with or endorsed by Google; "Google Colab" is a trademark of Google LLC.
+> **Unofficial community project.** Listed in Orca as *Colab GPU (Community) for Orca*. Not affiliated with or endorsed by Google; "Google Colab" is a trademark of Google LLC.
 
 ## What you get
 
@@ -51,7 +51,8 @@ The CLI needs no install step; agents call it as `npx -y https://codeload.github
 
 ### Google sign-in relay
 
-Signing in uses Orca Colab Community's own Google OAuth client. Google requires that client's secret on
+Signing in uses the plugin's own Google OAuth client (Google's consent screen shows it as
+*Colab GPU (Community) for Orca*). Google requires that client's secret on
 every token request, so instead of shipping it inside the CLI, a small Cloudflare Worker,
 `https://orca-colab-token-relay.fhq981014.workers.dev`, holds it. **The Worker does exactly one thing:**
 it takes the one-time authorization code your own machine received (or a refresh token), adds the client

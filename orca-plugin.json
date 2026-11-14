@@ -3,7 +3,7 @@
   "manifestVersion": 2,
   "execution": "trusted-worker",
   "id": "colab",
-  "name": "Orca Colab Community",
+  "name": "Colab GPU (Community) for Orca",
   "version": "0.3.1",
   "description": "Community plugin: use a Google Colab GPU runtime as a compute backend from your local Orca workspace and agents. Unofficial; not affiliated with or endorsed by Google.",
   "repository": "https://github.com/vzxxbacq/orca-colab",

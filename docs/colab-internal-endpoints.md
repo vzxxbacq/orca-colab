@@ -17,7 +17,7 @@ Accept: application/json
 User-Agent: orca-colab/<version>
 ```
 
-OAuth uses Orca Colab Community's own Desktop client (GCP project `orca-colab-community`); all three
+OAuth uses the plugin's own Desktop client (GCP project `orca-colab-community`); all three
 scopes are non-sensitive there. Google requires the client secret on every token request (verified
 2026-11-13: a refresh without it returns `400 invalid_request "client_secret is missing."`), so the CLI
 sends code exchanges and refreshes to the token relay (`token-relay/`, DESIGN D21), which adds the

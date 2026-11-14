@@ -7,7 +7,7 @@
 让 [Orca](https://github.com/stablyai/orca) 中的本地 Coding Agent 将 Google Colab GPU 作为自治远程算力后端使用。
 工作区、Agent 和凭据都留在本机；Colab 只是一台由 Agent 自行开启、使用、释放的一次性 GPU 机器。
 
-> **非官方社区项目。** 在 Orca 中名为 *Orca Colab Community*。与 Google 无关联，也未获 Google 认可；"Google Colab" 是 Google LLC 的商标。
+> **非官方社区项目。** 在 Orca 中名为 *Colab GPU (Community) for Orca*。与 Google 无关联，也未获 Google 认可；"Google Colab" 是 Google LLC 的商标。
 
 ## 你将获得
 
@@ -48,7 +48,7 @@ CLI 无需单独安装，Agent 通过 `npx -y https://codeload.github.com/vzxxba
 
 ### Google 登录中转
 
-登录使用 Orca Colab Community 自己的 Google OAuth client。Google 要求每次换取 token 都带上这个 client 的
+登录使用 Colab GPU (Community) for Orca 自己的 Google OAuth client。Google 要求每次换取 token 都带上这个 client 的
 secret，为了不把它打包进 CLI，我们把它放在一个很小的 Cloudflare Worker 里：
 `https://orca-colab-token-relay.fhq981014.workers.dev`。**这个 Worker 只做一件事**：接收你本机拿到的一次性
 授权码（或 refresh token），补上 client secret，把这一个请求发给 `oauth2.googleapis.com/token`，再把

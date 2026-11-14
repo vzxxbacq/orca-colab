@@ -1,6 +1,6 @@
 # token-relay
 
-Cloudflare Worker that holds the Google OAuth client secret of Orca Colab Community so the CLI does not
+Cloudflare Worker that holds the Google OAuth client secret of the orca-colab plugin so the CLI does not
 ship it. It accepts exactly two requests and forwards each to `https://oauth2.googleapis.com/token` with
 the client ID and secret added, returning Google's answer unchanged:
 

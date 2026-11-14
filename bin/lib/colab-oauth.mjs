@@ -20,7 +20,7 @@ export const COLAB_OAUTH_CONFIG = Object.freeze({
 
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
-// Orca Colab Community's own Desktop OAuth client (GCP project orca-colab-community). Its secret lives
+// The plugin's own Desktop OAuth client (GCP project orca-colab-community). Its secret lives
 // only in the token relay (token-relay/), which adds it to the two token requests and keeps nothing.
 const DEFAULT_DESKTOP_CLIENT_ID = "744100990078-mbs5l25fle4cup2b3pphq8ovatdetvnn.apps.googleusercontent.com";
 export const DEFAULT_TOKEN_RELAY = "https://orca-colab-token-relay.fhq981014.workers.dev";

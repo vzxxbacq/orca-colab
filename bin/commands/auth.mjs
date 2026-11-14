@@ -247,7 +247,7 @@ export async function run(
         removed
           ? revoked
             ? `Signed out account '${targetKey}' and revoked its Google token.`
-            : `Removed account '${targetKey}' locally, but Google could not be reached to revoke the token; remove "Orca Colab Community" at https://myaccount.google.com/permissions.`
+            : `Removed account '${targetKey}' locally, but Google could not be reached to revoke the token; remove "Colab GPU (Community) for Orca" at https://myaccount.google.com/permissions.`
           : `No Google Colab OAuth credentials stored for account '${targetKey}'.`,
         stderr,
       );
