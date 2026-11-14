@@ -1320,7 +1320,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
   const notifyUser = async (message, tone = "info") => {
     try {
       if (await orca.host.has("notifications.show")) {
-        await orca.host.call("notifications.show", { title: "Orca Colab Community", message, tone });
+        await orca.host.call("notifications.show", { title: "Colab GPU (Community) for Orca", message, tone });
       }
     } catch {
       // Notifications are optional.
@@ -1535,7 +1535,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
         tooltip:
           snap.origin?.kind === "remote"
             ? `Colab state of ${snap.origin.workspaceName || "remote workspace"} on its Orca server`
-            : "Click to open the Orca Colab Community panel",
+            : "Click to open the Colab GPU (Community) for Orca panel",
         visible: true,
       });
     } catch (err) {
