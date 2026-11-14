@@ -1,13 +1,16 @@
-# orca-colab
+# Colab GPU for Orca：让 Claude Code、Codex 等 AI 编程 Agent 用上 Google Colab GPU
 
-[**English**](./README.md) | [**简体中文**](./README.zh-CN.md)
+[**English**](./README.md) | [**简体中文**](./README.zh-CN.md) · [**从 Orca 插件目录安装**](https://orca.dev/plugins/vzxxbacq/orca-colab)
 
 ![Colab GPUs, run by your agent](./assets/cover.png)
 
-让 [Orca](https://github.com/stablyai/orca) 中的本地 Coding Agent 将 Google Colab GPU 作为自治远程算力后端使用。
-工作区、Agent 和凭据都留在本机；Colab 只是一台由 Agent 自行开启、使用、释放的一次性 GPU 机器。
+Agent 需要 GPU，笔记本却没有。**Colab GPU for Orca** 让 [Orca](https://github.com/stablyai/orca) 里的
+Claude Code、Codex 等 Agent 自己开一台 Google Colab T4、L4 或 A100，同步工作区，跑训练、微调或推理，把权重和
+指标拉回本地，用完自动释放；Orca 面板里能看到实时输出和算力消耗。代码、Agent 和凭据都留在本机，用的是你自己的
+Colab 账号和计算单元，不需要 VPN、SSH，也不用守着 notebook。
 
-> **非官方社区项目。** 在 Orca 中名为 *Colab GPU (Community) for Orca*。与 Google 无关联，也未获 Google 认可；"Google Colab" 是 Google LLC 的商标。
+在 Orca 的[插件目录](https://orca.dev/plugins/vzxxbacq/orca-colab)里搜索 **Colab GPU (Community) for Orca** 即可安装，也可以单独用 `npx` 运行 CLI。
+社区项目，与 Google 无关联。
 
 ## 你将获得
 

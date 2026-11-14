@@ -172,7 +172,7 @@ rest of the Tailscale path (D2–D8, D19). Runtimes are provisioned only through
   "id": "colab",
   "name": "Colab GPU (Community) for Orca",
   "version": "0.1.0",
-  "description": "Community plugin: use a Google Colab GPU runtime as a compute backend from your local Orca workspace and agents. Unofficial; not affiliated with or endorsed by Google.",
+  "description": "Give Claude Code, Codex and your other Orca agents a Google Colab GPU: launch T4, L4 or A100 runtimes, sync code, run training jobs and pull results back.",
   "repository": "https://github.com/vzxxbacq/orca-colab",
   "license": "MIT",
   "engines": { "orca": ">=1.4.248" },
