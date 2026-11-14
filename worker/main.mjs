@@ -27,7 +27,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOCAL_CLI_PATH = path.resolve(__dirname, "..", "bin", "orca-colab.mjs");
 const BRIDGE_TERMINAL_TITLE = "Colab Bridge";
 const isBridgeTitle = (title) => typeof title === "string" && title.startsWith(BRIDGE_TERMINAL_TITLE);
-const DEFAULT_CLI_COMMAND = "npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/6762f791b6bd680a50f3d3e3f4459e0fe64ce13f";
+const DEFAULT_CLI_COMMAND = "npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/2a0ce6cab8a0995f5ba417cf3de4d59c8e3703fd";
 const DEFAULT_REMOTE_CLI_COMMAND = DEFAULT_CLI_COMMAND;
 const WATCH_UNSUPPORTED_RE = /unknown command: watch/;
 const UNKNOWN_ENVIRONMENT_RE =

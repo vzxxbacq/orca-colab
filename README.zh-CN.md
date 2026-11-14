@@ -38,7 +38,7 @@ npx skills add vzxxbacq/orca-colab
 orca plugin dev load .
 ```
 
-CLI 无需单独安装，Agent 通过 `npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/6762f791b6bd680a50f3d3e3f4459e0fe64ce13f <command> --json` 直接调用。
+CLI 无需单独安装，Agent 通过 `npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/2a0ce6cab8a0995f5ba417cf3de4d59c8e3703fd <command> --json` 直接调用。
 
 ### 2. 配置
 
