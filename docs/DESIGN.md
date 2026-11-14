@@ -188,7 +188,7 @@ rest of the Tailscale path (D2–D8, D19). Runtimes are provisioned only through
     "statusBarItems": [{ "id": "colab-sessions", "icon": "zap", "text": "Colab", "command": "colab.showPanel" }],
     "settings": [
       { "key": "autoStopIdleMinutes", "title": "Auto-stop idle sessions after (minutes)", "type": "integer", "default": 20, "minimum": 0 },
-      { "key": "cliCommand", "title": "orca-colab command", "type": "string", "default": "npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/2a0ce6cab8a0995f5ba417cf3de4d59c8e3703fd" }
+      { "key": "cliCommand", "title": "orca-colab command", "type": "string", "default": "npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/2944ee151e7ef2d08a5598c00c6cce4e3109f13c" }
     ]
   },
   "capabilities": [
