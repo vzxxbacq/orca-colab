@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Fine-tune a model with Codex on a Google Colab GPU</title>
+<meta name="description" content="Have Codex fine-tune and evaluate models on a Google Colab A100, L4 or T4 from Orca, track compute units and pull the weights back to your workspace.">
+<link rel="canonical" href="https://vzxxbacq.github.io/orca-colab/codex-colab-fine-tuning.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Fine-tune a model with Codex on a Google Colab GPU">
+<meta property="og:description" content="Have Codex fine-tune and evaluate models on a Google Colab A100, L4 or T4 from Orca, track compute units and pull the weights back to your workspace.">
+<meta property="og:url" content="https://vzxxbacq.github.io/orca-colab/codex-colab-fine-tuning.html">
+<meta property="og:image" content="https://vzxxbacq.github.io/orca-colab/cover.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/png" href="icon.png">
+<link rel="stylesheet" href="style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "HowTo", "name": "Fine-tune a model with Codex on a Google Colab GPU", "description": "Have Codex fine-tune and evaluate models on a Google Colab A100, L4 or T4 from Orca, track compute units and pull the weights back to your workspace.", "url": "https://vzxxbacq.github.io/orca-colab/codex-colab-fine-tuning.html", "tool": [{"@type": "HowToTool", "name": "Orca"}, {"@type": "HowToTool", "name": "Colab GPU (Community) for Orca"}], "step": [{"@type": "HowToStep", "position": 1, "name": "Install and sign in", "text": "Install Colab GPU (Community) for Orca in Orca and sign in with Google in its panel."}, {"@type": "HowToStep", "position": 2, "name": "Allow a larger GPU", "text": "Under Guardrails & CU, allow L4 or A100 if your Colab account can use them, and set a monthly compute-unit budget."}, {"@type": "HowToStep", "position": 3, "name": "Ask Codex to fine-tune", "text": "For example: \u201cFine-tune this model on an L4 with the dataset in data/, then evaluate it.\u201d Codex syncs the workspace and submits the job with orca-colab job submit."}, {"@type": "HowToStep", "position": 4, "name": "Follow the run", "text": "The panel shows the job's live output, the runtime's GPU memory and the estimated compute units used."}, {"@type": "HowToStep", "position": 5, "name": "Bring the weights home", "text": "Codex runs orca-colab pull for the output folder; files arrive byte for byte, then it releases the runtime with orca-colab down."}]}</script>
+</head>
+<body>
+<main>
+<a class="mark" href="index.html"><svg viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c6cf5"/><stop offset="1" stop-color="#4338ca"/></linearGradient><linearGradient id="bolt" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff7d6"/><stop offset="1" stop-color="#fbbf24"/></linearGradient></defs><rect width="512" height="512" rx="112" fill="url(#bg)"/><g fill="none" stroke="#fff" stroke-opacity=".22" stroke-width="10" stroke-linecap="round"><rect x="116" y="116" width="280" height="280" rx="40"/><path d="M176 116v-36M256 116v-36M336 116v-36M176 396v36M256 396v36M336 396v36M116 176h-36M116 256h-36M116 336h-36M396 176h36M396 256h36M396 336h36"/></g><path fill="url(#bolt)" d="M292 136 L178 290 h70 l-28 86 L348 222 h-72 z"/></svg><span class="brand">Colab GPU (Community) for Orca</span></a>
+<h1>Fine-tune a model with Codex on a Colab GPU</h1>
+<p class="sub">Codex can write a fine-tuning script but cannot run it without a GPU. Colab GPU for Orca lets Codex in Orca start a Colab runtime, run the job with live logs and pull the trained weights back.</p>
+<section class="card">
+<h2>Steps</h2>
+<ol>
+<li><strong>Install and sign in.</strong> Install Colab GPU (Community) for Orca in Orca and sign in with Google in its panel.</li>
+<li><strong>Allow a larger GPU.</strong> Under Guardrails &amp; CU, allow L4 or A100 if your Colab account can use them, and set a monthly compute-unit budget.</li>
+<li><strong>Ask Codex to fine-tune.</strong> For example: “Fine-tune this model on an L4 with the dataset in data/, then evaluate it.” Codex syncs the workspace and submits the job with orca-colab job submit.</li>
+<li><strong>Follow the run.</strong> The panel shows the job's live output, the runtime's GPU memory and the estimated compute units used.</li>
+<li><strong>Bring the weights home.</strong> Codex runs orca-colab pull for the output folder; files arrive byte for byte, then it releases the runtime with orca-colab down.</li>
+</ol>
+</section>
+<section class="card"><h2>Tips</h2><ul><li>Have the dataset downloaded on the runtime (for example from Hugging Face) instead of syncing large files from your laptop.</li><li>Write checkpoints regularly and pull them: Colab runtimes are time-limited.</li></ul></section>
+<section class="card">
+<h2>More</h2>
+<ul>
+<li><a href="https://orca.dev/plugins/vzxxbacq/orca-colab">Install Colab GPU (Community) for Orca from the Orca plugin directory</a></li>
+<li><a href="index.html#questions">Questions and answers</a></li>
+<li><a href="https://github.com/vzxxbacq/orca-colab">Source code and full CLI reference</a></li>
+</ul>
+</section>
+<footer>© vzxxbacq · MIT License · Community project, not affiliated with Google.</footer>
+</main>
+</body>
+</html>

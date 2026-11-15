@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Run Google Colab GPUs from the terminal (orca-colab CLI)</title>
+<meta name="description" content="orca-colab is a zero-dependency Node.js CLI to start Google Colab GPU runtimes, run commands and jobs, sync files and pull results from your terminal or any AI agent.">
+<link rel="canonical" href="https://vzxxbacq.github.io/orca-colab/colab-cli.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Run Google Colab GPUs from the terminal (orca-colab CLI)">
+<meta property="og:description" content="orca-colab is a zero-dependency Node.js CLI to start Google Colab GPU runtimes, run commands and jobs, sync files and pull results from your terminal or any AI agent.">
+<meta property="og:url" content="https://vzxxbacq.github.io/orca-colab/colab-cli.html">
+<meta property="og:image" content="https://vzxxbacq.github.io/orca-colab/cover.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/png" href="icon.png">
+<link rel="stylesheet" href="style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "HowTo", "name": "Run Google Colab GPUs from the terminal (orca-colab CLI)", "description": "orca-colab is a zero-dependency Node.js CLI to start Google Colab GPU runtimes, run commands and jobs, sync files and pull results from your terminal or any AI agent.", "url": "https://vzxxbacq.github.io/orca-colab/colab-cli.html", "tool": [{"@type": "HowToTool", "name": "Orca"}, {"@type": "HowToTool", "name": "Colab GPU (Community) for Orca"}], "step": [{"@type": "HowToStep", "position": 1, "name": "Sign in once", "text": "Run orca-colab auth login; your browser opens Google's consent page. Tick the Colab permission."}, {"@type": "HowToStep", "position": 2, "name": "Start a runtime", "text": "orca-colab up --gpu T4 --json starts or reuses a Colab runtime and reports its GPU."}, {"@type": "HowToStep", "position": 3, "name": "Send your code", "text": "orca-colab sync --json uploads the current folder, honouring .gitignore and .colabignore."}, {"@type": "HowToStep", "position": 4, "name": "Run work", "text": "orca-colab run --json -- nvidia-smi for quick commands, or orca-colab job submit --wait --json -- python3 train.py for tracked jobs with logs."}, {"@type": "HowToStep", "position": 5, "name": "Get results and stop", "text": "orca-colab pull outputs ./results --json downloads results; orca-colab down --json releases the runtime."}]}</script>
+</head>
+<body>
+<main>
+<a class="mark" href="index.html"><svg viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c6cf5"/><stop offset="1" stop-color="#4338ca"/></linearGradient><linearGradient id="bolt" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff7d6"/><stop offset="1" stop-color="#fbbf24"/></linearGradient></defs><rect width="512" height="512" rx="112" fill="url(#bg)"/><g fill="none" stroke="#fff" stroke-opacity=".22" stroke-width="10" stroke-linecap="round"><rect x="116" y="116" width="280" height="280" rx="40"/><path d="M176 116v-36M256 116v-36M336 116v-36M176 396v36M256 396v36M336 396v36M116 176h-36M116 256h-36M116 336h-36M396 176h36M396 256h36M396 336h36"/></g><path fill="url(#bolt)" d="M292 136 L178 290 h70 l-28 86 L348 222 h-72 z"/></svg><span class="brand">Colab GPU (Community) for Orca</span></a>
+<h1>Run Google Colab GPUs from the terminal</h1>
+<p class="sub">orca-colab is the command-line tool behind Colab GPU for Orca. It needs only Node.js 20+, prints one JSON object per command for scripts and agents, and talks to Colab over HTTPS, with no notebook, SSH or VPN.</p>
+<section class="card">
+<h2>Steps</h2>
+<ol>
+<li><strong>Sign in once.</strong> Run orca-colab auth login; your browser opens Google's consent page. Tick the Colab permission.</li>
+<li><strong>Start a runtime.</strong> orca-colab up --gpu T4 --json starts or reuses a Colab runtime and reports its GPU.</li>
+<li><strong>Send your code.</strong> orca-colab sync --json uploads the current folder, honouring .gitignore and .colabignore.</li>
+<li><strong>Run work.</strong> orca-colab run --json -- nvidia-smi for quick commands, or orca-colab job submit --wait --json -- python3 train.py for tracked jobs with logs.</li>
+<li><strong>Get results and stop.</strong> orca-colab pull outputs ./results --json downloads results; orca-colab down --json releases the runtime.</li>
+</ol>
+</section>
+<section class="card"><h2>Install</h2><p>No install step is needed: run it with npx using the pinned command from the latest <a href="https://github.com/vzxxbacq/orca-colab/releases">release</a>. Agents can learn it from the skill: <code>npx skills add vzxxbacq/orca-colab</code>.</p></section>
+<section class="card">
+<h2>More</h2>
+<ul>
+<li><a href="https://orca.dev/plugins/vzxxbacq/orca-colab">Install Colab GPU (Community) for Orca from the Orca plugin directory</a></li>
+<li><a href="index.html#questions">Questions and answers</a></li>
+<li><a href="https://github.com/vzxxbacq/orca-colab">Source code and full CLI reference</a></li>
+</ul>
+</section>
+<footer>© vzxxbacq · MIT License · Community project, not affiliated with Google.</footer>
+</main>
+</body>
+</html>

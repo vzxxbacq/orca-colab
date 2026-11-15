@@ -20,6 +20,7 @@
 <script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "Colab GPU (Community) for Orca", "alternateName": "orca-colab", "description": "Give Claude Code, Codex and your other Orca agents a Google Colab GPU: launch T4, L4 or A100 runtimes, sync code, run training jobs and pull results back.", "url": "https://vzxxbacq.github.io/orca-colab/", "applicationCategory": "DeveloperApplication", "operatingSystem": "macOS, Windows, Linux", "license": "https://spdx.org/licenses/MIT", "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}, "author": {"@type": "Person", "name": "vzxxbacq", "url": "https://github.com/vzxxbacq"}, "sameAs": ["https://github.com/vzxxbacq/orca-colab", "https://orca.dev/plugins/vzxxbacq/orca-colab"], "image": "https://vzxxbacq.github.io/orca-colab/cover.png"}</script>
 <link rel="icon" type="image/png" href="icon.png">
 <link rel="stylesheet" href="style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "What is Colab GPU for Orca?", "acceptedAnswer": {"@type": "Answer", "text": "An Orca plugin and CLI (orca-colab) that gives AI coding agents a GPU. The agent starts a Google Colab runtime on your account, syncs the workspace to it, runs jobs there and pulls the results back."}}, {"@type": "Question", "name": "How do I give Claude Code or Codex a GPU?", "acceptedAnswer": {"@type": "Answer", "text": "Install Colab GPU (Community) for Orca from the Orca plugin directory, sign in with Google in its panel, then ask the agent for GPU work. It runs orca-colab up, sync, job submit, pull and down on its own while you watch live output in the panel."}}, {"@type": "Question", "name": "Can I use it without Orca?", "acceptedAnswer": {"@type": "Answer", "text": "Yes. The CLI runs anywhere with Node.js 20 or newer through npx, and any agent can use it through the colab-gpu skill (npx skills add vzxxbacq/orca-colab)."}}, {"@type": "Question", "name": "Which GPUs can it use?", "acceptedAnswer": {"@type": "Answer", "text": "Whatever Colab offers your account, typically T4, L4 and A100 plus CPU runtimes. You choose which ones agents may start and how many at once."}}, {"@type": "Question", "name": "How much does it cost?", "acceptedAnswer": {"@type": "Answer", "text": "The plugin is free and open source (MIT). Runtimes use your own Colab compute units at Colab's rates; a T4 reported about 1.2 compute units per hour in testing. The panel tracks balance and a monthly budget and stops forgotten idle runtimes after 20 minutes while Orca runs."}}, {"@type": "Question", "name": "Do I need SSH, ngrok, Tailscale or a VPN?", "acceptedAnswer": {"@type": "Answer", "text": "No. Everything goes over HTTPS and WebSockets to the Colab API and the runtime's own proxy; nothing on your network has to be reachable. There is no port forwarding."}}, {"@type": "Question", "name": "How do I get results back from Colab?", "acceptedAnswer": {"@type": "Answer", "text": "orca-colab pull packs a file or folder on the runtime, downloads it over HTTPS and unpacks it locally; checkpoints and weights arrive byte for byte."}}, {"@type": "Question", "name": "How is it different from the Colab extension for VS Code?", "acceptedAnswer": {"@type": "Answer", "text": "Google's extension connects notebooks in VS Code to a Colab runtime for a person to work in. This project is built for agents: a JSON CLI, a job manager with live logs, file sync and pull, budget guardrails and an Orca panel. It is a community project, not affiliated with Google."}}]}</script>
 </head>
 <body>
 <main>
@@ -49,6 +50,35 @@
 <section class="card">
 <h2>How sign-in works</h2>
 <p>You sign in with Google in your own browser. The resulting tokens are stored only on your computer, in <code>~/.orca-colab/google-oauth.json</code>, readable only by your user account. The only server involved is a small <a href="privacy.html">sign-in relay</a> that adds the app's client secret to Google token requests and stores nothing; nothing about your account is kept by the project.</p>
+</section>
+
+<section class="card">
+<h2>Guides</h2>
+<ul>
+<li><a href="claude-code-gpu.html">Give Claude Code a GPU with Google Colab</a></li>
+<li><a href="codex-colab-fine-tuning.html">Fine-tune a model with Codex on a Colab GPU</a></li>
+<li><a href="colab-cli.html">Run Google Colab GPUs from the terminal</a></li>
+</ul>
+</section>
+
+<section class="card" id="questions">
+<h2>Questions</h2>
+<h3>What is Colab GPU for Orca?</h3>
+<p>An Orca plugin and CLI (orca-colab) that gives AI coding agents a GPU. The agent starts a Google Colab runtime on your account, syncs the workspace to it, runs jobs there and pulls the results back.</p>
+<h3>How do I give Claude Code or Codex a GPU?</h3>
+<p>Install Colab GPU (Community) for Orca from the Orca plugin directory, sign in with Google in its panel, then ask the agent for GPU work. It runs orca-colab up, sync, job submit, pull and down on its own while you watch live output in the panel.</p>
+<h3>Can I use it without Orca?</h3>
+<p>Yes. The CLI runs anywhere with Node.js 20 or newer through npx, and any agent can use it through the colab-gpu skill (npx skills add vzxxbacq/orca-colab).</p>
+<h3>Which GPUs can it use?</h3>
+<p>Whatever Colab offers your account, typically T4, L4 and A100 plus CPU runtimes. You choose which ones agents may start and how many at once.</p>
+<h3>How much does it cost?</h3>
+<p>The plugin is free and open source (MIT). Runtimes use your own Colab compute units at Colab&#x27;s rates; a T4 reported about 1.2 compute units per hour in testing. The panel tracks balance and a monthly budget and stops forgotten idle runtimes after 20 minutes while Orca runs.</p>
+<h3>Do I need SSH, ngrok, Tailscale or a VPN?</h3>
+<p>No. Everything goes over HTTPS and WebSockets to the Colab API and the runtime&#x27;s own proxy; nothing on your network has to be reachable. There is no port forwarding.</p>
+<h3>How do I get results back from Colab?</h3>
+<p>orca-colab pull packs a file or folder on the runtime, downloads it over HTTPS and unpacks it locally; checkpoints and weights arrive byte for byte.</p>
+<h3>How is it different from the Colab extension for VS Code?</h3>
+<p>Google&#x27;s extension connects notebooks in VS Code to a Colab runtime for a person to work in. This project is built for agents: a JSON CLI, a job manager with live logs, file sync and pull, budget guardrails and an Orca panel. It is a community project, not affiliated with Google.</p>
 </section>
 
 <section class="card">

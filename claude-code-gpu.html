@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>How to give Claude Code a GPU with Google Colab</title>
+<meta name="description" content="Let Claude Code in Orca start a Google Colab T4, L4 or A100, run training or inference there and pull results back, using your own Colab account.">
+<link rel="canonical" href="https://vzxxbacq.github.io/orca-colab/claude-code-gpu.html">
+<meta property="og:type" content="article">
+<meta property="og:title" content="How to give Claude Code a GPU with Google Colab">
+<meta property="og:description" content="Let Claude Code in Orca start a Google Colab T4, L4 or A100, run training or inference there and pull results back, using your own Colab account.">
+<meta property="og:url" content="https://vzxxbacq.github.io/orca-colab/claude-code-gpu.html">
+<meta property="og:image" content="https://vzxxbacq.github.io/orca-colab/cover.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" type="image/png" href="icon.png">
+<link rel="stylesheet" href="style.css">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "HowTo", "name": "How to give Claude Code a GPU with Google Colab", "description": "Let Claude Code in Orca start a Google Colab T4, L4 or A100, run training or inference there and pull results back, using your own Colab account.", "url": "https://vzxxbacq.github.io/orca-colab/claude-code-gpu.html", "tool": [{"@type": "HowToTool", "name": "Orca"}, {"@type": "HowToTool", "name": "Colab GPU (Community) for Orca"}], "step": [{"@type": "HowToStep", "position": 1, "name": "Install the plugin", "text": "In Orca, install Colab GPU (Community) for Orca from the plugin directory."}, {"@type": "HowToStep", "position": 2, "name": "Sign in with Google", "text": "Open the Colab GPU panel, click Sign in with Google and tick the Colab permission on Google's consent page."}, {"@type": "HowToStep", "position": 3, "name": "Set guardrails", "text": "Under Guardrails & CU, pick the GPUs Claude Code may start (for example T4 and L4) and the maximum number of runtimes."}, {"@type": "HowToStep", "position": 4, "name": "Ask Claude Code for GPU work", "text": "For example: \u201cTrain this model on a T4 and bring back the checkpoint.\u201d Through the colab-gpu skill it runs orca-colab up --gpu T4, sync, job submit --wait and pull."}, {"@type": "HowToStep", "position": 5, "name": "Watch and stop", "text": "Follow live output in the panel; Claude Code runs orca-colab down when it is done, and idle runtimes stop on their own after 20 minutes."}]}</script>
+</head>
+<body>
+<main>
+<a class="mark" href="index.html"><svg viewBox="0 0 512 512" aria-hidden="true"><defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c6cf5"/><stop offset="1" stop-color="#4338ca"/></linearGradient><linearGradient id="bolt" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff7d6"/><stop offset="1" stop-color="#fbbf24"/></linearGradient></defs><rect width="512" height="512" rx="112" fill="url(#bg)"/><g fill="none" stroke="#fff" stroke-opacity=".22" stroke-width="10" stroke-linecap="round"><rect x="116" y="116" width="280" height="280" rx="40"/><path d="M176 116v-36M256 116v-36M336 116v-36M176 396v36M256 396v36M336 396v36M116 176h-36M116 256h-36M116 336h-36M396 176h36M396 256h36M396 336h36"/></g><path fill="url(#bolt)" d="M292 136 L178 290 h70 l-28 86 L348 222 h-72 z"/></svg><span class="brand">Colab GPU (Community) for Orca</span></a>
+<h1>Give Claude Code a GPU with Google Colab</h1>
+<p class="sub">Claude Code runs on your laptop, which usually has no GPU. With Colab GPU for Orca, Claude Code starts a Google Colab runtime on your own account, runs the GPU work there and brings the results back, while your code and credentials stay local.</p>
+<section class="card">
+<h2>Steps</h2>
+<ol>
+<li><strong>Install the plugin.</strong> In Orca, install Colab GPU (Community) for Orca from the plugin directory.</li>
+<li><strong>Sign in with Google.</strong> Open the Colab GPU panel, click Sign in with Google and tick the Colab permission on Google's consent page.</li>
+<li><strong>Set guardrails.</strong> Under Guardrails &amp; CU, pick the GPUs Claude Code may start (for example T4 and L4) and the maximum number of runtimes.</li>
+<li><strong>Ask Claude Code for GPU work.</strong> For example: “Train this model on a T4 and bring back the checkpoint.” Through the colab-gpu skill it runs orca-colab up --gpu T4, sync, job submit --wait and pull.</li>
+<li><strong>Watch and stop.</strong> Follow live output in the panel; Claude Code runs orca-colab down when it is done, and idle runtimes stop on their own after 20 minutes.</li>
+</ol>
+</section>
+<section class="card"><h2>What Claude Code runs</h2><pre class="cmd">orca-colab up --gpu T4 --json
+orca-colab sync --json
+orca-colab job submit --name "Train" --wait --json -- python3 train.py
+orca-colab pull checkpoints ./results --json
+orca-colab down --json</pre></section>
+<section class="card">
+<h2>More</h2>
+<ul>
+<li><a href="https://orca.dev/plugins/vzxxbacq/orca-colab">Install Colab GPU (Community) for Orca from the Orca plugin directory</a></li>
+<li><a href="index.html#questions">Questions and answers</a></li>
+<li><a href="https://github.com/vzxxbacq/orca-colab">Source code and full CLI reference</a></li>
+</ul>
+</section>
+<footer>© vzxxbacq · MIT License · Community project, not affiliated with Google.</footer>
+</main>
+</body>
+</html>

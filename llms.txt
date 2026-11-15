@@ -1,0 +1,19 @@
+# Colab GPU for Orca (orca-colab)
+
+> Colab GPU for Orca is an Orca plugin and command-line tool that lets Claude Code, Codex and other AI coding agents run jobs on Google Colab GPUs (T4, L4, A100) from the user's own Colab account. The agent starts a runtime, syncs the workspace, runs training, fine-tuning or inference jobs with live logs, pulls results back and releases the runtime. Code, agents and credentials stay on the user's machine; everything goes over HTTPS to the Colab API (no SSH, VPN or notebook). Free and open source (MIT); a community project, not affiliated with Google. Listed in the Orca plugin directory as "Colab GPU (Community) for Orca".
+
+## Install and use
+- [Orca plugin directory listing](https://orca.dev/plugins/vzxxbacq/orca-colab): install in Orca, then sign in with Google in the Colab GPU panel
+- [README](https://github.com/vzxxbacq/orca-colab#readme): quick start, FAQ, CLI overview
+- [CLI reference](https://github.com/vzxxbacq/orca-colab/blob/main/skills/colab-gpu/references/cli.md): every command, flag and exit code
+- [Agent skill](https://github.com/vzxxbacq/orca-colab/blob/main/skills/colab-gpu/SKILL.md): the procedure agents follow (`npx skills add vzxxbacq/orca-colab`)
+
+## Guides
+- [Give Claude Code a GPU with Google Colab](https://vzxxbacq.github.io/orca-colab/claude-code-gpu.html)
+- [Fine-tune a model with Codex on a Colab GPU](https://vzxxbacq.github.io/orca-colab/codex-colab-fine-tuning.html)
+- [Run Google Colab GPUs from the terminal](https://vzxxbacq.github.io/orca-colab/colab-cli.html)
+
+## Optional
+- [Design and decisions](https://github.com/vzxxbacq/orca-colab/blob/main/docs/DESIGN.md)
+- [Privacy policy](https://vzxxbacq.github.io/orca-colab/privacy.html): what the sign-in relay does and does not do
+- [Releases](https://github.com/vzxxbacq/orca-colab/releases)

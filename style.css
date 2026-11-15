@@ -35,3 +35,8 @@ code{font:14px var(--mono);color:var(--amber);background:rgba(251,191,36,.08);bo
 .meta{margin-top:14px;font-size:15px}
 footer{margin-top:48px;border-top:1px solid var(--line);padding-top:18px;font-size:14px;color:var(--dim)}
 @media (max-width:560px){main{padding-top:40px}.cmd{white-space:normal;line-height:1.8}.card{padding:4px 18px 18px}.mark svg{width:44px;height:44px}}
+ol{padding-left:0;list-style:none;counter-reset:step}
+ol li{counter-increment:step;padding-left:30px}
+ol li::before{content:counter(step);width:20px;height:20px;top:.15em;left:0;border-radius:50%;background:none;box-shadow:none;border:1px solid var(--green);color:var(--green);font-size:12px;line-height:20px;text-align:center}
+pre.cmd{white-space:pre-wrap;line-height:1.6}
+h3{margin:18px 0 4px;font-size:15px}
