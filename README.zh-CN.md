@@ -4,6 +4,8 @@
 
 ![Colab GPUs, run by your agent](./assets/cover.png)
 
+**Colab GPU for Orca**（`orca-colab`）是一个 Orca 插件和命令行工具，让 Claude Code、Codex 等 AI 编程 Agent 在 Google Colab GPU 上运行任务。
+
 Agent 需要 GPU，笔记本却没有。**Colab GPU for Orca** 让 [Orca](https://github.com/stablyai/orca) 里的
 Claude Code、Codex 等 Agent 自己开一台 Google Colab T4、L4 或 A100，同步工作区，跑训练、微调或推理，把权重和
 指标拉回本地，用完自动释放；Orca 面板里能看到实时输出和算力消耗。代码、Agent 和凭据都留在本机，用的是你自己的
@@ -76,6 +78,52 @@ orca-colab down --json                                          # 释放运行�
 
 整个流程（含 2048² fp16 矩阵乘法约 21 TFLOPS、200 步 CNN 训练）只占用约一分钟运行时，消耗约 0.03 个计算单元。
 面板和 `credits --json` 中的算力数字都是估算值并明确标注，可随时按真实余额校准。
+
+## 常见问题
+
+### Colab GPU for Orca 是什么？
+一个 Orca 插件和命令行工具（`orca-colab`），让 AI 编程 Agent 用上 GPU：Agent 在你的账号下开一台 Google Colab
+运行时，把工作区同步过去，在上面跑任务，再把结果拉回本地。在 Orca 插件目录中的名字是 *Colab GPU (Community) for Orca*。
+
+### 怎样让 Claude Code（或 Codex）用上 GPU？
+在 Orca 里安装插件，在 Colab GPU 面板点 **Sign in with Google**，然后直接让 Agent 做 GPU 任务。它会通过自带的
+`colab-gpu` skill 自己运行 `orca-colab up --gpu T4`、`sync`、`job submit --wait`、`pull` 和 `down`，你在面板里看实时输出。
+
+### 不用 Orca 可以吗？
+可以。CLI 在任何装了 Node.js 20+ 的机器上都能运行：`npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/<release> <command> --json`
+（每个 [release](https://github.com/vzxxbacq/orca-colab/releases) 里都有固定版本的完整命令）。任何 Agent 都可以通过
+skill 使用它：`npx skills add vzxxbacq/orca-colab`。
+
+### 能用哪些 GPU？
+你的 Colab 账号能用的都可以，通常是 T4、L4、A100，以及 CPU 运行时。在 **Guardrails & CU** 里可以限定 Agent 能开哪些 GPU、最多同时开几台。
+
+### 要花多少钱？
+插件本身免费、开源（MIT）。运行时消耗的是你自己的 Colab 计算单元，按 Colab 的费率计（我们实测 T4 约每小时 1.2 CU）。
+面板会跟踪余额和月度预算；Orca 运行时，闲置的运行时会在 20 分钟后被自动停掉（可配置）。在 T4 上跑一次完整的冒烟测试约 1 分钟、约 0.03 CU。
+
+### 需要 SSH、ngrok、Tailscale 或 VPN 吗？
+不需要。所有通信都是通过 HTTPS 和 WebSocket 访问 Colab API 和运行时自带的代理，不需要内网可达，也不开放任何端口。
+相应地也没有端口转发：要访问运行时上的服务，用 `orca-colab run -- curl -s localhost:<端口>/...`。
+
+### 我的代码会离开本机吗？
+只有你同步的内容，而且只会到你自己的 Colab 运行时。Agent、工作区和 Google token 都留在本机。登录换 token 的请求会经过一个
+[小型中转](#google-登录中转)，它只补上应用的 client secret，不保存任何内容。
+
+### 怎么把结果拿回来？
+`orca-colab pull <远程路径> <本地目录> --json` 会在运行时上打包文件或目录，通过 HTTPS 下载后在本地解压。
+二进制文件（checkpoint、权重）按字节原样到达。
+
+### Colab 运行时断开了怎么办？
+Colab 运行时是一次性的，并且有时长限制。结果一产生就及时拉回；运行时没了，`status --json` 会显示出来，Agent 可以重新
+`down`、`up`、`sync`。
+
+### 和 Colab 的 VS Code 扩展有什么区别？
+Google 的扩展是把 VS Code 里打开的 notebook 连接到 Colab 运行时，供人使用。本项目是为 Agent 做的：JSON 输出的 CLI、
+带实时日志的任务管理、文件同步和拉回、预算限制，以及 Orca 面板。本项目是社区项目，与 Google 无关联。
+
+### 和 Modal、RunPod 等 GPU 云有什么区别？
+它们是独立的 GPU 云，需要单独的账号和付费，更适合长时间运行或生产负载。Colab GPU for Orca 复用你已有的 Colab 订阅或计算单元，
+适合在 Colab 会话时长内做交互式实验、微调和评测。
 
 ## CLI
 
