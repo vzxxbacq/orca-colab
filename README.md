@@ -4,6 +4,9 @@
 
 ![Colab GPUs, run by your agent](./assets/cover.png)
 
+**Colab GPU for Orca** (`orca-colab`) is an Orca plugin and command-line tool that lets Claude Code, Codex and other
+AI coding agents run jobs on Google Colab GPUs.
+
 Your coding agent needs a GPU; your laptop doesn't have one. **Colab GPU for Orca** lets Claude Code, Codex
 and any other agent in [Orca](https://github.com/stablyai/orca) start a Google Colab T4, L4 or A100 runtime
 on its own, sync the workspace, run training, fine-tuning or inference jobs, pull checkpoints and metrics
@@ -85,6 +88,61 @@ orca-colab down --json                                          # runtime releas
 The whole round trip, including a 2048² fp16 matmul (≈21 TFLOPS) and 200 CNN training steps, took about
 a minute of runtime and roughly 0.03 Compute Units. Credits in the panel and in `credits --json` are
 estimates, labelled as such, and calibrated against your real balance on request.
+
+## FAQ
+
+### What is Colab GPU for Orca?
+An Orca plugin and CLI (`orca-colab`) that gives AI coding agents a GPU. The agent starts a Google Colab
+runtime on your account, syncs the workspace to it, runs jobs there and pulls the results back. It is listed
+in the Orca plugin directory as *Colab GPU (Community) for Orca*.
+
+### How do I give Claude Code (or Codex) a GPU?
+Install the plugin in Orca, click **Sign in with Google** in the Colab GPU panel, then ask the agent for GPU
+work. Through the bundled `colab-gpu` skill it runs `orca-colab up --gpu T4`, `sync`, `job submit --wait`,
+`pull` and `down` on its own, and you watch the live output in the panel.
+
+### Can I use it without Orca?
+Yes. The CLI runs anywhere with Node.js 20+: `npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/<release> <command> --json`
+(the exact pinned command is in each [release](https://github.com/vzxxbacq/orca-colab/releases)). Any agent
+can use it through the skill: `npx skills add vzxxbacq/orca-colab`.
+
+### Which GPUs can it use?
+Whatever Colab offers your account: typically T4, L4 and A100, plus CPU runtimes. You choose which ones
+agents may start and how many at once under **Guardrails & CU**.
+
+### How much does it cost?
+The plugin is free and open source (MIT). Runtimes use your own Colab compute units at Colab's rates (a T4
+reported about 1.2 CU/hour in our tests). The panel tracks your balance and a monthly budget, and, while Orca
+is running, stops a forgotten idle runtime after 20 minutes (configurable). A full smoke test on a T4 took
+about a minute and roughly 0.03 CU.
+
+### Do I need SSH, ngrok, Tailscale or a VPN?
+No. Everything goes over HTTPS and WebSockets to the Colab API and the runtime's own proxy. Nothing has to be
+reachable on your network and no port is opened. The flip side: there is no port forwarding; to query a
+server running on the runtime, use `orca-colab run -- curl -s localhost:<port>/...`.
+
+### Does my code leave my machine?
+Only what you sync, and only to your own Colab runtime. Agents, the workspace and your Google tokens stay on
+your computer. Sign-in token requests pass through a [small relay](#google-sign-in-relay) that adds the app's
+client secret and stores nothing.
+
+### How do I get results back?
+`orca-colab pull <remote path> <local dir> --json` packs the file or folder on the runtime, downloads it over
+HTTPS and unpacks it locally. Binary files (checkpoints, weights) arrive byte for byte.
+
+### What happens when the Colab runtime disconnects?
+Colab runtimes are disposable and time-limited. Pull results as soon as they exist; if a runtime is gone,
+`status --json` shows it and the agent can `down`, `up` and `sync` again.
+
+### How is it different from the Colab extension for VS Code?
+Google's extension connects notebooks open in VS Code to a Colab runtime for a person to work in. This
+project is built for agents: a JSON CLI, a job manager with live logs, file sync and pull, budget guardrails
+and an Orca panel. It is a community project, not affiliated with Google.
+
+### How is it different from Modal, RunPod or other GPU clouds?
+Those are separate GPU clouds with their own accounts and billing, better suited to long-running or
+production workloads. Colab GPU for Orca reuses the Colab subscription or compute units you already have and
+fits interactive experiments, fine-tuning and evaluation runs within Colab's session limits.
 
 ## CLI
 
