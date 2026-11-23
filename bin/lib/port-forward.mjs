@@ -12,6 +12,7 @@ import {
 import { getValidAccessToken } from "./colab-oauth.mjs";
 import { jupyterFilesUrl, uploadJupyterFile } from "./jupyter-files.mjs";
 import { readSession, writeSession } from "./session-store.mjs";
+import { isProcessAlive } from "./task-store.mjs";
 
 // Colab's proxy reaches only Jupyter on 8080 (other ports, the per-port hosts and /proxy/<port> answer
 // 404), and Jupyter there has no proxy extension. So a request travels as a file: the local listener
@@ -83,10 +84,7 @@ def complete(path):
 
 # Jupyter stats a file again right after saving it, so a request file stays in place for a while; this set
 # is what keeps it from running twice.
-seen = set()
-for entry in os.scandir(root):
-    if entry.name.startswith(("req-", "res-", "tmp-")):
-        os.remove(entry.path)
+seen = {entry.name[4:-5] for entry in os.scandir(root) if entry.name.startswith("res-") and entry.name.endswith(".json")}
 open(os.path.join(root, "alive"), "w").close()
 last_beat = 0
 while True:
@@ -124,6 +122,18 @@ const HOP_BY_HOP = new Set([
   "transfer-encoding",
   "upgrade",
 ]);
+
+// Forwards of a session whose process still runs; what `status` and the panel show.
+export function liveForwards(session, checkPid = isProcessAlive) {
+  return (session?.forwards ?? []).filter((forward) => checkPid(forward.pid));
+}
+
+function recordForward(sessionName, homeDir, entry, { remove = false } = {}) {
+  const session = readSession(sessionName, homeDir);
+  if (!session) return;
+  const others = liveForwards(session).filter((forward) => forward.pid !== entry.pid || forward.listen !== entry.listen);
+  writeSession({ ...session, forwards: remove ? others : [...others, entry] }, homeDir);
+}
 
 export class SessionGoneError extends Error {
   constructor(sessionName, detail) {
@@ -316,17 +326,25 @@ export async function startPortForward({
       `${JSON.stringify({ id, method: req.method, target: req.url, headers, bodyBytes: body.length })}\n`,
       "utf8",
     );
-    await uploadJupyterFile({
-      baseUrl: channel.baseUrl(),
-      proxyToken: "",
-      remotePath: `${root}/req-${id}`,
-      contentBase64: Buffer.concat([head, body]).toString("base64"),
-      fetchImpl: channel.fetch,
+    const upload = () =>
+      uploadJupyterFile({
+        baseUrl: channel.baseUrl(),
+        proxyToken: "",
+        remotePath: `${root}/req-${id}`,
+        contentBase64: Buffer.concat([head, body]).toString("base64"),
+        fetchImpl: channel.fetch,
+      });
+    // The proxy answers 404, not 401, to a token that has expired, so a refused upload is tried once more
+    // with a fresh token; a runtime that is gone fails the refresh with SessionGoneError.
+    await upload().catch(async () => {
+      await channel.refreshToken();
+      await upload();
     });
 
     const deadline = Date.now() + (requestTimeoutSeconds + 20) * 1000;
     const startedMs = Date.now();
     let checkedMs = startedMs;
+    let helperMissing = false;
     let meta = null;
     let aborted = false;
     res.on("close", () => {
@@ -353,7 +371,13 @@ export async function startPortForward({
         const beat = await channel.fetch(jupyterFilesUrl(channel.baseUrl(), `${root}/beat`));
         await beat.arrayBuffer().catch(() => {});
         if (!beat.ok) {
-          throw new Error(`the forwarding helper on the runtime does not answer (HTTP ${beat.status})`);
+          if (helperMissing) {
+            throw new Error(`the forwarding helper on the runtime does not answer (HTTP ${beat.status})`);
+          }
+          helperMissing = true;
+          await channel.refreshToken();
+        } else {
+          helperMissing = false;
         }
       }
       // The first seconds poll back to back: one round trip is already about a quarter of a second.
@@ -419,14 +443,24 @@ export async function startPortForward({
   });
   const timer = setInterval(() => void keepAlive(), 30_000);
   timer.unref?.();
+  const address = server.address();
+  const record = {
+    pid: process.pid,
+    remotePort,
+    listen: `${address.family === "IPv6" ? `[${address.address}]` : address.address}:${address.port}`,
+    startedAt: new Date().toISOString(),
+  };
+  recordForward(sessionName, homeDir, record);
 
   return {
     root,
-    address: server.address(),
+    address,
+    listen: record.listen,
     async close() {
       if (closed) return;
       closed = true;
       clearInterval(timer);
+      recordForward(sessionName, homeDir, record, { remove: true });
       server.closeAllConnections?.();
       await new Promise((resolve) => server.close(resolve));
       try {

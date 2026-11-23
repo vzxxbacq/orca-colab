@@ -4,9 +4,9 @@ import { startPortForward } from "../lib/port-forward.mjs";
 import { withSessionActivity } from "../lib/session-activity.mjs";
 import { requireColabRuntime, resolveSession } from "../lib/session-store.mjs";
 
-function parsePort(value, what) {
+function parsePort(value, what, lowest = 1) {
   const port = Number(value);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+  if (!Number.isInteger(port) || port < lowest || port > 65535) {
     throw new CliError(`invalid ${what}: ${value}`);
   }
   return port;
@@ -55,7 +55,8 @@ export async function run(
   if (opts.listen) {
     const at = opts.listen.lastIndexOf(":");
     listenHost = at > 0 ? opts.listen.slice(0, at).replace(/^\[|\]$/g, "") : listenHost;
-    listenPort = parsePort(at >= 0 ? opts.listen.slice(at + 1) : opts.listen, "--listen");
+    // Port 0 lets the system pick a free one; the chosen address is printed.
+    listenPort = parsePort(at >= 0 ? opts.listen.slice(at + 1) : opts.listen, "--listen", 0);
   }
   const requestTimeoutSeconds = Number(opts.timeout);
   if (!Number.isFinite(requestTimeoutSeconds) || requestTimeoutSeconds <= 0) {
@@ -64,6 +65,11 @@ export async function run(
 
   const session = resolveSession({ sessionName: opts.session ?? null, homeDir });
   requireColabRuntime(session);
+
+  // Started by the MCP server, the listener outlives the pipes it was given.
+  for (const stream of [stdout, stderr]) {
+    stream.on?.("error", () => {});
+  }
 
   const serve = async () => {
     const forward = await startForward({
@@ -77,12 +83,11 @@ export async function run(
       ...(execTty ? { execTty } : {}),
       onLog: (line) => log(line, stderr),
     });
-    const host = forward.address.family === "IPv6" ? `[${forward.address.address}]` : forward.address.address;
-    const url = `http://${host}:${forward.address.port}`;
+    const url = `http://${forward.listen}`;
     log(`Forwarding ${url} -> ${session.name} port ${remotePort}. Press Ctrl-C to stop.`, stderr);
     if (json) {
       writeJson(
-        { ok: true, session: session.name, remotePort, listen: `${forward.address.address}:${forward.address.port}`, url },
+        { ok: true, session: session.name, remotePort, listen: forward.listen, url, pid: process.pid },
         stdout,
       );
     }

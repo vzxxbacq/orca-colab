@@ -109,7 +109,7 @@ test("mcp handshake: initialize, ping, tools/list and JSON-RPC errors", async (t
     [
       "doctor", "auth_status", "auth_login", "auth_wait", "auth_redirect", "auth_list", "auth_switch", "auth_logout",
       "status", "up", "sync", "run", "job_submit", "job_list", "job_logs", "job_wait", "job_stop", "pull", "down",
-      "credits", "credits_calibrate", "credits_set", "credits_budget", "ledger", "rates",
+      "forward_start", "forward_stop", "credits", "credits_calibrate", "credits_set", "credits_budget", "ledger", "rates",
     ],
   );
   for (const tool of list.result.tools) {
@@ -148,7 +148,7 @@ test("every CLI command and flag is covered by an MCP tool or listed as not expo
     }
   }
   assert.deepEqual([...toolNames].sort(), [...covered].sort());
-  for (const command of ["watch", "mcp", "forward"]) {
+  for (const command of ["watch", "mcp"]) {
     assert.deepEqual(CLI_COVERAGE[command].tools, []);
   }
 });

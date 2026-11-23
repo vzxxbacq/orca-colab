@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import { execCommandOverTty } from "./colab-api-client.mjs";
 import { listOAuthAccounts, remoteBrowserSignInNote } from "./colab-oauth.mjs";
 import { openUrlInSystemBrowser } from "./open-url.mjs";
+import { liveForwards } from "./port-forward.mjs";
+import { listSessions } from "./session-store.mjs";
 import { listTasks, readTask, readTaskLog, taskLogPath } from "./task-store.mjs";
 
 const CLI_ENTRY_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "orca-colab.mjs");
@@ -36,7 +38,7 @@ Call auth_login. It opens Google's consent page in the owner's browser on this m
 Hygiene
 - sync is for code (256 MB cap; honours .gitignore and .colabignore). Have the runtime download datasets and weights itself.
 - Commands on one runtime may run at the same time (a run while a job runs, several jobs); they share its GPU and memory.
-- There is no port forwarding. Query a service on the runtime with run, for example "curl -s localhost:8000/metrics".
+- To query a service on the runtime once, use run, for example "curl -s localhost:8000/metrics". To make an HTTP service on the runtime reachable from this machine, use forward_start: it listens on 127.0.0.1 here and forwards each request (about half a second on top, no streaming or WebSockets). Never run a tunnel (cloudflared, ngrok, ssh -R) on the runtime: Colab takes such runtimes away. A public tunnel, if the owner wants one, runs on this machine in front of the forward.
 - Pass secrets with env only when the owner agrees, and never write them to files on the runtime.
 - The owner sees every runtime, run and job live in the Colab GPU panel in Orca, and may stop them, switch account or change the guardrails there at any time; your next call sees the result.
 - Results carry ok; failures carry error and often hint. Error texts name CLI commands: "orca-colab auth login" is the auth_login tool, "orca-colab job logs" is job_logs, and so on.
@@ -186,7 +188,7 @@ const TOOL_SPECS = [
     name: "status",
     title: "List Colab runtimes",
     description:
-      "Lists the sessions (runtimes) known on this machine: name, gpu, rateKey, cuPerHour, account, remoteRoot, ageSeconds, state and reachable. Same as the CLI's status and ls. A session with reachable false is a zombie: call down for it. recentlyEnded lists the sessions that ended in the last 24 hours with endedAt, cause (user, idle-watchdog, colab-died) and a reason, so a session that is missing is explained: tell the owner the cause instead of guessing.",
+      "Lists the sessions (runtimes) known on this machine: name, gpu, rateKey, cuPerHour, account, remoteRoot, ageSeconds, state and reachable. Same as the CLI's status and ls. forwards lists active port forwards (listen address, remote port, pid). A session with reachable false is a zombie: call down for it. recentlyEnded lists the sessions that ended in the last 24 hours with endedAt, cause (user, idle-watchdog, colab-died) and a reason, so a session that is missing is explained: tell the owner the cause instead of guessing.",
     inputSchema: schema(),
     annotations: READ_ONLY,
   },
@@ -329,6 +331,34 @@ const TOOL_SPECS = [
     annotations: DESTRUCTIVE,
   },
   {
+    name: "forward_start",
+    title: "Forward a local HTTP port to the runtime",
+    description:
+      "Starts a listener on this machine (http://127.0.0.1:<local port> by default) that forwards every HTTP request to a port on the runtime and returns the response: method, path, query, headers, body and status pass through unchanged. Use it to reach an HTTP service running on the runtime (an API, a dashboard) from this machine, or to put a tunnel in front of it here; nothing tunnel-like has to run on Colab. It keeps running in the background after this call, also when this server stops, and keeps the session from being auto-stopped; stop it with forward_stop. Each request costs about half a second on top; responses arrive when complete (no streaming, no WebSockets); bodies up to about 250 MB. status lists active forwards.",
+    inputSchema: schema(
+      {
+        port: { type: "integer", minimum: 1, maximum: 65535, description: "Port the service listens on, on the runtime (127.0.0.1)." },
+        listen: {
+          type: "string",
+          description: "Local address to listen on, as host:port or a port. Default 127.0.0.1:<port>. Bind anything but 127.0.0.1 only when the owner asks.",
+        },
+        session: SESSION_PROP,
+        timeout_seconds: { type: "integer", minimum: 1, maximum: 3600, description: "Longest a single request may take (default 300)." },
+      },
+      ["port"],
+    ),
+  },
+  {
+    name: "forward_stop",
+    title: "Stop a port forward",
+    description: "Stops a forward started with forward_start or 'orca-colab forward'. Give its pid (from forward_start or status) or its listen address.",
+    inputSchema: schema({
+      pid: { type: "integer", minimum: 1, description: "pid of the forward." },
+      listen: { type: "string", description: "Its local address, e.g. 127.0.0.1:8000." },
+    }),
+    annotations: DESTRUCTIVE,
+  },
+  {
     name: "credits",
     title: "Compute-unit balance and budget",
     description:
@@ -419,16 +449,7 @@ export const CLI_COVERAGE = {
   rates: { tools: ["rates"], flags: ["set"] },
   watch: { tools: [], flags: [], notExposed: { "auto-stop-idle-minutes": "plugin bridge", "no-watchdog": "plugin bridge" } },
   mcp: { tools: [], flags: [] },
-  forward: {
-    tools: [],
-    flags: [],
-    notExposed: {
-      session: "long-running listener, started from a terminal",
-      port: "long-running listener, started from a terminal",
-      listen: "long-running listener, started from a terminal",
-      timeout: "long-running listener, started from a terminal",
-    },
-  },
+  forward: { tools: ["forward_start", "forward_stop"], flags: ["session", "port", "listen", "timeout"] },
 };
 
 class ToolInputError extends Error {}
@@ -522,7 +543,7 @@ function sleep(ms, signal) {
 
 // `run` goes through a child CLI process: the task record's localPid is what the panel's Stop button and
 // `job stop` terminate, and in-process that pid would be this server.
-export function runCliInChildProcess(argv, { env, timeoutMs, signal, spawnChild = spawn } = {}) {
+export function runCliInChildProcess(argv, { env, timeoutMs, signal, untilFirstLine = false, spawnChild = spawn } = {}) {
   return new Promise((resolve) => {
     const child = spawnChild(process.execPath, [CLI_ENTRY_PATH, ...argv], {
       env,
@@ -546,7 +567,15 @@ export function runCliInChildProcess(argv, { env, timeoutMs, signal, spawnChild 
       child.stderr?.unref?.();
       finish({ timedOut: true });
     }, timeoutMs);
-    child.stdout?.on("data", (chunk) => { stdout += chunk; });
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk;
+      if (untilFirstLine && stdout.includes("\n")) {
+        child.unref?.();
+        child.stdout?.unref?.();
+        child.stderr?.unref?.();
+        finish({ exitCode: 0 });
+      }
+    });
     child.stderr?.on("data", (chunk) => { stderr += chunk; });
     child.on("error", (err) => finish({ exitCode: 1, stderr: `${stderr}${err.message}` }));
     child.on("close", (code) => finish({ exitCode: code ?? 1 }));
@@ -572,6 +601,7 @@ export function createColabMcpTools({
   commandContext = {},
   openBrowser = openUrlInSystemBrowser,
   runCliChild = runCliInChildProcess,
+  stopProcess = (pid) => process.kill(pid, "SIGTERM"),
   execTty = execCommandOverTty,
   signInTimeoutMs = SIGN_IN_TIMEOUT_MS,
   taskPollMs = 500,
@@ -1002,6 +1032,38 @@ export function createColabMcpTools({
       if (args.session) argv.push(`--session=${args.session}`);
       argv.push("--", args.remote_path, localDir);
       return toResult(await runCli(argv, { ...ctx, context: { execTty: boundedTty(900, ctx.signal) } }));
+    },
+
+    forward_start: async (args) => {
+      const argv = ["forward", "--json", `--port=${args.port}`];
+      if (args.session) argv.push(`--session=${args.session}`);
+      if (args.listen) argv.push(`--listen=${args.listen}`);
+      if (args.timeout_seconds) argv.push(`--timeout=${args.timeout_seconds}`);
+      // The listener must outlive this call, so it is its own process; it reports once it listens.
+      const child = await runCliChild(argv, { env, timeoutMs: 90_000, untilFirstLine: true });
+      const payload = parseJsonObject(child.stdout);
+      const log = child.stderr.split(/\r?\n/).map((l) => l.replace(/^\[colab\]\s*/, "").trim()).filter(Boolean);
+      if (Object.keys(payload).length === 0) {
+        payload.ok = false;
+        payload.error = log.at(-1)?.replace(/^error:\s*/, "") || "the forward did not start";
+      }
+      return toResult({ exitCode: payload.ok ? 0 : child.exitCode ?? 1, payload, log });
+    },
+
+    forward_stop: async (args) => {
+      const forwards = listSessions(homeDir).flatMap((session) =>
+        liveForwards(session).map((forward) => ({ session: session.name, ...forward })),
+      );
+      const target = forwards.find((f) => (args.pid ? f.pid === args.pid : f.listen === args.listen));
+      if (!target) {
+        throw new ToolInputError(
+          forwards.length > 0
+            ? `No such forward. Active: ${forwards.map((f) => `pid ${f.pid} on ${f.listen} (${f.session})`).join(", ")}.`
+            : "No forward is active.",
+        );
+      }
+      stopProcess(target.pid);
+      return { ok: true, stopped: target };
     },
 
     down: async (args) => {

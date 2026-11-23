@@ -1,5 +1,6 @@
 import { EXIT_OK, log, writeJson } from "../lib/cli-output.mjs";
 import { listRecentSessionEnds } from "../lib/credit-ledger.mjs";
+import { liveForwards } from "../lib/port-forward.mjs";
 import { listSessions } from "../lib/session-store.mjs";
 
 export async function run(
@@ -25,6 +26,7 @@ export async function run(
     return {
       ...session,
       ...(session.colabRuntime ? { colabRuntime } : {}),
+      forwards: liveForwards(session),
       reachable: Boolean(session.colabRuntime?.baseUrl) && session.state !== "zombie",
       ageSeconds,
     };
@@ -50,6 +52,9 @@ export async function run(
       `${s.name} (account=${s.account}) gpu="${gpuLabel}" reachable=${s.reachable} state=${s.state} age=${s.ageSeconds}s`,
       stderr,
     );
+    for (const f of s.forwards) {
+      log(`  forward http://${f.listen} -> port ${f.remotePort} (pid ${f.pid})`, stderr);
+    }
   }
   return EXIT_OK;
 }
