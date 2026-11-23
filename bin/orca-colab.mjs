@@ -26,6 +26,7 @@ const COMMANDS = new Set([
   "rates",
   "watch",
   "mcp",
+  "forward",
 ]);
 
 const HELP_TEXT = `Usage: orca-colab <command> [options]
@@ -45,6 +46,7 @@ Commands:
   ledger     Show session and calibration history
   rates      View or update the GPU compute-unit rate table
   watch      Stream panel state for the Orca plugin (runs inside an Orca terminal on a remote server)
+  forward    Forward a local HTTP port to a port on the Colab session
   mcp        Serve every command as MCP tools on stdio (connector for Orca bots, Claude Code, Codex)
 
 Global options:

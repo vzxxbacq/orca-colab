@@ -419,6 +419,16 @@ export const CLI_COVERAGE = {
   rates: { tools: ["rates"], flags: ["set"] },
   watch: { tools: [], flags: [], notExposed: { "auto-stop-idle-minutes": "plugin bridge", "no-watchdog": "plugin bridge" } },
   mcp: { tools: [], flags: [] },
+  forward: {
+    tools: [],
+    flags: [],
+    notExposed: {
+      session: "long-running listener, started from a terminal",
+      port: "long-running listener, started from a terminal",
+      listen: "long-running listener, started from a terminal",
+      timeout: "long-running listener, started from a terminal",
+    },
+  },
 };
 
 class ToolInputError extends Error {}

@@ -148,7 +148,7 @@ test("every CLI command and flag is covered by an MCP tool or listed as not expo
     }
   }
   assert.deepEqual([...toolNames].sort(), [...covered].sort());
-  for (const command of ["watch", "mcp"]) {
+  for (const command of ["watch", "mcp", "forward"]) {
     assert.deepEqual(CLI_COVERAGE[command].tools, []);
   }
 });
