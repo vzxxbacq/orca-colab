@@ -157,6 +157,7 @@ export async function assignRuntime({
   reuseExisting = true,
   excludeRuntimeIds = [],
   maxAttempts = 3,
+  maxWaitMs = 120_000,
   onProgress = null,
   publicApiDomain = COLAB_OAUTH_CONFIG.colabPublicApiDomain,
   fetchImpl = fetch,
@@ -221,23 +222,31 @@ export async function assignRuntime({
     const createUrl = new URL("/v1beta/runtimes", publicApiDomain);
     createUrl.searchParams.set("requestId", randomUUID());
 
-    let operation = await colabJsonRequest(createUrl, {
-      method: "POST",
-      accessToken,
-      body: { runtimeSpec },
-      fetchImpl,
-      signal,
-    });
+    let operation;
+    try {
+      operation = await colabJsonRequest(createUrl, {
+        method: "POST",
+        accessToken,
+        body: { runtimeSpec },
+        fetchImpl,
+        signal,
+      });
+    } catch (err) {
+      if (/highmem shape not available/i.test(String(err?.message))) {
+        throw new Error(`Colab does not offer the high-RAM shape for ${gpu}; start it without --high-ram.`);
+      }
+      throw err;
+    }
 
     const opName = operation.name;
     const pendingRuntimeId = stripResourcePrefix(
       operation?.metadata?.runtime || "",
       "runtimes/",
     );
-    let pollCount = 0;
-    let pollTimedOut = false;
-    while (!operation.done && opName && pollCount < 2) {
-      pollCount += 1;
+    // Colab keeps the operation pending while it looks for a machine: seconds for a T4, half a minute
+    // or more for scarce GPUs, and it ends in an error when the pool is empty.
+    const startedMs = Date.now();
+    while (!operation.done && opName && Date.now() - startedMs < maxWaitMs) {
       const opId = stripResourcePrefix(opName, "operations/");
       const waitUrl = new URL(
         `/v1/operations/${encodeURIComponent(opId)}:wait`,
@@ -257,11 +266,10 @@ export async function assignRuntime({
           signal: pollSignal,
         });
       } catch (pollErr) {
-        if (!signal?.aborted) {
-          pollTimedOut = true;
-        } else {
+        if (signal?.aborted) {
           throw pollErr;
         }
+        await new Promise((r) => setTimeout(r, 1000));
       }
 
       if (!operation?.done) {
@@ -286,22 +294,27 @@ export async function assignRuntime({
           });
           if (readyRt) {
             operation = { done: true, response: readyRt };
-            pollTimedOut = false;
             break;
           }
         } catch {
           // Ignore fallback list check error.
         }
+        if (typeof onProgress === "function") {
+          onProgress(
+            `Colab is still allocating the ${gpu} runtime (${Math.round((Date.now() - startedMs) / 1000)}s)...`,
+          );
+        }
       }
     }
 
-    if (pollTimedOut && !operation.done) {
-      lastError = new Error("Colab runtime assignment timed out waiting for operation; retrying...");
-      if (attempt < maxAttempts) {
-        await new Promise((r) => setTimeout(r, 1000));
-        continue;
+    if (!operation.done && opName) {
+      // Withdrawn so that an assignment finishing later cannot bill without a session on this machine.
+      if (pendingRuntimeId) {
+        await deleteRuntime({ runtimeId: pendingRuntimeId, accessToken, publicApiDomain, fetchImpl }).catch(() => {});
       }
-      throw lastError;
+      throw new Error(
+        `Colab was still allocating the ${gpu} runtime after ${Math.round(maxWaitMs / 1000)}s, so the request was withdrawn. ${gpu} capacity is probably short: try again later or pick another allowed GPU.`,
+      );
     }
 
     if (operation.error) {
@@ -312,6 +325,14 @@ export async function assignRuntime({
       if (isTransientDeadline && attempt < maxAttempts) {
         await new Promise((r) => setTimeout(r, 1500));
         continue;
+      }
+      const noCapacity =
+        /resource_exhausted/i.test(msg) ||
+        (operation.error.details || []).some((d) => d?.reason === "NO_RUNTIMES");
+      if (noCapacity) {
+        throw new Error(
+          `Colab has no ${gpu} runtime available right now (${attempt} attempt${attempt > 1 ? "s" : ""}; Colab said: ${msg}). Nothing was started. Try again in a few minutes or pick another allowed GPU.`,
+        );
       }
       throw lastError;
     }

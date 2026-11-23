@@ -528,3 +528,106 @@ test("Re-running up on the same runtime preserves createdAt and replacing a runt
     rmSync(homeDir, { recursive: true, force: true });
   }
 });
+
+function assignmentApi({ waitAnswers, onDelete = () => {} }) {
+  const calls = [];
+  const answer = (body, status = 200) => ({ ok: status < 400, status, text: async () => JSON.stringify(body) });
+  const pending = { name: "operations/op-slow", metadata: { runtime: "runtimes/r-slow" } };
+  return {
+    calls,
+    fetchImpl: async (url, init = {}) => {
+      const method = init.method || "GET";
+      if (method === "POST") {
+        calls.push("create");
+        return answer(pending);
+      }
+      if (method === "DELETE") {
+        calls.push("delete");
+        onDelete(url);
+        return answer({});
+      }
+      if (url.includes(":wait")) {
+        calls.push("wait");
+        return answer(waitAnswers.length > 1 ? waitAnswers.shift() : waitAnswers[0]);
+      }
+      return answer({ runtimes: [] });
+    },
+  };
+}
+
+test("assignRuntime keeps polling an assignment that stays pending longer than two waits", async () => {
+  const pending = { name: "operations/op-slow" };
+  const api = assignmentApi({
+    waitAnswers: [
+      pending,
+      pending,
+      pending,
+      {
+        name: "operations/op-slow",
+        done: true,
+        response: {
+          name: "runtimes/r-slow",
+          runtimeSpec: { variant: "VARIANT_GPU", accelerator: "G4" },
+          connectionInfo: { url: "https://8080-g4.colab.dev", token: "proxy-g4" },
+        },
+      },
+    ],
+  });
+  const progress = [];
+  const assigned = await assignRuntime({
+    accessToken: "tok",
+    gpu: "G4",
+    reuseExisting: false,
+    fetchImpl: api.fetchImpl,
+    onProgress: (line) => progress.push(line.replace(/\(\d+s\)/, "(Ns)")),
+  });
+  assert.equal(assigned.id, "r-slow");
+  assert.equal(assigned.token, "proxy-g4");
+  assert.deepEqual(api.calls, ["create", "wait", "wait", "wait", "wait"]);
+  assert.deepEqual(progress, Array(3).fill("Colab is still allocating the G4 runtime (Ns)..."));
+});
+
+test("assignRuntime says when Colab has no capacity, and withdraws a request that never settles", async () => {
+  const noRuntimes = assignmentApi({
+    waitAnswers: [
+      {
+        name: "operations/op-slow",
+        done: true,
+        error: { code: 9, message: "CreateAssignment: generic::resource_exhausted: no machines", details: [{ reason: "NO_RUNTIMES" }] },
+      },
+    ],
+  });
+  await assert.rejects(
+    assignRuntime({ accessToken: "tok", gpu: "G4", reuseExisting: false, fetchImpl: noRuntimes.fetchImpl }),
+    {
+      message:
+        "Colab has no G4 runtime available right now (1 attempt; Colab said: CreateAssignment: generic::resource_exhausted: no machines). Nothing was started. Try again in a few minutes or pick another allowed GPU.",
+    },
+  );
+
+  const deleted = [];
+  const stuck = assignmentApi({ waitAnswers: [{ name: "operations/op-slow" }], onDelete: (url) => deleted.push(new URL(url).pathname) });
+  await assert.rejects(
+    assignRuntime({ accessToken: "tok", gpu: "G4", reuseExisting: false, maxWaitMs: 30, fetchImpl: stuck.fetchImpl }),
+    {
+      message:
+        "Colab was still allocating the G4 runtime after 0s, so the request was withdrawn. G4 capacity is probably short: try again later or pick another allowed GPU.",
+    },
+  );
+  assert.deepEqual(deleted, ["/v1beta/runtimes/r-slow"]);
+
+  await assert.rejects(
+    assignRuntime({
+      accessToken: "tok",
+      gpu: "G4",
+      highRam: true,
+      reuseExisting: false,
+      fetchImpl: async () => ({
+        ok: false,
+        status: 400,
+        text: async () => "CreateAssignment: invalid pool ID requested: highmem shape not available for variant/accelerator pair GPU/G4",
+      }),
+    }),
+    { message: "Colab does not offer the high-RAM shape for G4; start it without --high-ram." },
+  );
+});
