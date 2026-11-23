@@ -110,8 +110,19 @@ const SESSION_END_REASONS = {
 
 // Sessions that ended recently, newest first, so a vanished session is explained instead of just missing.
 export function listRecentSessionEnds(homeDir = os.homedir(), { nowMs = Date.now(), withinMs = 24 * 3_600_000, limit = 5 } = {}) {
-  return readLedgerEvents(homeDir)
-    .filter((ev) => ev?.type === "session.end" && nowMs - Date.parse(ev.at) <= withinMs)
+  // A stale reader can log a second end for a session that was already released; the first one is the cause.
+  const ended = new Set();
+  const ends = [];
+  for (const ev of readLedgerEvents(homeDir)) {
+    if (ev?.type === "session.start") {
+      ended.delete(ev.session);
+    } else if (ev?.type === "session.end" && !ended.has(ev.session)) {
+      ended.add(ev.session);
+      ends.push(ev);
+    }
+  }
+  return ends
+    .filter((ev) => nowMs - Date.parse(ev.at) <= withinMs)
     .slice(-limit)
     .reverse()
     .map((ev) => ({

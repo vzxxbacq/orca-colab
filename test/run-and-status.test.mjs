@@ -133,6 +133,7 @@ test("status says when and why a session ended, newest first, for the last 24 ho
   for (const [at, session, cause] of [
     ["2026-11-08T09:00:00.000Z", "orca-colab-old", "user"],
     ["2026-11-09T09:00:00.000Z", "orca-colab-a", "user"],
+    ["2026-11-09T09:01:00.000Z", "orca-colab-a", "colab-died"],
     ["2026-11-09T09:30:00.000Z", "orca-colab-b", "idle-watchdog"],
     ["2026-11-09T09:58:00.744Z", "orca-colab-h3", "colab-died"],
   ]) {
