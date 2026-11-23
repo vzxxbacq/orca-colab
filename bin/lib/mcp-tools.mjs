@@ -33,6 +33,7 @@ Call auth_login. It opens Google's consent page in the owner's browser on this m
 
 Hygiene
 - sync is for code (256 MB cap; honours .gitignore and .colabignore). Have the runtime download datasets and weights itself.
+- Commands on one runtime may run at the same time (a run while a job runs, several jobs); they share its GPU and memory.
 - There is no port forwarding. Query a service on the runtime with run, for example "curl -s localhost:8000/metrics".
 - Pass secrets with env only when the owner agrees, and never write them to files on the runtime.
 - The owner sees every runtime, run and job live in the Colab GPU panel in Orca, and may stop them, switch account or change the guardrails there at any time; your next call sees the result.
@@ -43,7 +44,7 @@ Failures
 - up with step "policy": pick a GPU from allowedGpus; or the runtime cap is reached, so reuse a runtime or stop one.
 - up with step "budget" (code "BUDGET_REACHED"): the owner's monthly budget is used up (budgetCu, estimatedMonthlyUsedCu; estimates). Do not retry and do not change the budget yourself. Tell the owner the figures; they can raise it under Guardrails & CU in the Colab GPU panel, or tell you a new number for credits_budget. A runtime that is already running stays usable.
 - up with code "PROVISIONING_IN_PROGRESS": another agent is creating a runtime. Wait retryAfterSeconds and call up again.
-- up failing at another step: Colab refused (quota, GPU not available). Read error; try another allowed GPU or wait.
+- up failing at another step: Colab refused (quota, GPU not available). Read error; try another allowed GPU or wait. "no <GPU> runtime available right now" and "still allocating ... withdrawn" mean Colab has no free machine of that type: nothing was started; offer to retry in a few minutes or to use another allowed GPU.
 - run, sync or pull failing with a WebSocket or HTTP error: the runtime died or was recycled. Call status, then offer down, up and sync again.
 - "no Colab runtime proxy": the session comes from an old version. Call down for that session, then up.
 - down with reason "api-delete-failed": the runtime may still be running and billing. Call auth_login and down again, or ask the owner to delete it at colab.research.google.com (Runtime > Disconnect and delete runtime).`;
@@ -191,7 +192,7 @@ const TOOL_SPECS = [
     name: "up",
     title: "Start or reuse a Colab runtime",
     description:
-      "Assigns a Colab runtime (or reuses the one already assigned), queries its GPU and records the session. Usually takes under a minute; if your client times out first the runtime is still created, so call status. The runtime bills compute units (estimatedCuPerHour) until down. The owner's guardrails apply: gpu must be in policy.allowedGpus and new is refused beyond policy.maxConcurrentSessions (step \"policy\"), and a new runtime is refused once the estimated use this month has reached the monthly budget (step \"budget\", with budgetCu and estimatedMonthlyUsedCu; only the owner raises it). step \"prerequisites\" means sign in with auth_login.",
+      "Assigns a Colab runtime (or reuses the one already assigned), queries its GPU and records the session. Usually takes under a minute, up to a few minutes while Colab is allocating a scarce GPU; if your client times out first the call still finishes, so call status. The runtime bills compute units (estimatedCuPerHour) until down. The owner's guardrails apply: gpu must be in policy.allowedGpus and new is refused beyond policy.maxConcurrentSessions (step \"policy\"), and a new runtime is refused once the estimated use this month has reached the monthly budget (step \"budget\", with budgetCu and estimatedMonthlyUsedCu; only the owner raises it). step \"prerequisites\" means sign in with auth_login.",
     inputSchema: schema({
       gpu: {
         type: "string",

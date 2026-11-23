@@ -125,6 +125,32 @@ Runtimes still go through the public `colaboratory.googleapis.com/v1beta` API.
   `orca-colab up` connects to `/colab/tty` immediately after runtime assignment and pipes the Tailscale +
   `sshd` bootstrap script into the root shell—no browser tab or notebook cell click needed.
 
+### One shared terminal (verified 2026-11-23)
+
+`/colab/tty` attaches every client to the same tmux session (`session 0`, one shell, one `/dev/pts`) and
+detaches the client that was attached before: the earlier websocket receives `[detached (from session 0)]`
+and is closed, while its command keeps running in the shared shell and the newcomer's input queues behind
+it. Two `orca-colab` commands on one runtime therefore broke each other: the first failed with "WebSocket
+closed before command finished" about two seconds after the second connected.
+
+## 4b. Per-command terminals and stdin upload (Jupyter Server API on the runtime)
+
+The runtime's Jupyter Server (2.x, rooted at `/`) answers its standard API on the proxy URL with the same
+`X-Colab-Runtime-Proxy-Token` header:
+
+- `POST /api/terminals` → `{ "name": "7", ... }`; `DELETE /api/terminals/7` hangs up that shell.
+- `wss://<runtime>/terminals/websocket/7`: terminado frames, client `["stdin", "<input>"]`, server
+  `["stdout", "<output>"]`. Each terminal is its own shell and pty, starting in `/` (the shared tty starts in
+  `/content`). One message above about 10 MB closes the connection.
+- `PUT /api/contents/<path>` with `{ "type": "file", "format": "base64", "content": … }` writes a non-hidden
+  file; for large files send `"chunk": 1, 2, …` and `-1` for the last piece. A single 64 MB body is accepted, a
+  200 MB one is refused (400). Measured on a CPU runtime: 8 MB in 6 s, 40 MB in 19 s, against 97 s for 8 MB
+  typed through a terminal.
+
+`execCommandOverTty` opens one terminal per command and deletes it afterwards, uploads stdin (the `sync`
+archive) as `/tmp/orca-colab-stdin-<id>` instead of typing it, and falls back to `/colab/tty` with inline
+stdin when the runtime refuses `POST /api/terminals` or the upload.
+
 ## 5. CCU Balance, Burn Rate & Live Hardware Resources
 
 ### Compute Units (CCU) & Tier Info

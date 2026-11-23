@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { COLAB_OAUTH_CONFIG } from "./colab-oauth.mjs";
+import { uploadJupyterFile } from "./jupyter-files.mjs";
 
 const PACKAGE_VERSION = JSON.parse(
   readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
@@ -413,6 +414,43 @@ export async function getRuntimeResources({
   return res;
 }
 
+const TTY_INPUT_CHUNK_CHARS = 512 * 1024;
+
+// /colab/tty attaches every client to one shared tmux session and detaches whoever was attached before,
+// so a second command on a runtime cut the first one's connection and then queued behind it in the same
+// shell. The runtime's Jupyter server hands out independent terminals; each command takes its own.
+async function openCommandTerminal({ baseUrl, proxyToken, fetchImpl, signal }) {
+  const headers = { ...COLAB_HEADERS, [COLAB_PROXY_TOKEN_HEADER]: proxyToken };
+  try {
+    const res = await fetchImpl(new URL("/api/terminals", baseUrl).toString(), {
+      method: "POST",
+      headers,
+      signal: signal ?? AbortSignal.timeout(15_000),
+    });
+    const name = res.ok ? (await res.json())?.name : null;
+    if (typeof name !== "string" || !/^[\w.-]+$/.test(name)) {
+      return null;
+    }
+    return {
+      path: `/terminals/websocket/${name}`,
+      // Deleting the terminal hangs up its shell, which also ends a command that was cut short.
+      close: async () => {
+        try {
+          await fetchImpl(new URL(`/api/terminals/${name}`, baseUrl).toString(), {
+            method: "DELETE",
+            headers,
+            signal: AbortSignal.timeout(5_000),
+          });
+        } catch {
+          // The runtime may be gone; nothing left to clean up then.
+        }
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function execCommandOverTty({
   baseUrl,
   proxyToken,
@@ -422,6 +460,7 @@ export async function execCommandOverTty({
   stdinBase64 = null,
   timeoutMs = 3_600_000,
   WebSocketImpl = globalThis.WebSocket,
+  fetchImpl = fetch,
   onOutput = null,
   signal = null,
 } = {}) {
@@ -439,13 +478,31 @@ export async function execCommandOverTty({
     ? command.join(" ")
     : String(command || "");
 
+  // A runtime whose Jupyter refuses terminals still has the shared tty: one command at a time works there.
+  let terminal = await openCommandTerminal({ baseUrl, proxyToken, fetchImpl, signal });
+
+  // Typing an archive into a terminal moves about 100 kB/s and a Jupyter terminal drops the connection
+  // on large input, so stdin travels as a file; only the shared tty still takes it inline.
+  let stdinFile = null;
+  if (terminal && stdinBase64) {
+    stdinFile = `/tmp/orca-colab-stdin-${runId}`;
+    try {
+      await uploadJupyterFile({ baseUrl, proxyToken, remotePath: stdinFile, contentBase64: stdinBase64, fetchImpl, signal });
+    } catch {
+      await terminal.close();
+      terminal = null;
+      stdinFile = null;
+    }
+  }
+
   const payload = JSON.stringify({
     runId,
     cmd: cmdStr,
     cmdList,
     cwd: cwd || null,
     env: envVars || {},
-    stdinB64: stdinBase64 || null,
+    stdinB64: stdinFile ? null : stdinBase64 || null,
+    stdinFile,
     startMarker,
     modeB64Marker,
     endPrefix,
@@ -467,7 +524,10 @@ export async function execCommandOverTty({
     'stdin_bytes = base64.b64decode(cfg["stdinB64"]) if cfg.get("stdinB64") else None',
     'cmd_arg = cfg["cmdList"] if cfg.get("cmdList") else cfg["cmd"]',
     'use_shell = False if cfg.get("cmdList") else True',
-    "proc = subprocess.Popen(cmd_arg, shell=use_shell, env=env, stdin=subprocess.PIPE if stdin_bytes is not None else subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)",
+    'stdin_file = open(cfg["stdinFile"], "rb") if cfg.get("stdinFile") else None',
+    "proc = subprocess.Popen(cmd_arg, shell=use_shell, env=env, stdin=stdin_file if stdin_file else subprocess.PIPE if stdin_bytes is not None else subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)",
+    "if stdin_file:",
+    '    os.remove(cfg["stdinFile"])',
     "if stdin_bytes is not None:",
     "    proc.stdin.write(stdin_bytes)",
     "    proc.stdin.close()",
@@ -489,12 +549,20 @@ export async function execCommandOverTty({
 
   const pyB64 = Buffer.from(pyRunner, "utf8").toString("base64");
   const tmpPy = `/tmp/.orca-colab-exec-${runId}.py`;
-  const shellLine = `stty -echo 2>/dev/null; printf '%s' "${pyB64}" | base64 -d > ${tmpPy} && python3 -u ${tmpPy}; rm -f ${tmpPy}\n`;
+  // A fresh terminal starts in /, the shared tty in /content.
+  const shellLine = `cd /content 2>/dev/null; stty -echo 2>/dev/null; printf '%s' "${pyB64}" | base64 -d > ${tmpPy} && python3 -u ${tmpPy}; rm -f ${tmpPy}\n`;
 
-  const wsUrl = new URL("/colab/tty", baseUrl);
+  const wsUrl = new URL(terminal ? terminal.path : "/colab/tty", baseUrl);
   wsUrl.protocol = wsUrl.protocol === "https:" ? "wss:" : "ws:";
+  // Jupyter drops a connection that sends one message over 10 MB.
+  const typeInto = (ws, text) => {
+    for (let at = 0; at < text.length; at += TTY_INPUT_CHUNK_CHARS) {
+      const piece = text.slice(at, at + TTY_INPUT_CHUNK_CHARS);
+      ws.send(JSON.stringify(terminal ? ["stdin", piece] : { data: piece }));
+    }
+  };
 
-  return await new Promise((resolve, reject) => {
+  const execution = new Promise((resolve, reject) => {
     let settled = false;
     let rawBuffer = "";
     let started = false;
@@ -542,7 +610,7 @@ export async function execCommandOverTty({
           if (settled) return;
           settled = true;
           try {
-            ws.send(JSON.stringify({ data: "\x03\n" }));
+            typeInto(ws, "\x03\n");
           } catch {
             // Ignore.
           }
@@ -562,7 +630,9 @@ export async function execCommandOverTty({
       let chunk = rawText;
       try {
         const parsed = JSON.parse(rawText);
-        if (parsed && typeof parsed.data === "string") {
+        if (Array.isArray(parsed)) {
+          chunk = parsed[0] === "stdout" && typeof parsed[1] === "string" ? parsed[1] : "";
+        } else if (parsed && typeof parsed.data === "string") {
           chunk = parsed.data;
         }
       } catch {
@@ -634,7 +704,7 @@ export async function execCommandOverTty({
     };
 
     const onOpen = () => {
-      ws.send(JSON.stringify({ data: shellLine }));
+      typeInto(ws, shellLine);
     };
 
     if (typeof ws.addEventListener === "function") {
@@ -681,12 +751,19 @@ export async function execCommandOverTty({
       });
     }
   });
+
+  try {
+    return await execution;
+  } finally {
+    await terminal?.close();
+  }
 }
 
 export async function queryGpuOverTty({
   baseUrl,
   proxyToken,
   WebSocketImpl = globalThis.WebSocket,
+  fetchImpl = fetch,
   signal = null,
 } = {}) {
   try {
@@ -697,6 +774,7 @@ export async function queryGpuOverTty({
         "nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv,noheader,nounits 2>/dev/null || echo 'CPU,0,none'",
       timeoutMs: 20_000,
       WebSocketImpl,
+      fetchImpl,
       signal,
     });
     const firstLine = (res.stdout || "")

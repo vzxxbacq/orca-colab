@@ -326,6 +326,7 @@ export async function run(
       baseUrl: colabRuntime.baseUrl,
       proxyToken: colabRuntime.token,
       WebSocketImpl,
+      fetchImpl,
       signal,
     });
     const effectiveGpu =
