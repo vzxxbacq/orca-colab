@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { main } from "../bin/orca-colab.mjs";
 import { readConfig, writeConfig } from "../bin/lib/colab-home.mjs";
 import { readOAuthStore, resolveOAuthClientConfig, saveOAuthCredentials } from "../bin/lib/colab-oauth.mjs";
-import { readLedgerEvents } from "../bin/lib/credit-ledger.mjs";
+import { appendLedgerEvent, readLedgerEvents } from "../bin/lib/credit-ledger.mjs";
 import { serveMcpOverStdio } from "../bin/lib/mcp-stdio-server.mjs";
 import { CLI_COVERAGE, createColabMcpTools, MCP_INSTRUCTIONS } from "../bin/lib/mcp-tools.mjs";
 import { createPanelActions } from "../bin/lib/panel-actions.mjs";
@@ -93,6 +93,7 @@ test("mcp handshake: initialize, ping, tools/list and JSON-RPC errors", async (t
   assert.equal(init.result.serverInfo.name, "orca-colab");
   assert.match(init.result.instructions, /Call auth_login/);
   assert.match(init.result.instructions, /tick the Colab permission/);
+  assert.match(init.result.instructions, /up with step "budget"/);
 
   const future = await client.request("initialize", { protocolVersion: "2099-01-01", capabilities: {} });
   assert.equal(future.result.protocolVersion, "2025-11-25");
@@ -188,6 +189,25 @@ test("guardrails and budget set in the panel apply to the next MCP call", async 
 
   await panel.setBudget({ budgetCu: 40 });
   assert.equal((await client.call("credits")).structuredContent.budgetCu, 40);
+
+  const now = Date.now();
+  appendLedgerEvent(
+    { type: "session.start", at: new Date(now - 2 * 3_600_000).toISOString(), session: "orca-colab-b", account: "default", cuPerHour: 30 },
+    client.homeDir,
+  );
+  appendLedgerEvent({ type: "session.end", at: new Date(now).toISOString(), session: "orca-colab-b", account: "default" }, client.homeDir);
+  const overBudget = await client.call("up", { gpu: "T4", account: "default", new: true });
+  assert.equal(overBudget.structuredContent.step, "policy");
+  await panel.updatePolicy({ maxConcurrentSessions: 2 });
+  const refusedByBudget = await client.call("up", { gpu: "T4", new: true });
+  assert.equal(refusedByBudget.isError, true);
+  assert.equal(refusedByBudget.structuredContent.step, "budget");
+  assert.equal(refusedByBudget.structuredContent.code, "BUDGET_REACHED");
+  assert.equal(refusedByBudget.structuredContent.budgetCu, 40);
+  assert.match(refusedByBudget.structuredContent.hint, /^Only the owner can raise the monthly budget/);
+
+  await panel.setBudget({ budgetCu: 100_000 });
+  assert.equal((await client.call("up", { gpu: "T4", new: true })).structuredContent.step, "prerequisites");
   assert.deepEqual(readConfig(client.homeDir).allowedGpus, ["T4"]);
 });
 

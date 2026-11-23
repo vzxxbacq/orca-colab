@@ -27,6 +27,8 @@ import {
   resolveOAuthAccountKey,
 } from "../lib/colab-oauth.mjs";
 import {
+  projectAccountCredits,
+  readLedgerEvents,
   recordCalibrateEvent,
   recordSessionEndEvent,
   recordSessionStartEvent,
@@ -164,6 +166,35 @@ export async function run(
       },
     });
   }
+
+  // The budget stops new spending only: attaching to a runtime that is already billing stays allowed.
+  if (opts.new || activeAccountSessions.length === 0) {
+    const credits = projectAccountCredits({
+      events: readLedgerEvents(homeDir),
+      activeSessions: listSessions(homeDir),
+      account: account.label,
+      nowMs: nowMs(),
+    });
+    if (credits.budgetCu > 0 && credits.estimatedMonthlyUsedCu >= credits.budgetCu) {
+      const errMsg = `Monthly compute-unit budget reached for account '${account.label}': about ${credits.estimatedMonthlyUsedCu} of ${credits.budgetCu} CU used this month (estimate). No new runtime was started.`;
+      throw new CliError(errMsg, {
+        exitCode: EXIT_ERROR,
+        payload: {
+          ok: false,
+          code: "BUDGET_REACHED",
+          error: errMsg,
+          account: account.label,
+          approximate: true,
+          budgetCu: credits.budgetCu,
+          estimatedMonthlyUsedCu: credits.estimatedMonthlyUsedCu,
+          estimatedBudgetUsedPercent: credits.estimatedBudgetUsedPercent,
+          hint: "Only the owner can raise the monthly budget: under Guardrails & CU in the Colab GPU panel, or with 'orca-colab credits budget <cu>' (0 removes the limit).",
+          step: "budget",
+        },
+      });
+    }
+  }
+
   let accessToken = null;
   try {
     accessToken = await getValidAccessToken({

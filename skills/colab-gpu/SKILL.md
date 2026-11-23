@@ -25,7 +25,7 @@ If this session already has the Colab GPU MCP tools (`doctor`, `auth_login`, `up
    - Inspect `ok`, `mode` (`"direct-api"` or `"unconfigured"`), `checks.oauth`, and `policy` (`allowedGpus`, `maxConcurrentSessions`).
    - If `ok === false`, ask the user to sign in once via `orca-colab auth login` (or click **Sign in with Google** in the Orca Colab panel), ticking the Colab permission on Google's consent page (it starts unticked).
 2. Run `status --json` (or `ls --json`) to discover any already-active GPU sessions (`name`, `gpu`, `rateKey`, `cuPerHour`, `reachable`, `ageSeconds`).
-3. Run `credits --json` (or `credits calibrate --json`) to check the user's approximate Compute Units balance (`estimatedBalanceCu`) and monthly budget (`budgetCu`, `estimatedBudgetUsedPercent`).
+3. Run `credits --json` (or `credits calibrate --json`) to check the user's approximate Compute Units balance (`estimatedBalanceCu`) and monthly budget (`budgetCu`, `estimatedMonthlyUsedCu`, `estimatedBudgetUsedPercent`). The budget is a hard limit: at 100 % `up` refuses to start a new runtime.
 
 ## 3. Resource Management (Provisioning & Scaling Sessions)
 
@@ -34,6 +34,7 @@ If this session already has the Colab GPU MCP tools (`doctor`, `auth_login`, `up
    - Reuse or start a session: `up --gpu T4 --json` (or `up --gpu auto --json` to pick the default allowed GPU).
    - Start an additional concurrent session (up to `policy.maxConcurrentSessions` on Colab Pro+): `up --gpu L4 --new --name worker2 --json`.
    - If `up` exits `1` with `code: "PROVISIONING_IN_PROGRESS"` (`step: "assign_lock"`), another Agent is currently creating a Colab runtime; wait `retryAfterSeconds` (~15s) and retry `up`.
+   - If `up` exits `1` with `step: "budget"` (`code: "BUDGET_REACHED"`), the user's monthly Compute Unit budget is used up (`budgetCu`, `estimatedMonthlyUsedCu`, both estimates). Do not retry and never change the budget on your own: report the figures and let the user raise it in the panel (**Guardrails & CU**) or tell you a number for `credits budget <cu>`. A runtime that is already running can still be reused.
    - If `up` exits `1` with `step: "policy"`, respect the user's hardware guardrail and select from the returned `allowedGpus` list.
 
 ## 4. Calling Compute Resources (Sync, Run, and Jobs)
@@ -55,6 +56,7 @@ If this session already has the Colab GPU MCP tools (`doctor`, `auth_login`, `up
 | Symptom / Exit code | Likely cause | Action |
 |---|---|---|
 | `up` exits `1` (`step: "prerequisites"`) | Not signed in to Google, or the Colab permission was not ticked | Ask the user to run `orca-colab auth login` (or use the panel) and tick the Colab permission. |
+| `up` exits `1` (`step: "budget"`, `code: "BUDGET_REACHED"`) | Estimated use this month has reached the user's monthly budget; no new runtime is started | Report `estimatedMonthlyUsedCu` / `budgetCu` (estimates) and stop. Only the user raises the budget: in the panel, or by giving you a number for `credits budget <cu>` (`0` removes the limit). Reusing a running session still works. |
 | `up` exits `1` (other `step`) | Policy limit or Colab refused the assignment (quota, GPU unavailable) | Read `error`; pick another allowed GPU or wait. |
 | `run` / `sync` / `pull` says the session has no Colab runtime proxy | Session was started by an older orca-colab over Tailscale | Run `down --session <name>` then `up`. |
 | `run` / `sync` / `pull` fails with a WebSocket or HTTP error | Colab runtime died or was recycled | Run `status --json`; offer `down` + `up` and re-`sync`. |

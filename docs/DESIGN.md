@@ -75,8 +75,10 @@ Mechanics:
   `user|idle-watchdog|colab-died`), `calibrate` (balance, source `manual|browser`), `budget.set`.
   Estimated balance = last calibration − Σ(hours × rate) since. Free-tier accounts have no balance; the
   ledger still records hours so the user can see usage against the unofficial quota.
-- **Budget**: optional, set per account with `credits budget <cu>` (a `budget.set` ledger event; the latest one wins); the status bar turns `warning` at 80 %, `danger` at 100 %; the
-  skill tells the agent to confirm with the user before `up` once the budget is exceeded.
+- **Budget**: optional, set per account with `credits budget <cu>` (a `budget.set` ledger event; the latest one wins; `0` removes it); the status bar turns `warning` at 80 %, `danger` at 100 %. It is a hard
+  limit for the CLI, the MCP server and the panel alike: once `estimatedMonthlyUsedCu` reaches `budgetCu`, `up` refuses to start a new runtime
+  (exit 1, `step: "budget"`, `code: "BUDGET_REACHED"`, the estimated figures and a hint that the owner can raise it). Attaching to a session that is already running
+  is not refused and nothing running is stopped; the figures stay estimates.
 - **Pre-flight estimate**: `up --json` returns `estimatedCuPerHour`; the skill makes the agent state
   "about N CU/h, ~H hours of balance left" before long jobs and prefer T4 unless the task needs more.
 - **Calibration sources**: `credits set <balance> [--account]` (manual, from Colab's Resources pane);
@@ -117,7 +119,7 @@ Plain Node ≥ 20, zero dependencies, `package.json` with `"bin"`. State:
 |---|---|---|
 | `doctor [--json]` | Checks Node ≥ 20, `git`, `tar` and the Google sign-in. | 0 all good, 1 something missing (each line actionable) |
 | `auth [login\|status\|logout] [--account A] [--json]` | Loopback PKCE OAuth 2.0 login in system default browser with the project's own OAuth client (supports Passkey), shows connected Google account & Colab tier/balance, or revokes/removes stored credentials. | 0 / 1 |
-| `up [--name N] [--account A] [--gpu T4\|L4\|A100\|CPU] [--high-ram] [--new] [--keep] [--json]` | Assigns (or reuses) a runtime via `POST /v1beta/runtimes`, queries the GPU over `wss://<runtime>/colab/tty`, writes the session. | 0, 1 not signed in / policy / provisioning (says which `step`), 3 aborted |
+| `up [--name N] [--account A] [--gpu T4\|L4\|A100\|CPU] [--high-ram] [--new] [--keep] [--json]` | Assigns (or reuses) a runtime via `POST /v1beta/runtimes`, queries the GPU over `wss://<runtime>/colab/tty`, writes the session. | 0, 1 not signed in / policy / budget / provisioning (says which `step`), 3 aborted |
 | `status [--json]` / `ls` | Lists sessions with age and `reachable` (live runtime proxy, not a zombie); never prints the proxy token. | 0 |
 | `run [--session N] [--cwd DIR] -- <cmd…>` | Runs the command over `/colab/tty`, streams output, propagates the exit code; `run -- bash -l` on a TTY is an interactive shell. `--cwd` defaults to the session's `remoteRoot`. | remote exit code |
 | `job submit [--session N] [--name TITLE] [--cwd DIR] [--env K=V] [--sync [PATH]] [--wait] [--json] -- <cmd…>` | Submits an algorithm/compute task to the GPU session, streams stdout/stderr to `~/.orca-colab/tasks/<id>.log`, and tracks status (`running`, `succeeded`, `failed`, `stopped`) in `~/.orca-colab/tasks/<id>.json`. Runs detached by default (`--wait` blocks and streams). | 0 (or remote exit code with `--wait`) |

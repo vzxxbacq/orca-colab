@@ -20,9 +20,9 @@ const MAX_WAIT_SECONDS = 600;
 export const MCP_INSTRUCTIONS = `Colab GPU: use a Google Colab runtime (T4, L4, A100 and other GPUs, or CPU) as a remote compute backend. The workspace, the agent and the Google credentials stay on this machine; the runtime is a disposable box reached over public HTTPS. Reach for it when a task needs a GPU or CUDA, training, fine-tuning or inference too heavy for this machine, or when the user mentions Colab.
 
 Order of work
-1. doctor: needs ok true. Read policy.allowedGpus and policy.maxConcurrentSessions: the owner's guardrails, set in the Colab GPU panel in Orca; you cannot change them. If checks.oauth.ok is false, sign in (below).
+1. doctor: needs ok true. Read policy.allowedGpus and policy.maxConcurrentSessions: the owner's guardrails, set in the Colab GPU panel in Orca together with the monthly budget; they are not yours to change. If checks.oauth.ok is false, sign in (below).
 2. status: reuse a runtime that is already reachable instead of starting another.
-3. credits: approximate balance (estimatedBalanceCu), burn rate and monthly budget. Every figure is an estimate. If budgetCu is set and estimatedBudgetUsedPercent is 100 or more, or the balance is close to zero, ask the owner before up.
+3. credits: approximate balance (estimatedBalanceCu), burn rate and monthly budget. Every figure is an estimate. The monthly budget is a hard limit: once estimatedMonthlyUsedCu reaches budgetCu, up refuses to start a new runtime (reusing a running one still works). If the balance is close to zero, ask the owner before up.
 4. up with an allowed GPU: T4 for inference and debugging, L4 or A100 for training, CPU for checks that need no GPU. It returns when the runtime is ready, and the runtime bills compute units until down. Tell the owner the rate (estimatedCuPerHour) before long work.
 5. sync the workspace (pass workspace_path), then job_submit for anything longer than a minute (it returns a job id at once; follow with job_wait or job_logs) or run for short commands.
 6. pull results as soon as they exist: runtimes die (about 90 minutes idle on the free tier, 12 hours at most) and nothing on them persists.
@@ -41,6 +41,7 @@ Hygiene
 Failures
 - up with step "prerequisites": not signed in, or the Colab permission was not ticked. Call auth_login.
 - up with step "policy": pick a GPU from allowedGpus; or the runtime cap is reached, so reuse a runtime or stop one.
+- up with step "budget" (code "BUDGET_REACHED"): the owner's monthly budget is used up (budgetCu, estimatedMonthlyUsedCu; estimates). Do not retry and do not change the budget yourself. Tell the owner the figures; they can raise it under Guardrails & CU in the Colab GPU panel, or tell you a new number for credits_budget. A runtime that is already running stays usable.
 - up with code "PROVISIONING_IN_PROGRESS": another agent is creating a runtime. Wait retryAfterSeconds and call up again.
 - up failing at another step: Colab refused (quota, GPU not available). Read error; try another allowed GPU or wait.
 - run, sync or pull failing with a WebSocket or HTTP error: the runtime died or was recycled. Call status, then offer down, up and sync again.
@@ -190,7 +191,7 @@ const TOOL_SPECS = [
     name: "up",
     title: "Start or reuse a Colab runtime",
     description:
-      "Assigns a Colab runtime (or reuses the one already assigned), queries its GPU and records the session. Usually takes under a minute; if your client times out first the runtime is still created, so call status. The runtime bills compute units (estimatedCuPerHour) until down. The owner's guardrails apply: gpu must be in policy.allowedGpus and new is refused beyond policy.maxConcurrentSessions (step \"policy\"). step \"prerequisites\" means sign in with auth_login.",
+      "Assigns a Colab runtime (or reuses the one already assigned), queries its GPU and records the session. Usually takes under a minute; if your client times out first the runtime is still created, so call status. The runtime bills compute units (estimatedCuPerHour) until down. The owner's guardrails apply: gpu must be in policy.allowedGpus and new is refused beyond policy.maxConcurrentSessions (step \"policy\"), and a new runtime is refused once the estimated use this month has reached the monthly budget (step \"budget\", with budgetCu and estimatedMonthlyUsedCu; only the owner raises it). step \"prerequisites\" means sign in with auth_login.",
     inputSchema: schema({
       gpu: {
         type: "string",
@@ -328,7 +329,7 @@ const TOOL_SPECS = [
     name: "credits",
     title: "Compute-unit balance and budget",
     description:
-      "Approximate balance (estimatedBalanceCu), burn rate (estimatedBurnCuPerHour), hours left (estimatedHoursRemaining) and monthly budget use (budgetCu, estimatedBudgetUsedPercent) for an account. Refreshes from Colab when signed in. Every figure is an estimate; say so when you quote one.",
+      "Approximate balance (estimatedBalanceCu), burn rate (estimatedBurnCuPerHour), hours left (estimatedHoursRemaining) and monthly budget use (budgetCu, estimatedMonthlyUsedCu, estimatedBudgetUsedPercent) for an account. At 100 percent up refuses new runtimes. Refreshes from Colab when signed in. Every figure is an estimate; say so when you quote one.",
     inputSchema: schema({ account: ACCOUNT_PROP }),
   },
   {
@@ -352,7 +353,7 @@ const TOOL_SPECS = [
     name: "credits_budget",
     title: "Set the monthly compute-unit budget",
     description:
-      "Sets the owner's monthly budget for an account (0 or more compute units). It is their guardrail: change it only when the owner asks, with the number they gave.",
+      "Sets the owner's monthly budget for an account in compute units; 0 removes it. It is a hard limit: up refuses to start a new runtime once the estimated use this month reaches it. It is the owner's guardrail: change it only when the owner asks, with the number they gave, never to get past a refusal.",
     inputSchema: schema({ cu: { type: "number", minimum: 0, description: "Monthly budget in compute units." }, account: ACCOUNT_PROP }, ["cu"]),
   },
   {

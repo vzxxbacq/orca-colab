@@ -24,7 +24,9 @@ CLI alone with `npx`. A community project, not affiliated with Google.
 - **Live output**: every agent run streams into the **Colab GPU** panel in real time, with history, exit
   codes and per-run GPU attribution.
 - **Humans set guardrails**: sign in with Google, pick the allowed GPU tiers (T4, L4, A100, CPU), cap
-  concurrent runtimes and the monthly Compute Unit budget. The agent cannot step outside them.
+  concurrent runtimes and the monthly Compute Unit budget. The agent cannot step outside them: once the
+  estimated use this month reaches the budget, `up` refuses to start a new runtime (running ones keep going)
+  until you raise it in the panel or with `orca-colab credits budget <cu>`.
 - **Multiple runtimes and sessions**: run several GPUs side by side, name them, address them per command
   with `--session`, and switch between Google accounts.
 - **Public endpoints only**: everything goes over HTTPS to Google's Colab API and the runtime's own
@@ -189,7 +191,8 @@ Any other MCP client: command `npx`, arguments `-y https://codeload.github.com/v
   `job_stop`, `pull`, `down`, `credits`, `credits_calibrate`, `credits_set`, `credits_budget`, `ledger`,
   `rates`, and `auth_status`, `auth_login`, `auth_wait`, `auth_redirect`, `auth_list`, `auth_switch`,
   `auth_logout`. Each one runs the CLI command of the same name and returns its JSON, so your guardrails
-  (allowed GPUs, runtime cap, budget) apply unchanged.
+  (allowed GPUs, runtime cap, monthly budget) apply unchanged: `up` refuses with `step: "policy"` or
+  `step: "budget"`.
 - **Sign-in from the agent**: with no Google sign-in, the agent calls `auth_login`. Your browser opens
   Google's consent page (the agent also gets the link to show you); tick **Read, write and delete your Colab
   resources** and the agent's `auth_wait` sees the sign-in finish. No terminal, no panel.
