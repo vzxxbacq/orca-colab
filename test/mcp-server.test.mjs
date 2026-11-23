@@ -94,6 +94,7 @@ test("mcp handshake: initialize, ping, tools/list and JSON-RPC errors", async (t
   assert.match(init.result.instructions, /Call auth_login/);
   assert.match(init.result.instructions, /tick the Colab permission/);
   assert.match(init.result.instructions, /up with step "budget"/);
+  assert.match(init.result.instructions, /the last page \(http:\/\/127\.0\.0\.1:PORT\/\.\.\.\) will not load\. That is expected/);
 
   const future = await client.request("initialize", { protocolVersion: "2099-01-01", capabilities: {} });
   assert.equal(future.result.protocolVersion, "2025-11-25");
@@ -362,6 +363,9 @@ test("job_submit returns at once; job_logs follows by byte offset; job_wait sees
   assert.equal((await client.call("job_logs", { id: "../x" })).structuredContent.error, "invalid task id: ../x");
 });
 
+const REMOTE_BROWSER_NOTE =
+  "If the browser is on another machine than orca-colab, the last page (http://127.0.0.1:PORT/...) will not load. That is expected: copy its full address from the address bar and give it to you for the auth_redirect tool. That address is a one-time key to the Colab account; send it nowhere else.";
+
 function googleFetch(scope) {
   return async () => ({
     ok: true,
@@ -395,11 +399,20 @@ test("auth_login returns the URL at once and auth_wait reports the finished sign
   assert.equal(login.structuredContent.browserOpened, true);
   assert.match(login.structuredContent.url, /^https:\/\/accounts\.google\.com\//);
   assert.match(login.structuredContent.next, /tick the Colab permission/);
+  assert.equal(login.structuredContent.next.includes(REMOTE_BROWSER_NOTE), true);
+  assert.equal(login.structuredContent.alreadyPending, undefined);
   assert.deepEqual(opened, [login.structuredContent.url]);
 
-  const again = await client.call("auth_login");
+  const again = await client.call("auth_login", { open_browser: false });
   assert.equal(again.structuredContent.url, login.structuredContent.url);
+  assert.equal(again.structuredContent.alreadyPending, true);
+  assert.match(
+    again.structuredContent.note,
+    /^A sign-in started \d+s ago is still waiting; this is the same one \(same url\), not a new one\. Its page was already opened in a browser on this machine when it started\.$/,
+  );
   assert.equal(opened.length, 1);
+  const waiting = await client.call("auth_wait", { timeout_seconds: 1 });
+  assert.equal(waiting.structuredContent.next.includes(REMOTE_BROWSER_NOTE), true);
   assert.equal((await client.call("auth_status")).structuredContent.signIn.state, "waiting_for_owner");
 
   assert.equal((await approveInBrowser(login.structuredContent.url)).status, 200);
@@ -413,14 +426,25 @@ test("auth_login returns the URL at once and auth_wait reports the finished sign
 });
 
 test("a sign-in with the Colab permission left unticked fails with a hint, and no browser means auth_redirect", async (t) => {
+  const opened = [];
   const client = connect(t, {
-    openBrowser: () => ({ opened: false }),
+    openBrowser: (url) => {
+      opened.push(url);
+      return { opened: false };
+    },
     commandContext: { fetchImpl: googleFetch("openid") },
   });
 
   const login = await client.call("auth_login", { open_browser: false });
   assert.equal(login.structuredContent.browserOpened, false);
-  assert.match(login.structuredContent.next, /auth_redirect/);
+  assert.match(login.structuredContent.next, /^No browser was opened\. Give the owner the url/);
+  assert.equal(login.structuredContent.next.includes(REMOTE_BROWSER_NOTE), true);
+  assert.equal(opened.length, 0);
+  // Asking for a browser now opens the page of the sign-in that is already waiting.
+  const reopened = await client.call("auth_login");
+  assert.equal(reopened.structuredContent.alreadyPending, true);
+  assert.equal(reopened.structuredContent.url, login.structuredContent.url);
+  assert.deepEqual(opened, [login.structuredContent.url]);
 
   const redirect = new URL(login.structuredContent.url).searchParams.get("redirect_uri");
   const state = new URL(login.structuredContent.url).searchParams.get("state");

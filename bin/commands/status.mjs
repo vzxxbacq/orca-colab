@@ -1,4 +1,5 @@
 import { EXIT_OK, log, writeJson } from "../lib/cli-output.mjs";
+import { listRecentSessionEnds } from "../lib/credit-ledger.mjs";
 import { listSessions } from "../lib/session-store.mjs";
 
 export async function run(
@@ -29,11 +30,15 @@ export async function run(
     };
   });
 
+  const recentlyEnded = listRecentSessionEnds(homeDir, { nowMs: now });
   if (json) {
-    writeJson({ sessions: enriched }, stdout);
+    writeJson({ sessions: enriched, recentlyEnded }, stdout);
     return EXIT_OK;
   }
 
+  for (const ended of recentlyEnded) {
+    log(`ended ${ended.endedAt}: ${ended.session} (${ended.cause}). ${ended.reason}`, stderr);
+  }
   if (enriched.length === 0) {
     log("No sessions.", stderr);
     return EXIT_OK;

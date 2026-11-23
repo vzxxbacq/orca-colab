@@ -20,6 +20,7 @@ import {
   listOAuthAccounts,
   readOAuthAccountStatus,
   signOutOAuthAccount,
+  remoteBrowserSignInNote,
   resolveOAuthAccountKey,
   runLoopbackOAuthFlow,
 } from "../lib/colab-oauth.mjs";
@@ -68,7 +69,7 @@ export async function run(
     const noBrowser = Boolean(parsed.values["no-browser"]);
     log(
       noBrowser
-        ? `Open the URL below in any browser, then paste the http://127.0.0.1:... URL it redirects to into 'orca-colab auth redirect <url>' on this machine. That URL is a one-time key to your Colab: never send it to anyone or paste it into a site or chat.`
+        ? `Open the URL below in any browser and tick the Colab permission on Google's consent page.`
         : addAccount
         ? `Opening Google sign-in in your default browser to add an account (Passkey supported)...`
         : `Opening Google sign-in in your default browser for account '${account}' (Passkey supported)...`,
@@ -85,6 +86,7 @@ export async function run(
         ...(loginTimeoutMs ? { timeoutMs: loginTimeoutMs } : {}),
         onAuthUrl: (url) => {
           log(noBrowser ? `Sign-in URL: ${url}` : `If the browser did not open, visit: ${url}`, stderr);
+          log(remoteBrowserSignInNote("run 'orca-colab auth redirect <address>' on this machine"), stderr);
         },
       });
       const savedAccount = status.account || account;

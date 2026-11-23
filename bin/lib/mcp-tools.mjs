@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execCommandOverTty } from "./colab-api-client.mjs";
-import { listOAuthAccounts } from "./colab-oauth.mjs";
+import { listOAuthAccounts, remoteBrowserSignInNote } from "./colab-oauth.mjs";
 import { openUrlInSystemBrowser } from "./open-url.mjs";
 import { listTasks, readTask, readTaskLog, taskLogPath } from "./task-store.mjs";
 
@@ -16,6 +16,8 @@ const LOG_CHUNK_BYTES = 65_536;
 // Codex gives a tool call 60 s unless the user raises tool_timeout_sec, so waits default to less.
 const DEFAULT_WAIT_SECONDS = 45;
 const MAX_WAIT_SECONDS = 600;
+
+const REMOTE_BROWSER_NOTE = remoteBrowserSignInNote("give it to you for the auth_redirect tool");
 
 export const MCP_INSTRUCTIONS = `Colab GPU: use a Google Colab runtime (T4, L4, A100 and other GPUs, or CPU) as a remote compute backend. The workspace, the agent and the Google credentials stay on this machine; the runtime is a disposable box reached over public HTTPS. Reach for it when a task needs a GPU or CUDA, training, fine-tuning or inference too heavy for this machine, or when the user mentions Colab.
 
@@ -29,7 +31,7 @@ Order of work
 7. down as soon as the GPU work is finished.
 
 Sign-in
-Call auth_login. It opens Google's consent page in the owner's browser on this machine and returns the URL; show the owner the URL in case the browser did not open. Tell them to tick the Colab permission ("Read, write and delete your Colab resources", or Select all): it starts unticked and sign-in fails without it. Then call auth_wait until state is "signed_in". If the owner's browser runs on another machine than this server, the last redirect to http://127.0.0.1 will not load: ask them to copy that address from the address bar and pass it to auth_redirect. That address is a one-time key to their Colab and must go nowhere else.
+Call auth_login. It opens Google's consent page in the owner's browser on this machine and returns the URL; show the owner the URL in case the browser did not open. Tell them to tick the Colab permission ("Read, write and delete your Colab resources", or Select all): it starts unticked and sign-in fails without it. Then call auth_wait until state is "signed_in". Always tell the owner this too, because you cannot know where their browser runs: ${REMOTE_BROWSER_NOTE}
 
 Hygiene
 - sync is for code (256 MB cap; honours .gitignore and .colabignore). Have the runtime download datasets and weights itself.
@@ -123,7 +125,7 @@ const TOOL_SPECS = [
     name: "auth_login",
     title: "Sign in with Google",
     description:
-      "Starts Google sign-in for the owner in one step: opens the consent page in the default browser on this machine, and returns at once with state \"waiting_for_owner\" and the url (show it to the owner in case the browser did not open). The owner must tick the Colab permission (\"Read, write and delete your Colab resources\", or Select all); it starts unticked. Then call auth_wait. The page is valid for 5 minutes; calling again while one is waiting returns the same url. Use add to connect another account next to the existing ones.",
+      "Starts Google sign-in for the owner in one step: opens the consent page in the default browser on this machine, and returns at once with state \"waiting_for_owner\" and the url (show it to the owner in case the browser did not open). The owner must tick the Colab permission (\"Read, write and delete your Colab resources\", or Select all); it starts unticked. Then call auth_wait. Always pass on the note about a browser on another machine that comes back in next. The page is valid for 5 minutes; calling again while one is waiting returns that same sign-in (alreadyPending true, with a note saying whether its page was opened), not a new one. Use add to connect another account next to the existing ones.",
     inputSchema: schema({
       account: { type: "string", description: "Label to store the sign-in under. Default: the default account." },
       add: { type: "boolean", description: "Add another Google account instead of replacing the default one." },
@@ -151,7 +153,7 @@ const TOOL_SPECS = [
     name: "auth_redirect",
     title: "Finish a sign-in from a browser on another machine",
     description:
-      "Only when the owner's browser is not on the machine this server runs on (auth_login returned browserOpened false, or the page ended on an address that would not load): pass the full http://127.0.0.1:PORT/?state=...&code=... address from the browser's address bar. It is a one-time key to the owner's Colab; send it nowhere else. Then call auth_wait.",
+      "When the owner's browser is not on the machine this server runs on, the sign-in ends on an http://127.0.0.1:PORT/... page that does not load there, which is expected: pass the full http://127.0.0.1:PORT/?state=...&code=... address from the browser's address bar. It is a one-time key to the owner's Colab; send it nowhere else. Then call auth_wait.",
     inputSchema: schema({ url: { type: "string", description: "The http://127.0.0.1:... address the browser was redirected to." } }, ["url"]),
   },
   {
@@ -184,7 +186,7 @@ const TOOL_SPECS = [
     name: "status",
     title: "List Colab runtimes",
     description:
-      "Lists the sessions (runtimes) known on this machine: name, gpu, rateKey, cuPerHour, account, remoteRoot, ageSeconds, state and reachable. Same as the CLI's status and ls. A session with reachable false is a zombie: call down for it.",
+      "Lists the sessions (runtimes) known on this machine: name, gpu, rateKey, cuPerHour, account, remoteRoot, ageSeconds, state and reachable. Same as the CLI's status and ls. A session with reachable false is a zombie: call down for it. recentlyEnded lists the sessions that ended in the last 24 hours with endedAt, cause (user, idle-watchdog, colab-died) and a reason, so a session that is missing is explained: tell the owner the cause instead of guessing.",
     inputSchema: schema(),
     annotations: READ_ONLY,
   },
@@ -734,9 +736,11 @@ export function createColabMcpTools({
         url: state.url,
         browserOpened: state.browserOpened,
         secondsLeft,
-        next: state.browserOpened
-          ? "Google's consent page is open in the owner's browser. Ask them to finish there and to tick the Colab permission (\"Read, write and delete your Colab resources\", or Select all; it starts unticked). Show them the url in case no page appeared. Then call auth_wait."
-          : "No browser could be opened on this machine. Give the owner the url and ask them to tick the Colab permission (it starts unticked). If their browser is on another machine the last page will not load: have them copy its http://127.0.0.1:... address and pass it to auth_redirect. Then call auth_wait.",
+        next: `${
+          state.browserOpened
+            ? "Google's consent page was opened in the default browser of the machine this server runs on. Show the owner the url as well, in case no page appeared."
+            : "No browser was opened. Give the owner the url to open in any browser."
+        } Ask them to tick the Colab permission ("Read, write and delete your Colab resources", or Select all; it starts unticked). Tell them: ${REMOTE_BROWSER_NOTE} Then call auth_wait.`,
       };
     }
     const result = toResult(state.outcome, { signInHint: false });
@@ -753,6 +757,7 @@ export function createColabMcpTools({
   }
 
   async function startSignIn(args) {
+    let pendingNote = null;
     if (!signIn || signIn.outcome) {
       const state = {
         startedAt: Date.now(),
@@ -786,11 +791,25 @@ export function createColabMcpTools({
       );
       signIn = state;
       await Promise.race([urlKnown, state.finished]);
+    } else {
+      pendingNote = `A sign-in started ${Math.round((Date.now() - signIn.startedAt) / 1000)}s ago is still waiting; this is the same one (same url), not a new one.`;
+      if (args.open_browser !== false && !signIn.browserOpened) {
+        try {
+          signIn.browserOpened = Boolean((await openBrowser(signIn.url))?.opened);
+        } catch {
+          signIn.browserOpened = false;
+        }
+      } else if (args.open_browser === false && signIn.browserOpened) {
+        pendingNote += " Its page was already opened in a browser on this machine when it started.";
+      }
     }
     if (args.wait_seconds) {
       await Promise.race([signIn.finished, sleep(args.wait_seconds * 1000)]);
     }
-    return describeSignIn(signIn);
+    const result = describeSignIn(signIn);
+    return pendingNote && result.state === "waiting_for_owner"
+      ? { ...result, alreadyPending: true, note: pendingNote }
+      : result;
   }
 
   const handlers = {

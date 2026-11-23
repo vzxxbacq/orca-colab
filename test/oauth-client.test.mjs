@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { run as runAuth } from "../bin/commands/auth.mjs";
 import { COLAB_HEADERS } from "../bin/lib/colab-api-client.mjs";
 import {
   getValidAccessToken,
@@ -60,4 +61,31 @@ test("a sign-in where the Colab checkbox was left unticked fails and stores noth
   });
   assert.equal((await page).status, 403);
   assert.deepEqual(readOAuthStore(home).accounts, {});
+});
+
+test("auth login --no-browser explains the 127.0.0.1 page that will not load and where to take its address", async (t) => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "orca-colab-oauth-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  let err = "";
+  const controller = new AbortController();
+  const code = await runAuth(["login", "--no-browser"], {
+    json: true,
+    stdout: { write() {} },
+    stderr: {
+      write: (chunk) => {
+        err += chunk;
+        if (err.includes("auth redirect")) controller.abort();
+      },
+    },
+    homeDir: home,
+    signal: controller.signal,
+  });
+  assert.equal(code, 1);
+  const lines = err.split("\n");
+  assert.equal(lines[0], "[colab] Open the URL below in any browser and tick the Colab permission on Google's consent page.");
+  assert.match(lines[1], /^\[colab\] Sign-in URL: https:\/\/accounts\.google\.com\//);
+  assert.equal(
+    lines[2],
+    "[colab] If the browser is on another machine than orca-colab, the last page (http://127.0.0.1:PORT/...) will not load. That is expected: copy its full address from the address bar and run 'orca-colab auth redirect <address>' on this machine. That address is a one-time key to the Colab account; send it nowhere else.",
+  );
 });

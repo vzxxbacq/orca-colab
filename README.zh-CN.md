@@ -170,6 +170,9 @@ codex mcp add colab -- npx -y https://codeload.github.com/vzxxbacq/orca-colab/ta
   CLI 命令并返回它的 JSON，所以你设的边界（允许的 GPU、运行时上限、月度预算）原样生效：`up` 会以 `step: "policy"` 或 `step: "budget"` 拒绝。
 - **由 Agent 发起登录**：没有 Google 登录时，Agent 调用 `auth_login`，你的浏览器会打开 Google 授权页（Agent 同时拿到链接，
   可以发给你）；勾选 **Read, write and delete your Colab resources**，Agent 的 `auth_wait` 就会得知登录完成。不需要终端，也不需要面板。
+- **在另一台机器上登录**：登录最后会跳转到运行 `orca-colab` 那台机器上的 `http://127.0.0.1:PORT/...`。如果你的浏览器在另一台机器上
+  （远程 Orca 服务器、SSH），这最后一页打不开，这是正常的：从地址栏复制完整地址交给 Agent（`auth_redirect`），或在那台机器上运行
+  `orca-colab auth redirect <地址>`。这个地址是你 Colab 的一次性密钥，不要发到别处。
 - **与面板状态一致**：服务读写的是和 CLI 相同的 `~/.orca-colab`。运行时、任务及其实时输出、算力余额和登录状态会即时出现在
   **Colab GPU** 面板里；你在面板里的改动（边界、账号、停止运行时或任务）也是 Agent 下一次调用看到的状态。
 - **路径**：服务不在你的工作区里运行，所以 `sync`、`pull` 和带 `sync` 的 `job_submit` 需要传 `workspace_path`

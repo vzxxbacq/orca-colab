@@ -196,6 +196,11 @@ Any other MCP client: command `npx`, arguments `-y https://codeload.github.com/v
 - **Sign-in from the agent**: with no Google sign-in, the agent calls `auth_login`. Your browser opens
   Google's consent page (the agent also gets the link to show you); tick **Read, write and delete your Colab
   resources** and the agent's `auth_wait` sees the sign-in finish. No terminal, no panel.
+- **Signing in from another machine**: sign-in ends on `http://127.0.0.1:PORT/...` on the machine that runs
+  `orca-colab`. When your browser is on a different machine (a remote Orca server, SSH), that last page will
+  not load. That is expected: copy its full address from the address bar and give it to the agent
+  (`auth_redirect`), or run `orca-colab auth redirect <address>` on that machine. The address is a one-time
+  key to your Colab; send it nowhere else.
 - **Same state as the panel**: the server reads and writes the same `~/.orca-colab` as the CLI. Runtimes,
   runs, jobs with live output, credits and the sign-in appear in the **Colab GPU** panel as they happen, and
   what you change there (guardrails, account, stopping a runtime or a job) is what the agent's next call sees.

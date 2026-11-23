@@ -1485,6 +1485,7 @@
       (() => {
       const orcaApi = window.orca;
       let dashboardState = null;
+      let lastAnnouncedSessionEnd;
       let selectedGpu = "T4";
       let selectedTaskId = null;
       let currentView = "wizard"; // "wizard" | "launcher" | "workspace"
@@ -1986,6 +1987,21 @@
           if (snap.provisioning?.error) {
             showNotice(`Launch failed: ${snap.provisioning.error}`, "error");
           }
+        }
+
+        // A session that ended without the user pressing Stop is announced once, with the reason.
+        const lastEnd = (snap.recentlyEnded || [])[0];
+        if (lastEnd && lastEnd.endedAt !== lastAnnouncedSessionEnd) {
+          const firstSnapshot = lastAnnouncedSessionEnd === undefined;
+          lastAnnouncedSessionEnd = lastEnd.endedAt;
+          if (!firstSnapshot && lastEnd.cause !== "user") {
+            showNotice(
+              `${lastEnd.session} ended at ${new Date(lastEnd.endedAt).toLocaleTimeString()}: ${lastEnd.reason}`,
+              "error",
+            );
+          }
+        } else if (!lastEnd && lastAnnouncedSessionEnd === undefined) {
+          lastAnnouncedSessionEnd = null;
         }
 
         const hasTasks = Array.isArray(snap.tasks) && snap.tasks.length > 0;
