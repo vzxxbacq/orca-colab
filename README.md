@@ -121,8 +121,9 @@ about a minute and roughly 0.03 CU.
 
 ### Do I need SSH, ngrok, Tailscale or a VPN?
 No. Everything goes over HTTPS and WebSockets to the Colab API and the runtime's own proxy. Nothing has to be
-reachable on your network and no port is opened. The flip side: there is no port forwarding; to query a
-server running on the runtime, use `orca-colab run -- curl -s localhost:<port>/...`.
+reachable on your network and no port is opened on the runtime. To reach an HTTP service that runs there, use
+[`orca-colab forward`](#port-forwarding): it listens on your machine and carries each request over the same
+authenticated channel.
 
 ### Does my code leave my machine?
 Only what you sync, and only to your own Colab runtime. Agents, the workspace and your Google tokens stay on
@@ -159,6 +160,7 @@ orca-colab job submit --name "Train" --wait --json -- <cmd>
 orca-colab run --json -- <cmd>
 orca-colab sync [path] --json
 orca-colab pull <remote> <localDir> --json
+orca-colab forward --port <remote port> [--listen 127.0.0.1:<local port>]
 orca-colab down [--all] --json
 ```
 
@@ -166,8 +168,34 @@ orca-colab down [--all] --json
 folder, or an absolute path such as `/content/model.pt`) into a tar.gz on the runtime, downloads it over
 HTTPS from the runtime's own Jupyter server with the runtime's proxy token, and unpacks it into
 `./results/outputs`. Files of any size and type arrive byte for byte; nothing needs to be reachable on
-your network. There is no port forwarding: to query a service running on the runtime, use
-`orca-colab run -- curl -s localhost:<port>/...`.
+your network.
+
+### Port forwarding
+
+```sh
+orca-colab forward --port 8000 [--session <name>] [--listen 127.0.0.1:8000] [--timeout 300]
+```
+
+While this runs, `http://127.0.0.1:8000` on your machine answers with whatever port 8000 on the runtime
+answers: method, path, query, headers, body, status and response headers pass through unchanged, so JSON
+APIs, multipart uploads and CORS preflights work as they are. Stop it with Ctrl-C. `status` and the panel show
+active forwards, and a session with one is never auto-stopped as idle.
+
+- **How it travels**: Colab's proxy reaches only the runtime's Jupyter server, so each request is written
+  there as a file through the Jupyter contents API, replayed against `127.0.0.1:<port>` by a small helper
+  process on the runtime, and the response is read back. No tunnel, SSH or open port on the runtime.
+- **Cost per request**: about half a second on top of the service's own time (two round trips to the
+  runtime). Measured: a 20 MB upload in 7 s, a 30 MB response in 3 s, a 90-second request, 6 requests at once.
+- **Limits**: HTTP only. No WebSockets, and no streaming: a response arrives when it is complete, so
+  server-sent events and chunked progress do not work. Request bodies up to 256 MB. One request may take
+  `--timeout` seconds (default 300).
+- **Errors from the forward itself** are JSON with status 502 or 504: `session_gone` (the runtime was
+  released: `up` again, start the service, restart the forward), `port_unreachable` (nothing listens on that
+  port on the runtime), `forward_timeout`.
+- It binds to `127.0.0.1` unless `--listen` says otherwise. To publish the service, run your tunnel or
+  reverse proxy on your own machine in front of the forward, not on the Colab runtime.
+
+For a one-off query, `orca-colab run -- curl -s localhost:<port>/...` is still the shortest way.
 
 ## Use as a connector (MCP)
 

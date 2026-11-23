@@ -104,7 +104,8 @@ skill 使用它：`npx skills add vzxxbacq/orca-colab`，或把它当作 MCP 服
 
 ### 需要 SSH、ngrok、Tailscale 或 VPN 吗？
 不需要。所有通信都是通过 HTTPS 和 WebSocket 访问 Colab API 和运行时自带的代理，不需要内网可达，也不开放任何端口。
-相应地也没有端口转发：要访问运行时上的服务，用 `orca-colab run -- curl -s localhost:<端口>/...`。
+运行时上也不会开放端口。要访问运行在上面的 HTTP 服务，用 [`orca-colab forward`](#端口转发)：它在本机监听，
+每个请求都走同一条已认证的通道。
 
 ### 我的代码会离开本机吗？
 只有你同步的内容，而且只会到你自己的 Colab 运行时。Agent、工作区和 Google token 都留在本机。登录换 token 的请求会经过一个
@@ -138,13 +139,36 @@ orca-colab job submit --name "Train" --wait --json -- <cmd>
 orca-colab run --json -- <cmd>
 orca-colab sync [path] --json
 orca-colab pull <remote> <localDir> --json
+orca-colab forward --port <远端端口> [--listen 127.0.0.1:<本地端口>]
 orca-colab down [--all] --json
 ```
 
 **下载结果。** `orca-colab pull outputs ./results --json` 会在运行时上把 `outputs`（相对于同步目录，也可以是
 `/content/model.pt` 这样的绝对路径）打成 tar.gz，用运行时的代理 token 通过 HTTPS 从运行时自带的 Jupyter
 服务下载，再解压到 `./results/outputs`。任何大小和类型的文件都按字节原样到达，不需要任何内网可达。
-不支持端口转发：要访问运行时上的服务，用 `orca-colab run -- curl -s localhost:<端口>/...`。
+
+### 端口转发
+
+```sh
+orca-colab forward --port 8000 [--session <name>] [--listen 127.0.0.1:8000] [--timeout 300]
+```
+
+命令运行期间，本机的 `http://127.0.0.1:8000` 返回的就是运行时上 8000 端口的响应：方法、路径、查询串、请求头、请求体、
+状态码和响应头原样透传，所以 JSON API、multipart 上传和 CORS 预检都能直接用。Ctrl-C 停止。`status` 和面板会显示正在
+运行的转发，有转发的 session 不会被当作空闲自动停掉。
+
+- **怎么传输**：Colab 的代理只能到达运行时上的 Jupyter 服务，所以每个请求先通过 Jupyter contents API 写成一个文件，
+  由运行时上的一个小辅助进程对 `127.0.0.1:<端口>` 重放，再把响应读回来。运行时上没有隧道、SSH 或开放端口。
+- **每个请求的开销**：在服务自身耗时之外约半秒（到运行时两个来回）。实测：20 MB 上传 7 秒，30 MB 响应 3 秒，
+  90 秒的慢请求，6 个并发请求。
+- **限制**：仅 HTTP。不支持 WebSocket，也不支持流式响应：响应完整后才返回，所以 SSE 和分块进度不可用。请求体最大
+  256 MB。单个请求最长 `--timeout` 秒（默认 300）。
+- **转发本身的错误**是 JSON，状态码 502 或 504：`session_gone`（运行时已释放：重新 `up`、启动服务、重启转发）、
+  `port_unreachable`（运行时上该端口没有服务）、`forward_timeout`。
+- 默认只绑定 `127.0.0.1`，可用 `--listen` 修改。要对外发布服务，请在自己的机器上、转发的前面运行隧道或反向代理，
+  不要在 Colab 运行时上运行。
+
+只查询一次的话，`orca-colab run -- curl -s localhost:<端口>/...` 仍然最省事。
 
 ## 作为连接器使用（MCP）
 

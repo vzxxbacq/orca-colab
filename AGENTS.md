@@ -20,6 +20,7 @@ Read in this order before touching code:
 skills/colab-gpu/SKILL.md   the agent-facing procedure (agentskills layout; npx skills add vzxxbacq/orca-colab)
 skills/colab-gpu/references/cli.md   command table the skill links to
 bin/orca-colab.mjs          CLI entry; bin/commands/<name>.mjs per command; bin/lib/ concept modules
+bin/commands/forward.mjs    `orca-colab forward`: local HTTP listener to a port on the runtime (bin/lib/port-forward.mjs)
 bin/commands/mcp.mjs        `orca-colab mcp`: the same commands as MCP tools on stdio (bin/lib/mcp-tools.mjs,
                             bin/lib/mcp-stdio-server.mjs); what `orca bot tools add` and other clients start
 orca-plugin.json, worker/, panel/      thin Orca plugin (M2): sessions panel, status bar, terminal launcher
