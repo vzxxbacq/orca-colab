@@ -25,6 +25,7 @@ const COMMANDS = new Set([
   "ledger",
   "rates",
   "watch",
+  "mcp",
 ]);
 
 const HELP_TEXT = `Usage: orca-colab <command> [options]
@@ -44,6 +45,7 @@ Commands:
   ledger     Show session and calibration history
   rates      View or update the GPU compute-unit rate table
   watch      Stream panel state for the Orca plugin (runs inside an Orca terminal on a remote server)
+  mcp        Serve every command as MCP tools on stdio (connector for Orca bots, Claude Code, Codex)
 
 Global options:
   --json     Emit a single JSON object on stdout (logs go to stderr)
@@ -105,6 +107,8 @@ export async function main(argv = process.argv.slice(2), overrides = {}) {
       homeDir,
       signal,
       commandName: command,
+      cliMain: main,
+      ...overrides.commandContext,
     });
     return typeof code === "number" ? code : EXIT_OK;
   } catch (err) {

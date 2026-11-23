@@ -77,6 +77,9 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
 - [x] **Add the `orca-plugin` GitHub topic.** — Done (`vzxxbacq/orca-colab` carries topic `orca-plugin`).
 - [x] **`pull` for Direct API sessions.** — Done 2026-11-12: packs on the runtime, downloads from Jupyter
       `/files` over HTTPS (DESIGN D20); Tailscale/SSH paths, `setup`, `forward` and the notebook removed (D19).
+- [x] **MCP connector (D22).** — Done: `orca-colab mcp` serves every CLI command as an MCP tool on stdio
+      (`bin/lib/mcp-tools.mjs`, `bin/lib/mcp-stdio-server.mjs`), with `auth_login` / `auth_wait` sign-in and
+      the panel following through `~/.orca-colab` (`test/mcp-server.test.mjs`).
 - [ ] **Abort handling**: wire `SIGINT`/`SIGTERM` in `bin/orca-colab.mjs` to an `AbortController` signal so
       aborting `up` cleans up `assign.lock` and leaves no partial session file; add unit test.
 - [x] **CI/CD.** — Done 2026-11-12 (#9): `node --test` on Ubuntu/macOS/Windows × Node 20/22, manifest schema

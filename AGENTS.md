@@ -1,6 +1,6 @@
 # orca-colab — agent instructions
 
-A skill, a CLI and a thin Orca plugin that let a coding agent running locally in Orca set up a Google
+A skill, a CLI, an MCP server and a thin Orca plugin that let a coding agent running locally in Orca set up a Google
 Colab GPU runtime together with the user and use it as a compute backend. Agents, the workspace and
 credentials stay local; Colab is a disposable GPU box reached only through public HTTPS/WSS endpoints
 (the Colab API and the runtime's proxy). Never assume a VPN, tailnet, SSH or inbound port (DESIGN D19).
@@ -20,6 +20,8 @@ Read in this order before touching code:
 skills/colab-gpu/SKILL.md   the agent-facing procedure (agentskills layout; npx skills add vzxxbacq/orca-colab)
 skills/colab-gpu/references/cli.md   command table the skill links to
 bin/orca-colab.mjs          CLI entry; bin/commands/<name>.mjs per command; bin/lib/ concept modules
+bin/commands/mcp.mjs        `orca-colab mcp`: the same commands as MCP tools on stdio (bin/lib/mcp-tools.mjs,
+                            bin/lib/mcp-stdio-server.mjs); what `orca bot tools add` and other clients start
 orca-plugin.json, worker/, panel/      thin Orca plugin (M2): sessions panel, status bar, terminal launcher
 docs/                       design, verified Orca facts, TODO
 ```
@@ -41,6 +43,10 @@ docs/                       design, verified Orca facts, TODO
 - **Agent-parsable output**: with `--json`, stdout carries exactly one JSON object and nothing else.
   Progress, prompts and errors go to stderr with the `[colab]` prefix. Exit codes are part of the
   contract (see DESIGN § CLI); the skill depends on them.
+- **The MCP server is the CLI, not a second implementation** (DESIGN D22). A tool calls the command's own
+  code through `main()` and returns its `--json` object, so guardrails, state files and the panel behave the
+  same. A new command or flag needs a line in `CLI_COVERAGE` (`bin/lib/mcp-tools.mjs`); new agent guidance
+  goes into both `SKILL.md` and `MCP_INSTRUCTIONS`. In `orca-colab mcp`, stdout carries JSON-RPC only.
 - **Idempotent and interruptible**: `up` may be killed at any time. Never leave a half-written session
   file; write JSON atomically (tmp + rename). `down` must succeed even when Colab is already gone.
 - **Credits are estimates.** Every number derived from the ledger is labelled approximate and shows its
@@ -70,7 +76,7 @@ Run `node --test` (and, once the plugin exists, `orca plugin validate .`) before
   - `manifest`: `orca-plugin.json` against Orca's published JSON schema; versions agree; no runtime deps.
   - `compat` (PRs): `scripts/compat-contract.mjs` extracts the public contract (commands, flags,
     subcommands, exit codes, offline `--json` key paths, session/config/task/ledger formats, `watch`
-    protocol and panel actions, plugin id/settings/commands/capabilities/`engines.orca`) from the PR and
+    protocol and panel actions, MCP tool and argument names, plugin id/settings/commands/capabilities/`engines.orca`) from the PR and
     from its base; `scripts/compat-diff.mjs` fails on anything removed or changed, on a new capability and
     on a raised `engines.orca`. After the owner approves a break, add the `breaking-change` label to the
     PR (or bump the major version); the job re-runs on labelling and lists the breaks in its summary.
@@ -112,8 +118,8 @@ verifiable locally first (JSON contract, fake `execTty` / `fetchImpl` injections
   and the changelog, then stop and wait. Never tag or push a major version on your own.
 - **Breaking changes need advance warning**, in the same message that proposes the work, before any code
   is written: anything that renames or removes a CLI command, flag, `--json` field, exit code, plugin
-  setting key or capability; changes the session, task or ledger file formats under `~/.orca-colab`;
+  setting key or capability; renames or removes an MCP tool or argument; changes the session, task or ledger file formats under `~/.orca-colab`;
   changes the `watch` frame protocol; or raises `engines.orca`. State what breaks, who is affected
-  (skill, plugin, remote `watch` of an older version) and the migration, and wait for a go-ahead.
+  (skill, plugin, MCP clients, remote `watch` of an older version) and the migration, and wait for a go-ahead.
 - A tag listed in the Orca community catalog can never move. Ship fixes as a new tag.
 

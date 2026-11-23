@@ -23,4 +23,5 @@ With `--json`, stdout carries exactly one JSON object and all progress/errors go
 | `credits budget <cu> [--account A] [--json]` | Record a monthly compute-unit budget (`budget.set`) for the account. | `0` ok, `1` error |
 | `ledger [--month YYYY-MM] [--account A] [--json]` | List raw credit ledger events (`session.start`, `session.end`, `calibrate`, `budget.set`). | `0` |
 | `rates [--set KEY=CU_PER_HOUR] [--json]` | View or override approximate per-hour compute-unit rates (`T4`, `L4`, `A100`, `TPU v2-8`, `CPU`, `unknown`). | `0` ok, `1` error |
+| `mcp` | Serve every command above as MCP tools on stdio (`doctor`, `auth_login`, `auth_wait`, `up`, `sync`, `run`, `job_submit`, `job_wait`, `job_logs`, `pull`, `down`, `credits`, …) for `orca bot tools add`, Claude Code, Codex and other MCP clients. stdout carries JSON-RPC only. | `0` when stdin closes |
 | `watch [--auto-stop-idle-minutes N] [--no-watchdog]` | Long-running bridge used by the Orca plugin when the workspace lives on a remote Orca server: prints panel state as gzip+base64 frames and accepts `call`/`select`/`live` control lines on stdin. Not meant to be run by hand or by agents. | `0` on `quit`/EOF |

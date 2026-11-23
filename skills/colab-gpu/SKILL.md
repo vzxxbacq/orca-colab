@@ -17,6 +17,8 @@ npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/2944ee151e7ef2d08a
 
 Always pass `--json` and parse **stdout** only (progress and diagnostics go to `stderr` prefixed with `[colab]`).
 
+If this session already has the Colab GPU MCP tools (`doctor`, `auth_login`, `up`, `sync`, `job_submit`, `pull`, `down`, …, served by `orca-colab mcp`), use them instead of the CLI: each tool is one command below with the same options and the same JSON result, the steps are the same, and `auth_login` + `auth_wait` sign the user in without a terminal.
+
 ## 2. Resource Discovery & User Guardrails
 
 1. Run `doctor --json`:

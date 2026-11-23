@@ -34,6 +34,7 @@ export async function run(
     homeDir = os.homedir(),
     fetchImpl = fetch,
     openBrowser,
+    loginTimeoutMs,
     signal,
     nowIso = () => new Date().toISOString(),
   } = {},
@@ -81,6 +82,7 @@ export async function run(
         ...(noBrowser ? { openBrowser: async () => {} } : openBrowser ? { openBrowser } : {}),
         fetchImpl,
         signal,
+        ...(loginTimeoutMs ? { timeoutMs: loginTimeoutMs } : {}),
         onAuthUrl: (url) => {
           log(noBrowser ? `Sign-in URL: ${url}` : `If the browser did not open, visit: ${url}`, stderr);
         },

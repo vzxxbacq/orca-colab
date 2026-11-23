@@ -33,6 +33,7 @@ test("cli help --json lists all dispatched commands", async () => {
       "ledger",
       "rates",
       "watch",
+      "mcp",
     ],
   });
   assert.equal(io.stderrText, "");

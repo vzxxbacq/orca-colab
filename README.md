@@ -104,7 +104,8 @@ work. Through the bundled `colab-gpu` skill it runs `orca-colab up --gpu T4`, `s
 ### Can I use it without Orca?
 Yes. The CLI runs anywhere with Node.js 20+: `npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/<release> <command> --json`
 (the exact pinned command is in each [release](https://github.com/vzxxbacq/orca-colab/releases)). Any agent
-can use it through the skill: `npx skills add vzxxbacq/orca-colab`.
+can use it through the skill: `npx skills add vzxxbacq/orca-colab`, or as an MCP server: see
+[Use as a connector (MCP)](#use-as-a-connector-mcp).
 
 ### Which GPUs can it use?
 Whatever Colab offers your account: typically T4, L4 and A100, plus CPU runtimes. You choose which ones
@@ -165,6 +166,42 @@ HTTPS from the runtime's own Jupyter server with the runtime's proxy token, and 
 `./results/outputs`. Files of any size and type arrive byte for byte; nothing needs to be reachable on
 your network. There is no port forwarding: to query a service running on the runtime, use
 `orca-colab run -- curl -s localhost:<port>/...`.
+
+## Use as a connector (MCP)
+
+`orca-colab mcp` serves the whole CLI as [MCP](https://modelcontextprotocol.io) tools on stdio, so an agent
+needs neither the skill nor a shell. Add it to an Orca bot:
+
+```sh
+orca bot tools add "npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/2944ee151e7ef2d08a5598c00c6cce4e3109f13c mcp" --name colab
+```
+
+Claude Code and Codex (Orca bots also pick up the tools of your own Claude Code or Codex setup):
+
+```sh
+claude mcp add colab --scope user -- npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/2944ee151e7ef2d08a5598c00c6cce4e3109f13c mcp
+codex mcp add colab -- npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/2944ee151e7ef2d08a5598c00c6cce4e3109f13c mcp
+```
+
+Any other MCP client: command `npx`, arguments `-y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/2944ee151e7ef2d08a5598c00c6cce4e3109f13c mcp`.
+
+- **Tools**: `doctor`, `status`, `up`, `sync`, `run`, `job_submit`, `job_list`, `job_logs`, `job_wait`,
+  `job_stop`, `pull`, `down`, `credits`, `credits_calibrate`, `credits_set`, `credits_budget`, `ledger`,
+  `rates`, and `auth_status`, `auth_login`, `auth_wait`, `auth_redirect`, `auth_list`, `auth_switch`,
+  `auth_logout`. Each one runs the CLI command of the same name and returns its JSON, so your guardrails
+  (allowed GPUs, runtime cap, budget) apply unchanged.
+- **Sign-in from the agent**: with no Google sign-in, the agent calls `auth_login`. Your browser opens
+  Google's consent page (the agent also gets the link to show you); tick **Read, write and delete your Colab
+  resources** and the agent's `auth_wait` sees the sign-in finish. No terminal, no panel.
+- **Same state as the panel**: the server reads and writes the same `~/.orca-colab` as the CLI. Runtimes,
+  runs, jobs with live output, credits and the sign-in appear in the **Colab GPU** panel as they happen, and
+  what you change there (guardrails, account, stopping a runtime or a job) is what the agent's next call sees.
+- **Paths**: the server does not run in your workspace, so `sync`, `pull` and `job_submit` with `sync` take
+  `workspace_path` (clients that expose a single MCP root need not pass it).
+- **Long work**: `job_submit` returns a job id at once; `job_wait` and `job_logs` follow it. Waits default to
+  45 seconds. Codex stops a tool call after 60 seconds, which a slow `up` can exceed: the runtime is still
+  created (`status` shows it), or set `tool_timeout_sec = 300` under `[mcp_servers.colab]` in
+  `~/.codex/config.toml`.
 
 ## Remote Orca servers (Beta)
 
