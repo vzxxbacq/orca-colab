@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { syncCreditsFromColabApi } from "../commands/credits.mjs";
+import { discoverAccountRuntimes } from "./account-runtimes.mjs";
 import { getRuntimeResources } from "./colab-api-client.mjs";
 import {
   getColabPaths,
@@ -16,8 +17,11 @@ import { runDoctor } from "./doctor.mjs";
 import { evaluateSessionIdleState } from "./idle-watchdog.mjs";
 import { readRateTable } from "./rate-table.mjs";
 import { liveForwards } from "./port-forward.mjs";
+import { createRuntimeChannel } from "./runtime-channel.mjs";
+import { mirrorRuntimeTasks, mirrorTaskLog } from "./runtime-jobs.mjs";
+import { machineName, readRuntimeUsage } from "./runtime-records.mjs";
 import { listSessions } from "./session-store.mjs";
-import { listTasks, readTaskLog } from "./task-store.mjs";
+import { listTasks, readTask, readTaskLog } from "./task-store.mjs";
 
 export function pickActiveTask(tasks, selectedTaskId = null) {
   return (
@@ -53,10 +57,15 @@ export function readProvisioningLock(homeDir = os.homedir()) {
 // Holds the per-session caches (GPU samples, last live metrics, doctor) that make a snapshot cheap to
 // rebuild every poll. One instance per ~/.orca-colab home.
 export class DashboardSnapshotBuilder {
-  constructor({ homeDir = os.homedir(), env = process.env, origin = null } = {}) {
+  constructor({ homeDir = os.homedir(), env = process.env, origin = null, fetchImpl = fetch } = {}) {
     this.homeDir = homeDir;
     this.env = env;
     this.origin = origin;
+    this.fetchImpl = fetchImpl;
+    this.usageBySession = new Map();
+    this.lastRuntimeSyncAt = 0;
+    this.runtimeSyncInFlight = null;
+    this.lastRuntimeSyncError = null;
     this.gpuUtilSamplesBySession = new Map();
     this.liveMetricsBySession = new Map();
     this.lastCcuSyncAtByAccount = new Map();
@@ -93,6 +102,56 @@ export class DashboardSnapshotBuilder {
     })();
     this.inFlightCcuSyncByAccount.set(account, promise);
     return promise;
+  }
+
+  // Brings this machine's files in line with the account: runtimes at Colab (also ones other machines
+  // started), the jobs on each runtime, and who is using it. Everything else in a snapshot is then
+  // read from ~/.orca-colab as before.
+  async syncFromRuntimes({ maxAgeMs = 10_000 } = {}) {
+    if (this.runtimeSyncInFlight) {
+      return this.runtimeSyncInFlight;
+    }
+    if (Date.now() - this.lastRuntimeSyncAt < maxAgeMs) {
+      return null;
+    }
+    const { homeDir, fetchImpl } = this;
+    this.runtimeSyncInFlight = (async () => {
+      try {
+        await discoverAccountRuntimes({ homeDir, fetchImpl });
+        const live = listSessions(homeDir).filter(
+          (s) => s.state !== "zombie" && s.colabRuntime?.baseUrl && s.colabRuntime?.token,
+        );
+        await Promise.all(
+          live.map(async (session) => {
+            const channel = createRuntimeChannel({ sessionName: session.name, homeDir, fetchImpl });
+            await mirrorRuntimeTasks({ session, homeDir, fetchImpl, channel }).catch(() => {});
+            const usage = await readRuntimeUsage(channel).catch(() => null);
+            if (usage) this.usageBySession.set(session.name, { ...usage, readAt: Date.now() });
+          }),
+        );
+        for (const name of this.usageBySession.keys()) {
+          if (!live.some((s) => s.name === name)) this.usageBySession.delete(name);
+        }
+        this.lastRuntimeSyncError = null;
+      } catch (err) {
+        this.lastRuntimeSyncError = err?.message || String(err);
+      } finally {
+        this.lastRuntimeSyncAt = Date.now();
+        this.runtimeSyncInFlight = null;
+      }
+    })();
+    return this.runtimeSyncInFlight;
+  }
+
+  // What the runtime's records say now, minus this machine's own command (the reader is not a user).
+  runtimeUsage(sessionName) {
+    const usage = this.usageBySession.get(sessionName);
+    if (!usage) return null;
+    return {
+      ...usage,
+      idleMs: typeof usage.idleMs === "number" ? usage.idleMs + (Date.now() - usage.readAt) : null,
+      busyBy: usage.busyBy.filter((u) => u.machine !== machineName(this.env)),
+    };
   }
 
   recordGpuSample(sessionName, percent) {
@@ -163,9 +222,14 @@ export class DashboardSnapshotBuilder {
       });
     }
 
-    const activeTask = pickActiveTask(tasks, selectedTaskId);
+    let activeTask = pickActiveTask(tasks, selectedTaskId);
     let activeTaskOutput = null;
     if (activeTask) {
+      // A job followed by no process on this machine has its output on the runtime only.
+      if (activeTask.runtimeBacked && !activeTask.logComplete) {
+        await mirrorTaskLog({ task: activeTask, homeDir, fetchImpl: this.fetchImpl }).catch(() => {});
+        activeTask = readTask(activeTask.id, homeDir, { reconcile: false }) || activeTask;
+      }
       const logSnap = readTaskLog(activeTask.id, homeDir, { tailLines, maxBytes: logMaxBytes });
       activeTaskOutput = {
         taskId: activeTask.id,
@@ -184,6 +248,8 @@ export class DashboardSnapshotBuilder {
 
     return {
       origin: this.origin,
+      machine: machineName(this.env),
+      runtimeSync: { at: this.lastRuntimeSyncAt || null, error: this.lastRuntimeSyncError },
       defaultAccount,
       accounts,
       oauthAccounts,
@@ -208,11 +274,13 @@ export class DashboardSnapshotBuilder {
     const sessionRunningTasks = tasks.filter(
       (t) => t.sessionName === s.name && t.status === "running",
     ).length;
+    const usage = this.runtimeUsage(s.name);
     const idleInfo = evaluateSessionIdleState({
       session: s,
       gpuSamples: this.gpuUtilSamplesBySession.get(s.name) || [],
       runningTasksCount: sessionRunningTasks,
       nowMs: Date.now(),
+      runtimeUsage: usage,
     });
 
     const reachable = s.state !== "zombie";
@@ -261,6 +329,9 @@ export class DashboardSnapshotBuilder {
       ...s,
       colabRuntime: safeRuntime,
       forwards: liveForwards(s),
+      origin: s.origin ?? null,
+      startedHere: !s.adopted,
+      inUseBy: usage?.busyBy ?? [],
       reachable,
       ageSeconds,
       runningTasksCount: sessionRunningTasks,

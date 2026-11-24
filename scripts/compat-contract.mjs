@@ -2,7 +2,7 @@
 // Prints the public contract of an orca-colab checkout as JSON: everything AGENTS.md calls breaking when
 // removed or changed (commands, flags, --json fields, exit codes, ~/.orca-colab formats, watch protocol,
 // plugin settings, capabilities, engines.orca, MCP tools and their arguments). CI runs it on the PR head and on its base and diffs them.
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -191,10 +191,16 @@ async function fileFormats(root) {
   }
 }
 
+// The terminal bridge (`watch` and its frame protocol) was removed with DESIGN D25; the panel's action
+// names remain, and a base that still has the bridge reports its protocol so the removal shows as a break.
 async function watchProtocol(root) {
-  const watchSource = readFileSync(path.join(root, "bin", "commands", "watch.mjs"), "utf8");
-  const frames = await load(root, "bin/lib/bridge-frames.mjs");
   const { PANEL_ACTION_NAMES } = await load(root, "bin/lib/panel-actions.mjs");
+  const watchPath = path.join(root, "bin", "commands", "watch.mjs");
+  if (!existsSync(watchPath)) {
+    return { protocol: null, framePrefix: null, frameKinds: [], controlVerbs: [], panelActions: sorted(PANEL_ACTION_NAMES) };
+  }
+  const watchSource = readFileSync(watchPath, "utf8");
+  const frames = await load(root, "bin/lib/bridge-frames.mjs");
   const verbs = watchSource.match(/CONTROL_SEGMENT_RE\s*=\s*\/\\b\(([^)]+)\)/);
   return {
     protocol: Number(watchSource.match(/WATCH_PROTOCOL\s*=\s*(\d+)/)?.[1] ?? NaN),

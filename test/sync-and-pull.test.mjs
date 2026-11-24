@@ -87,6 +87,7 @@ test("pull packs the remote path, downloads it from Jupyter /files with the prox
       ttyCommands.push(command);
       return { ok: true, exitCode: 0, stdout: "" };
     },
+    withActivity: (_name, _home, fn) => fn(),
     fetchImpl: async (url, init) => {
       fetched.push({ url, token: init.headers["X-Colab-Runtime-Proxy-Token"] });
       return new Response(readFileSync(archive));

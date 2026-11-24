@@ -11,8 +11,18 @@ import {
   writeJson,
 } from "../lib/cli-output.mjs";
 import { execCommandOverTty } from "../lib/colab-api-client.mjs";
+import { discoverAccountRuntimes, resolveSessionAcrossMachines } from "../lib/account-runtimes.mjs";
+import { SessionGoneError } from "../lib/runtime-channel.mjs";
+import {
+  mirrorAllRuntimeTasks,
+  mirrorTaskLog,
+  runTaskOnRuntime,
+  stopRuntimeTask,
+  taskLogFooter,
+} from "../lib/runtime-jobs.mjs";
+import { describeOrigin } from "../lib/runtime-records.mjs";
 import { withSessionActivity } from "../lib/session-activity.mjs";
-import { readSession, resolveSession } from "../lib/session-store.mjs";
+import { readSession } from "../lib/session-store.mjs";
 import {
   appendTaskLog,
   generateTaskId,
@@ -38,6 +48,7 @@ export async function executeTaskInline(
     stderr = process.stderr,
     withActivity = withSessionActivity,
     execTty = execCommandOverTty,
+    fetchImpl = fetch,
   } = {},
 ) {
   const task = readTask(taskId, homeDir, { reconcile: false });
@@ -66,13 +77,11 @@ export async function executeTaskInline(
   const runCore = async () => {
     let effectiveCwd = task.cwd || session.remoteRoot || null;
 
+    // The sync runs from this machine; its output is put at the head of the runtime's log afterwards.
+    let syncText = "";
     if (task.syncPath) {
-      appendTaskLog(
-        task.id,
-        `[task ${task.id}] syncing '${task.syncPath}' to ${session.name}...\n`,
-        homeDir,
-      );
-      const syncChunks = [];
+      const syncChunks = [`[task ${task.id}] syncing '${task.syncPath}' to ${session.name}...\n`];
+      appendTaskLog(task.id, syncChunks[0], homeDir);
       const fakeStream = {
         write(chunk) {
           const text = String(chunk);
@@ -89,6 +98,7 @@ export async function executeTaskInline(
           env,
           homeDir,
         });
+        syncText = syncChunks.join("");
         const refreshed = readSession(session.name, homeDir);
         if (!effectiveCwd && refreshed?.remoteRoot) {
           effectiveCwd = refreshed.remoteRoot;
@@ -121,81 +131,72 @@ export async function executeTaskInline(
       envVars: envPairs,
     });
 
-    appendTaskLog(
-      task.id,
-      `[task ${task.id}] started at ${new Date().toISOString()} on ${session.name} (${session.gpu?.name || "GPU"})\n$ ${task.command.join(" ")}\n`,
-      homeDir,
-    );
+    const logHead = `[task ${task.id}] started at ${new Date().toISOString()} on ${session.name} (${session.gpu?.name || "GPU"})\n$ ${task.command.join(" ")}\n`;
 
-    let exitCode;
+    let followed = null;
+    let leftRunning = false;
     if (session.colabRuntime?.baseUrl && session.colabRuntime?.token) {
-      writeTask(
-        {
-          ...task,
-          cwd: effectiveCwd,
-          localPid: process.pid,
-          status: "running",
-        },
-        homeDir,
-      );
       try {
-        const ttyRes = await execTty({
-          baseUrl: session.colabRuntime.baseUrl,
-          proxyToken: session.colabRuntime.token,
-          command: remoteScript,
-          cwd: effectiveCwd,
-          onOutput: (chunk) => {
-            appendTaskLog(task.id, chunk, homeDir);
-            if (streamToStdout) {
-              stdout.write(chunk);
-            }
-          },
+        followed = await runTaskOnRuntime({
+          task: { ...task, cwd: effectiveCwd, origin: task.origin || describeOrigin({ env, cwd }) },
+          session,
+          script: remoteScript,
+          logHead: syncText + logHead,
+          localLogHead: logHead,
+          homeDir,
+          execTty,
+          fetchImpl,
+          onOutput: streamToStdout ? (chunk) => stdout.write(chunk) : null,
         });
-        exitCode = ttyRes.exitCode;
       } catch (err) {
+        const started = readTask(task.id, homeDir, { reconcile: false })?.runtimeBacked;
+        // Without contact the job may well be running still; the runtime's record settles it later.
+        leftRunning = Boolean(started) && Boolean(err?.followLost) && !(err instanceof SessionGoneError);
         appendTaskLog(
           task.id,
-          `\n[task ${task.id}] colab-tty error: ${err instanceof Error ? err.message : String(err)}\n`,
+          `\n[task ${task.id}] ${leftRunning ? "stopped following" : "error"}: ${err instanceof Error ? err.message : String(err)}\n`,
           homeDir,
         );
-        exitCode = 1;
       }
     } else {
       appendTaskLog(
         task.id,
-        `\n[task ${task.id}] session ${session.name} has no Colab runtime proxy; run 'orca-colab down' and 'orca-colab up' again\n`,
+        `${logHead}\n[task ${task.id}] session ${session.name} has no Colab runtime proxy; run 'orca-colab down' and 'orca-colab up' again\n`,
         homeDir,
       );
-      exitCode = 1;
     }
 
     const latest = readTask(task.id, homeDir, { reconcile: false }) || task;
-    if (latest.status === "stopped") {
+    if (latest.status === "stopped" || followed?.stoppedLocally) {
       return EXIT_OK;
     }
+    if (leftRunning) {
+      writeTask({ ...latest, localPid: null }, homeDir);
+      return EXIT_ERROR;
+    }
 
-    const finishedAt = new Date().toISOString();
-    const finalStatus = exitCode === 0 ? "succeeded" : "failed";
-    appendTaskLog(
-      task.id,
-      `\n[task ${task.id}] ${finalStatus} at ${finishedAt} (exit code ${exitCode})\n`,
-      homeDir,
-    );
-    writeTask(
+    const record = followed?.record;
+    const settled = writeTask(
       {
         ...latest,
         cwd: effectiveCwd,
-        status: finalStatus,
-        exitCode,
-        finishedAt,
+        status: record?.status || "failed",
+        exitCode: record?.exitCode ?? 1,
+        finishedAt: record?.finishedAt || new Date().toISOString(),
+        ...(followed ? { runtimeLogOffset: followed.logOffset, logComplete: true } : {}),
       },
       homeDir,
     );
-    return exitCode;
+    appendTaskLog(task.id, taskLogFooter(settled), homeDir);
+    return settled.exitCode;
   };
 
   if (withActivity) {
-    return await withActivity(session.name, homeDir, runCore);
+    return await withActivity(session.name, homeDir, runCore, {
+      env,
+      command: task.command.join(" ").slice(0, 120),
+      fetchImpl,
+    });
   }
   return await runCore();
 }
@@ -216,6 +217,7 @@ export async function submitTask(
     env = process.env,
     spawnChild = spawn,
     execTty = execCommandOverTty,
+    fetchImpl = fetch,
     stdout = process.stdout,
     stderr = process.stderr,
     streamToStdout = false,
@@ -223,9 +225,10 @@ export async function submitTask(
     nowIso = () => new Date().toISOString(),
   } = {},
 ) {
-  const session = resolveSession({
+  const session = await resolveSessionAcrossMachines({
     sessionName: sessionName ?? null,
     homeDir,
+    fetchImpl,
   });
 
   const cmdArray = Array.isArray(command)
@@ -259,6 +262,7 @@ export async function submitTask(
       startedAt: createdAt,
       finishedAt: null,
       localPid: process.pid,
+      origin: describeOrigin({ env, cwd: localCwd }),
     },
     homeDir,
   );
@@ -272,6 +276,7 @@ export async function submitTask(
       stdout,
       stderr,
       execTty,
+      fetchImpl,
     });
     const finalTask = readTask(initialTask.id, homeDir);
     return { task: finalTask, exitCode };
@@ -300,7 +305,9 @@ export async function submitTask(
   return { task: updatedTask, exitCode: EXIT_OK };
 }
 
-export function stopTaskById(
+// The stop request is a file the job's runner on the runtime watches for, so it works from any machine
+// and without a terminal; the local follower, if this machine has one, is ended too.
+export async function stopTaskById(
   taskId,
   {
     homeDir = os.homedir(),
@@ -314,6 +321,7 @@ export function stopTaskById(
     },
     nowIso = () => new Date().toISOString(),
     execTty = execCommandOverTty,
+    fetchImpl = fetch,
   } = {},
 ) {
   const task = readTask(taskId, homeDir, { reconcile: false });
@@ -327,12 +335,16 @@ export function stopTaskById(
 
   const session = readSession(task.sessionName, homeDir);
   if (session?.colabRuntime?.baseUrl && session?.colabRuntime?.token) {
-    execTty({
-      baseUrl: session.colabRuntime.baseUrl,
-      proxyToken: session.colabRuntime.token,
-      command: `pkill -TERM -f "ORCA_TASK_ID=${task.id}" || true`,
-      timeoutMs: 6000,
-    }).catch(() => {});
+    if (task.runtimeBacked) {
+      await stopRuntimeTask({ task, homeDir, fetchImpl }).catch(() => {});
+    } else {
+      execTty({
+        baseUrl: session.colabRuntime.baseUrl,
+        proxyToken: session.colabRuntime.token,
+        command: `pkill -TERM -f "ORCA_TASK_ID=${task.id}" || true`,
+        timeoutMs: 6000,
+      }).catch(() => {});
+    }
   }
 
   if (task.localPid && task.localPid !== process.pid) {
@@ -340,16 +352,18 @@ export function stopTaskById(
   }
 
   const finishedAt = nowIso();
-  appendTaskLog(task.id, `\n[task ${task.id}] stopped by user at ${finishedAt}\n`, homeDir);
-  return writeTask(
+  const stopped = writeTask(
     {
       ...task,
       status: "stopped",
       exitCode: 130,
       finishedAt,
+      localPid: null,
     },
     homeDir,
   );
+  appendTaskLog(task.id, taskLogFooter(stopped), homeDir);
+  return stopped;
 }
 
 export async function run(
@@ -363,6 +377,7 @@ export async function run(
     homeDir = os.homedir(),
     spawnChild = spawn,
     execTty = execCommandOverTty,
+    fetchImpl = fetch,
   } = {},
 ) {
   const dashDash = argv.indexOf("--");
@@ -403,6 +418,7 @@ export async function run(
       cwd,
       env,
       streamToStdout: false,
+      fetchImpl,
     });
   }
 
@@ -442,6 +458,7 @@ export async function run(
         env,
         spawnChild,
         execTty,
+        fetchImpl,
         stdout,
         stderr,
         streamToStdout: Boolean(opts.wait && !json),
@@ -467,7 +484,14 @@ export async function run(
     return exitCode;
   }
 
+  // Jobs submitted from other machines live on the runtimes; bring this machine's copy up to date first.
+  const refreshFromRuntimes = async (sessionName = null) => {
+    await discoverAccountRuntimes({ homeDir: effectiveHomeDir, fetchImpl }).catch(() => {});
+    await mirrorAllRuntimeTasks({ homeDir: effectiveHomeDir, fetchImpl, sessionName });
+  };
+
   if (subcommand === "ls" || subcommand === "list") {
+    await refreshFromRuntimes(opts.session || null);
     let tasks = listTasks(effectiveHomeDir);
     if (opts.session) {
       tasks = tasks.filter((t) => t.sessionName === opts.session);
@@ -500,10 +524,17 @@ export async function run(
       throw new CliError("usage: orca-colab job logs <task-id> [--tail N] [--follow]");
     }
     const tailLines = Number.parseInt(opts.tail || "200", 10);
-    const task = readTask(taskId, effectiveHomeDir);
+    let task = readTask(taskId, effectiveHomeDir);
+    if (!task || (task.runtimeBacked && !task.logComplete)) {
+      await refreshFromRuntimes(task?.sessionName || null);
+      task = readTask(taskId, effectiveHomeDir);
+    }
     if (!task) {
       throw new CliError(`task not found: ${taskId}`);
     }
+    const copyLog = async (current) =>
+      mirrorTaskLog({ task: current, homeDir: effectiveHomeDir, fetchImpl }).catch(() => current);
+    task = await copyLog(task);
 
     const logData = readTaskLog(task.id, effectiveHomeDir, {
       tailLines: Number.isFinite(tailLines) ? tailLines : 200,
@@ -534,7 +565,11 @@ export async function run(
       let lastBytes = logData.totalBytes;
       while (true) {
         await new Promise((r) => setTimeout(r, 500));
-        const currentTask = readTask(task.id, effectiveHomeDir);
+        let currentTask = readTask(task.id, effectiveHomeDir);
+        if (currentTask?.runtimeBacked && !currentTask.logComplete) {
+          await mirrorAllRuntimeTasks({ homeDir: effectiveHomeDir, fetchImpl, sessionName: currentTask.sessionName });
+          currentTask = await copyLog(readTask(task.id, effectiveHomeDir));
+        }
         const nextLog = readTaskLog(task.id, effectiveHomeDir, { tailLines: 0 });
         if (nextLog.totalBytes > lastBytes) {
           const delta = nextLog.text.slice(nextLog.text.length - (nextLog.totalBytes - lastBytes));
@@ -555,9 +590,13 @@ export async function run(
     if (!taskId) {
       throw new CliError("usage: orca-colab job stop <task-id>");
     }
-    const stopped = stopTaskById(taskId, {
+    if (!readTask(taskId, effectiveHomeDir, { reconcile: false })) {
+      await refreshFromRuntimes();
+    }
+    const stopped = await stopTaskById(taskId, {
       homeDir: effectiveHomeDir,
       execTty,
+      fetchImpl,
     });
     if (json) {
       writeJson({ ok: true, task: stopped }, stdout);

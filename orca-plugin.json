@@ -30,8 +30,7 @@
     "commands": [
       {
         "id": "colab.up",
-        "title": "Colab: Start GPU session",
-        "when": "workspace"
+        "title": "Colab: Start GPU session"
       },
       {
         "id": "colab.down",
@@ -61,31 +60,15 @@
       {
         "key": "cliCommand",
         "title": "orca-colab command",
+        "description": "The orca-colab command the panel shows for you to paste into a terminal of your own (for example a full interactive shell on a runtime). The panel itself talks to Colab directly and does not run it.",
         "type": "string",
         "default": "npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/2944ee151e7ef2d08a5598c00c6cce4e3109f13c"
-      },
-      {
-        "key": "remoteCliCommand",
-        "title": "orca-colab command on remote Orca servers",
-        "description": "Used inside workspaces that live on a remote Orca server (the panel then shows that server's Colab state). Needs orca-colab v0.2.0 or newer (the 'watch' command); defaults to the same command as 'orca-colab command'. For a checkout on the server: node /path/to/orca-colab/bin/orca-colab.mjs",
-        "type": "string",
-        "default": ""
-      },
-      {
-        "key": "autoBridge",
-        "title": "Open the bridge terminal on remote servers automatically",
-        "description": "For projects on a remote Orca server the panel needs one terminal per server running `orca-colab watch`; by default the plugin opens it in the first project that needs it. Turn off to start that terminal yourself.",
-        "type": "boolean",
-        "default": true
       }
     ]
   },
   "capabilities": [
     { "kind": "workspace:read" },
-    { "kind": "terminal:send" },
-    { "kind": "terminal:read" },
     { "kind": "notifications:show" },
-    { "kind": "storage:own" },
     { "kind": "settings:own" }
   ]
 }

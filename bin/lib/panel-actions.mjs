@@ -14,28 +14,29 @@ import {
 import {
   getValidAccessToken,
   listOAuthAccounts,
-  readOAuthStore,
   signOutOAuthAccount,
   resolveOAuthAccountKey,
-  resolveTargetAccount,
   runLoopbackOAuthFlow,
-  saveOAuthCredentials,
 } from "./colab-oauth.mjs";
 import { recordBudgetSetEvent, recordCalibrateEvent } from "./credit-ledger.mjs";
+import { createRuntimeChannel } from "./runtime-channel.mjs";
+import { mirrorTaskLog } from "./runtime-jobs.mjs";
+import { setRuntimeKeep } from "./runtime-records.mjs";
 import { listSessions, readSession, writeSession } from "./session-store.mjs";
 import { clearFinishedTasks, readTask, readTaskLog } from "./task-store.mjs";
 
 const NULL_STREAM = { write() {} };
 
-// Every panel button maps to one action here. The worker runs them in-process for a local workspace
-// and `orca-colab watch` runs the same functions on a remote Orca server, so each action only touches
-// ~/.orca-colab and the network, never the Orca host API.
+// Every panel button maps to one action here, run in the plugin worker. Each action only touches
+// ~/.orca-colab on this machine and the network (Colab and the runtime's proxy), never the Orca host API.
 export function createPanelActions({
   homeDir = os.homedir(),
   env = process.env,
   defaultLocalCwd = () => process.cwd(),
+  fetchImpl = fetch,
 } = {}) {
-  let pendingOAuthRedirectUri = null;
+  // What the panel starts is attributed to it in the runtime's records.
+  const panelEnv = { ...env, ORCA_COLAB_AGENT: env.ORCA_COLAB_AGENT || "Orca panel" };
 
   const actions = {
     async authLogin(input = {}, { onAuthUrl } = {}) {
@@ -54,13 +55,11 @@ export function createPanelActions({
         timeoutMs: Number(input?.timeoutMs) || 300_000,
         ...(noBrowser ? { openBrowser: async () => {} } : {}),
         onAuthUrl: (authUrl, redirectUri) => {
-          pendingOAuthRedirectUri = redirectUri;
           if (typeof onAuthUrl === "function") {
             onAuthUrl({ authUrl, redirectUri, manual: noBrowser });
           }
         },
       });
-      pendingOAuthRedirectUri = null;
       const savedAccount = status.account || requested;
       setDefaultAccount(savedAccount, homeDir);
       try {
@@ -84,68 +83,6 @@ export function createPanelActions({
         // Balance sync right after login is best effort.
       }
       return { status };
-    },
-
-    // Stores credentials obtained by a sign-in that ran elsewhere (the desktop client), then syncs the
-    // balance like a local sign-in would.
-    async authImport(input = {}) {
-      const credentials = input?.credentials;
-      if (!credentials?.refreshToken && !credentials?.accessToken) {
-        throw new Error("authImport needs credentials with a refresh or access token.");
-      }
-      const targetAccount = resolveTargetAccount({
-        store: readOAuthStore(homeDir),
-        account: input?.account || "default",
-        addAccount: Boolean(input?.addAccount),
-        email: credentials.email || null,
-      });
-      const status = saveOAuthCredentials(targetAccount, credentials, homeDir);
-      setDefaultAccount(targetAccount, homeDir);
-      try {
-        const accessToken = await getValidAccessToken({ account: targetAccount, homeDir });
-        if (accessToken) {
-          const ccu = await getConsumptionUserInfo({ accessToken });
-          if (typeof ccu.paidComputeUnitsBalance === "number") {
-            recordCalibrateEvent(
-              {
-                account: targetAccount,
-                balanceCu: ccu.paidComputeUnitsBalance,
-                consumptionRateHourly: ccu.consumptionRateHourly,
-                assignmentsCount: ccu.assignmentsCount,
-                source: "colab-api",
-              },
-              homeDir,
-            );
-          }
-        }
-      } catch {
-        // Balance sync is best effort.
-      }
-      return { status };
-    },
-
-    // The browser on the user's laptop cannot reach the loopback server on a remote host, so the user
-    // pastes the redirect URL and this replays it against the server that is still waiting for it.
-    async oauthReplay(input = {}) {
-      const raw = String(input?.redirectUrl || "").trim();
-      if (!pendingOAuthRedirectUri) {
-        throw new Error("No Google sign-in is waiting for a redirect URL. Start sign-in first.");
-      }
-      let pasted;
-      try {
-        pasted = new URL(raw);
-      } catch {
-        throw new Error("Paste the full URL the browser was redirected to (it starts with http://127.0.0.1:).");
-      }
-      const expected = new URL(pendingOAuthRedirectUri);
-      if (pasted.hostname !== expected.hostname || pasted.port !== expected.port) {
-        throw new Error(`Redirect URL must point at ${expected.origin}; got ${pasted.origin}.`);
-      }
-      const res = await fetch(`${expected.origin}/${pasted.search}`);
-      if (!res.ok) {
-        throw new Error(`Sign-in server rejected the redirect: HTTP ${res.status}.`);
-      }
-      return { ok: true };
     },
 
     async authSwitch(input = {}) {
@@ -205,7 +142,7 @@ export function createPanelActions({
         },
       };
       try {
-        await runUpCommand(args, { json: true, stdout: NULL_STREAM, stderr: logStream, env, homeDir });
+        await runUpCommand(args, { json: true, stdout: NULL_STREAM, stderr: logStream, env: panelEnv, homeDir });
       } catch (err) {
         if (err?.payload?.step === "budget") {
           throw new Error(`${err.message} Raise the monthly budget under Guardrails & CU to start one.`);
@@ -218,7 +155,13 @@ export function createPanelActions({
     async stopSession(input = {}) {
       const args = input?.session ? ["--session", String(input.session)] : [];
       if (input?.cause) args.push("--cause", String(input.cause));
-      await runDownCommand(args, { json: true, stdout: NULL_STREAM, stderr: NULL_STREAM, homeDir });
+      if (input?.force) args.push("--force");
+      let out = "";
+      await runDownCommand(args, { json: true, stdout: { write: (c) => (out += c) }, stderr: NULL_STREAM, homeDir });
+      const result = JSON.parse(out || "{}");
+      if (result.reason === "in-use-elsewhere") {
+        return { ok: false, code: "IN_USE_ELSEWHERE", session: result.session, inUseBy: result.inUseBy };
+      }
       return {};
     },
 
@@ -228,6 +171,13 @@ export function createPanelActions({
         throw new Error(`Session not found: ${input?.session}`);
       }
       writeSession({ ...session, keep: !session.keep }, homeDir);
+      if (session.colabRuntime?.baseUrl && session.colabRuntime?.token) {
+        try {
+          await setRuntimeKeep(createRuntimeChannel({ sessionName: session.name, homeDir, fetchImpl }), session, !session.keep);
+        } catch {
+          // The next sync with the runtime's record decides which value stands.
+        }
+      }
       return { keep: !session.keep };
     },
 
@@ -254,13 +204,13 @@ export function createPanelActions({
           syncPath: input?.syncWorkspace ? localCwd : null,
           wait: false,
         },
-        { homeDir, localCwd, env },
+        { homeDir, localCwd, env: panelEnv },
       );
       return { ok: true, task };
     },
 
     async stopTask(input = {}) {
-      return { task: stopTaskById(String(input?.taskId || ""), { homeDir }) };
+      return { task: await stopTaskById(String(input?.taskId || ""), { homeDir }) };
     },
 
     async clearFinishedTasks(input = {}) {
@@ -270,9 +220,12 @@ export function createPanelActions({
 
     async getTaskLogs(input = {}) {
       const taskId = String(input?.taskId || "");
-      const task = readTask(taskId, homeDir);
+      let task = readTask(taskId, homeDir);
       if (!task) {
         throw new Error(`Task not found: ${taskId}`);
+      }
+      if (task.runtimeBacked && !task.logComplete) {
+        task = await mirrorTaskLog({ task, homeDir, fetchImpl }).catch(() => task);
       }
       const logSnap = readTaskLog(taskId, homeDir, {
         tailLines: Number(input?.tailLines || 300),
@@ -315,8 +268,6 @@ export function createPanelActions({
 
 export const PANEL_ACTION_NAMES = Object.freeze([
   "authLogin",
-  "authImport",
-  "oauthReplay",
   "authSwitch",
   "authLogout",
   "updatePolicy",

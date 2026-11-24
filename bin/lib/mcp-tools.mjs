@@ -8,7 +8,7 @@ import { listOAuthAccounts, remoteBrowserSignInNote } from "./colab-oauth.mjs";
 import { openUrlInSystemBrowser } from "./open-url.mjs";
 import { liveForwards } from "./port-forward.mjs";
 import { listSessions } from "./session-store.mjs";
-import { listTasks, readTask, readTaskLog, taskLogPath } from "./task-store.mjs";
+import { isProcessAlive, listTasks, readTask, readTaskLog, taskLogPath } from "./task-store.mjs";
 
 const CLI_ENTRY_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "orca-colab.mjs");
 
@@ -188,8 +188,10 @@ const TOOL_SPECS = [
     name: "status",
     title: "List Colab runtimes",
     description:
-      "Lists the sessions (runtimes) known on this machine: name, gpu, rateKey, cuPerHour, account, remoteRoot, ageSeconds, state and reachable. Same as the CLI's status and ls. forwards lists active port forwards (listen address, remote port, pid). A session with reachable false is a zombie: call down for it. recentlyEnded lists the sessions that ended in the last 24 hours with endedAt, cause (user, idle-watchdog, colab-died) and a reason, so a session that is missing is explained: tell the owner the cause instead of guessing.",
-    inputSchema: schema(),
+      "Lists the runtimes of the Google account signed in on this machine, including ones started from other machines (asked from Colab on every call; local: true skips that): name, gpu, rateKey, cuPerHour, account, remoteRoot, ageSeconds, state and reachable. startedHere false means another machine started it; origin then names that machine and agent, or is null for a runtime without an orca-colab record (unknown origin: an older version, or a notebook the owner has open in Colab; leave it alone unless the owner says otherwise). Every command works on any listed runtime by its name. Same as the CLI's status and ls. forwards lists active port forwards (listen address, remote port, pid). A session with reachable false is a zombie: call down for it. recentlyEnded lists the sessions that ended in the last 24 hours with endedAt, cause (user, idle-watchdog, colab-died) and a reason, so a session that is missing is explained: tell the owner the cause instead of guessing.",
+    inputSchema: schema({
+      local: { type: "boolean", description: "Only what this machine already knows; no call to Colab." },
+    }),
     annotations: READ_ONLY,
   },
   {
@@ -323,10 +325,11 @@ const TOOL_SPECS = [
     name: "down",
     title: "Release a Colab runtime",
     description:
-      "Deletes the runtime at Colab so it stops billing, and removes the session. Call it as soon as the GPU work is finished and the results are pulled. Succeeds when the runtime is already gone. reason \"api-delete-failed\" means it may still be running: sign in with auth_login and call down again, or have the owner delete it at colab.research.google.com.",
+      "Deletes the runtime at Colab so it stops billing, and removes the session. Call it as soon as the GPU work is finished and the results are pulled. Succeeds when the runtime is already gone. reason \"api-delete-failed\" means it may still be running: sign in with auth_login and call down again, or have the owner delete it at colab.research.google.com. reason \"in-use-elsewhere\" means another machine has a command or job running on it right now (inUseBy lists who): it was not released; wait, or ask the owner before passing force. Release only runtimes you started unless the owner asks.",
     inputSchema: schema({
       session: SESSION_PROP,
       all: { type: "boolean", description: "Release every session." },
+      force: { type: "boolean", description: "Release it even while another machine is using it. Only when the owner asks." },
     }),
     annotations: DESTRUCTIVE,
   },
@@ -425,7 +428,7 @@ export const CLI_COVERAGE = {
     flags: ["account", "add", "all", "no-browser"],
   },
   up: { tools: ["up"], flags: ["name", "account", "gpu", "high-ram", "new", "keep"] },
-  status: { tools: ["status"], flags: [] },
+  status: { tools: ["status"], flags: ["local"] },
   ls: { tools: ["status"], flags: [] },
   run: {
     tools: ["run"],
@@ -441,13 +444,12 @@ export const CLI_COVERAGE = {
   pull: { tools: ["pull"], flags: ["session"] },
   down: {
     tools: ["down"],
-    flags: ["session", "all"],
+    flags: ["session", "all", "force"],
     notExposed: { cause: "ledger cause set by the idle watchdog" },
   },
   credits: { tools: ["credits", "credits_calibrate", "credits_set", "credits_budget"], flags: ["account", "browser"] },
   ledger: { tools: ["ledger"], flags: ["month", "account"] },
   rates: { tools: ["rates"], flags: ["set"] },
-  watch: { tools: [], flags: [], notExposed: { "auto-stop-idle-minutes": "plugin bridge", "no-watchdog": "plugin bridge" } },
   mcp: { tools: [], flags: [] },
   forward: { tools: ["forward_start", "forward_stop"], flags: ["session", "port", "listen", "timeout"] },
 };
@@ -652,6 +654,16 @@ export function createColabMcpTools({
       result.log = lines.slice(-20);
     }
     return result;
+  }
+
+  // A job no process on this machine follows (another machine submitted it, or its follower ended) has
+  // its state and output on the runtime; `job logs` copies both here.
+  async function refreshFromRuntime(id, ctx) {
+    const task = readTask(id, homeDir, { reconcile: false });
+    const followed = task?.localPid && isProcessAlive(task.localPid);
+    if (!task || (task.runtimeBacked && !task.logComplete && !followed)) {
+      await runCli(["job", "logs", id, "--tail=1"], ctx).catch(() => {});
+    }
   }
 
   const boundedTty = (seconds, signal) => (options) =>
@@ -891,7 +903,7 @@ export function createColabMcpTools({
         signInHint: false,
       }),
 
-    status: async (_args, ctx) => toResult(await runCli(["status"], ctx)),
+    status: async (args, ctx) => toResult(await runCli(["status", ...(args.local ? ["--local"] : [])], ctx)),
 
     up: async (args, ctx) => {
       const argv = ["up", ...accountFlags(args)];
@@ -988,6 +1000,7 @@ export function createColabMcpTools({
     job_logs: async (args, ctx) => {
       const id = taskId(args);
       if (args.since_bytes !== undefined && args.since_bytes !== null) {
+        await refreshFromRuntime(id, ctx);
         const task = readTask(id, homeDir);
         if (!task) {
           throw new ToolInputError(`task not found: ${id}`);
@@ -1004,11 +1017,19 @@ export function createColabMcpTools({
     job_wait: async (args, ctx) => {
       const id = taskId(args);
       const deadline = Date.now() + (args.timeout_seconds ?? DEFAULT_WAIT_SECONDS) * 1000;
+      await refreshFromRuntime(id, ctx);
       let task = readTask(id, homeDir);
+      let refreshedAt = Date.now();
       while (task && task.status === "running" && Date.now() < deadline && !ctx.signal?.aborted) {
         await sleep(taskPollMs, ctx.signal);
+        if (Date.now() - refreshedAt > 3000) {
+          refreshedAt = Date.now();
+          await refreshFromRuntime(id, ctx);
+        }
         task = readTask(id, homeDir);
       }
+      await refreshFromRuntime(id, ctx);
+      task = readTask(id, homeDir);
       if (!task) {
         throw new ToolInputError(`task not found: ${id}`);
       }
@@ -1070,6 +1091,7 @@ export function createColabMcpTools({
       const argv = ["down"];
       if (args.session) argv.push(`--session=${args.session}`);
       if (args.all) argv.push("--all");
+      if (args.force) argv.push("--force");
       return toResult(await toCompletion(runCli(argv)));
     },
 

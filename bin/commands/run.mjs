@@ -1,14 +1,18 @@
 import { parseArgs } from "node:util";
+import { resolveSessionAcrossMachines } from "../lib/account-runtimes.mjs";
 import { CliError, writeJson } from "../lib/cli-output.mjs";
 import {
   execCommandOverTty,
   runInteractiveTtySession,
 } from "../lib/colab-api-client.mjs";
+import { runTaskOnRuntime, stopRuntimeTask, taskLogFooter } from "../lib/runtime-jobs.mjs";
+import { describeOrigin } from "../lib/runtime-records.mjs";
 import { withSessionActivity } from "../lib/session-activity.mjs";
-import { requireColabRuntime, resolveSession } from "../lib/session-store.mjs";
+import { requireColabRuntime } from "../lib/session-store.mjs";
 import {
   appendTaskLog,
   generateTaskId,
+  readTask,
   writeTask,
 } from "../lib/task-store.mjs";
 
@@ -71,9 +75,16 @@ export async function run(
     stdout,
     stderr,
     homeDir,
+    env = process.env,
+    cwd = process.cwd(),
     stdinIsTTY = Boolean(process.stdin.isTTY),
     execTty = execCommandOverTty,
+    fetchImpl = fetch,
     withActivity = withSessionActivity,
+    onInterrupt = (handler) => {
+      process.once("SIGINT", handler);
+      return () => process.removeListener("SIGINT", handler);
+    },
   },
 ) {
   const dashDash = argv.indexOf("--");
@@ -102,9 +113,10 @@ export async function run(
   const cmdArgs =
     tailArgs.length > 0 ? tailArgs : parsed.positionals;
 
-  const session = resolveSession({
+  const session = await resolveSessionAcrossMachines({
     sessionName: opts.session ?? null,
     homeDir,
+    fetchImpl,
   });
 
   const effectiveCwd = opts.cwd ?? session.remoteRoot ?? null;
@@ -147,63 +159,103 @@ export async function run(
         createdAt: startedAt,
         startedAt,
         localPid: process.pid,
+        origin: describeOrigin({ env, cwd }),
       },
       homeDir,
     );
-    appendTaskLog(
-      taskId,
-      `[task ${taskId}] started at ${startedAt} on ${session.name} (${session.gpu?.name || "GPU"})\n$ ${joinedCmd}\n`,
-      homeDir,
-    );
+    const logHead = `[task ${taskId}] started at ${startedAt} on ${session.name} (${session.gpu?.name || "GPU"})\n$ ${joinedCmd}\n`;
 
-    let res;
-    try {
-      res = await execTty({
+    // `tmux attach` needs the terminal it is typed into, so it cannot run detached like everything else.
+    if (opts.attach) {
+      appendTaskLog(taskId, logHead, homeDir);
+      const attached = await execTty({
         baseUrl: session.colabRuntime.baseUrl,
         proxyToken: session.colabRuntime.token,
         command: remoteScript,
         cwd: effectiveCwd,
         onOutput: (chunk) => {
           appendTaskLog(taskId, chunk, homeDir);
-          if (!json) {
-            stdout.write(chunk);
-          }
+          if (!json) stdout.write(chunk);
+        },
+      });
+      const done = writeTask(
+        { ...taskRecord, status: attached.exitCode === 0 ? "succeeded" : "failed", exitCode: attached.exitCode, finishedAt: new Date().toISOString() },
+        homeDir,
+      );
+      appendTaskLog(taskId, taskLogFooter(done), homeDir);
+      if (json) {
+        writeJson({ ok: attached.ok, session: session.name, exitCode: attached.exitCode, stdout: attached.stdout, stderr: "" }, stdout);
+      }
+      return attached.exitCode;
+    }
+
+    // The command runs detached on the runtime with its output in a file there (so every machine reads
+    // the same complete log) and is followed from here; Ctrl-C stops it instead of abandoning it.
+    const collected = [];
+    let interrupted = false;
+    let stopping = null;
+    const stopListening = onInterrupt(() => {
+      interrupted = true;
+      const current = readTask(taskId, homeDir, { reconcile: false });
+      if (current?.status === "running") {
+        const stopped = writeTask({ ...current, status: "stopped", exitCode: 130, finishedAt: new Date().toISOString(), localPid: null }, homeDir);
+        appendTaskLog(taskId, taskLogFooter(stopped), homeDir);
+        stopping = stopRuntimeTask({ task: stopped, homeDir, fetchImpl }).catch(() => {});
+      }
+    });
+    let followed;
+    try {
+      followed = await runTaskOnRuntime({
+        task: taskRecord,
+        session,
+        script: remoteScript,
+        logHead,
+        homeDir,
+        execTty,
+        fetchImpl,
+        pollMs: 500,
+        onOutput: (chunk) => {
+          collected.push(chunk);
+          if (!json) stdout.write(chunk);
         },
       });
     } catch (err) {
-      const finishedAt = new Date().toISOString();
-      appendTaskLog(
-        taskId,
-        `\n[task ${taskId}] failed at ${finishedAt}: ${err?.message || err}\n`,
-        homeDir,
-      );
-      writeTask(
+      const current = readTask(taskId, homeDir, { reconcile: false }) || taskRecord;
+      appendTaskLog(taskId, `\n[task ${taskId}] ${err?.followLost ? "stopped following" : "failed"}: ${err?.message || err}\n`, homeDir);
+      if (err?.followLost && current.runtimeBacked) {
+        writeTask({ ...current, localPid: null }, homeDir);
+      } else {
+        writeTask({ ...current, status: "failed", exitCode: 1, finishedAt: new Date().toISOString(), localPid: null }, homeDir);
+      }
+      throw err;
+    } finally {
+      stopListening?.();
+      await stopping;
+    }
+
+    const record = followed.record;
+    const res = {
+      ok: !interrupted && record?.exitCode === 0,
+      exitCode: interrupted || !record ? 130 : record.exitCode ?? 1,
+      stdout: collected.join("").replace(/\r?\n$/, ""),
+      stderr: "",
+    };
+    if (record) {
+      const latest = readTask(taskId, homeDir, { reconcile: false }) || taskRecord;
+      const settled = writeTask(
         {
-          ...taskRecord,
-          status: "failed",
-          exitCode: 1,
-          finishedAt,
+          ...latest,
+          status: record.status,
+          exitCode: record.exitCode ?? 1,
+          finishedAt: record.finishedAt || new Date().toISOString(),
+          localPid: null,
+          runtimeLogOffset: followed.logOffset,
+          logComplete: true,
         },
         homeDir,
       );
-      throw err;
+      appendTaskLog(taskId, taskLogFooter(settled), homeDir);
     }
-
-    const finishedAt = new Date().toISOString();
-    appendTaskLog(
-      taskId,
-      `\n[task ${taskId}] ${res.exitCode === 0 ? "succeeded" : "failed"} at ${finishedAt} (exit code ${res.exitCode})\n`,
-      homeDir,
-    );
-    writeTask(
-      {
-        ...taskRecord,
-        status: res.exitCode === 0 ? "succeeded" : "failed",
-        exitCode: res.exitCode,
-        finishedAt,
-      },
-      homeDir,
-    );
 
     if (json) {
       writeJson(
@@ -221,7 +273,7 @@ export async function run(
   };
 
   if (withActivity) {
-    return withActivity(session.name, homeDir, execute);
+    return withActivity(session.name, homeDir, execute, { env, command: cmdArgs.join(" ").slice(0, 120), fetchImpl });
   }
   return execute();
 }

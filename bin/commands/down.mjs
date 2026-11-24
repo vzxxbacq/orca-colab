@@ -1,6 +1,7 @@
 import { parseArgs } from "node:util";
 import {
   CliError,
+  EXIT_ERROR,
   EXIT_OK,
   EXIT_ZOMBIE,
   log,
@@ -15,6 +16,7 @@ import {
   getConsumptionUserInfo as defaultGetConsumptionUserInfo,
 } from "../lib/colab-api-client.mjs";
 import { getValidAccessToken } from "../lib/colab-oauth.mjs";
+import { directRuntimeChannel, machineName, readUseByOtherMachines } from "../lib/runtime-records.mjs";
 import {
   deleteSession,
   listSessions,
@@ -29,11 +31,13 @@ export async function run(
     json,
     stdout,
     stderr,
+    env = process.env,
     homeDir,
     signal = null,
     onSessionEnd = recordSessionEndEvent,
     deleteRuntimeFn = defaultDeleteRuntime,
     fetchImpl = fetch,
+    readOtherUse = null,
     nowIso = () => new Date().toISOString(),
   },
 ) {
@@ -44,6 +48,7 @@ export async function run(
       options: {
         session: { type: "string" },
         all: { type: "boolean", default: false },
+        force: { type: "boolean", default: false },
         cause: { type: "string", default: "user" },
       },
       strict: true,
@@ -86,10 +91,42 @@ export async function run(
     return EXIT_OK;
   }
 
+  // A runtime is shared by every machine signed in to the account. One that another machine is using
+  // right now (per the records on the runtime) is released only with --force.
+  const otherUse =
+    readOtherUse ??
+    (deleteRuntimeFn === defaultDeleteRuntime || fetchImpl !== fetch
+      ? (session) =>
+          readUseByOtherMachines(
+            directRuntimeChannel({ baseUrl: session.colabRuntime.baseUrl, proxyToken: session.colabRuntime.token, fetchImpl }),
+            machineName(env),
+          )
+      : null);
+
   const results = [];
   let anyZombie = false;
+  let anyInUse = false;
 
   for (const session of targets) {
+    if (otherUse && !opts.force && session.colabRuntime?.baseUrl && session.colabRuntime?.token) {
+      const users = await otherUse(session).catch(() => []);
+      if (users.length > 0) {
+        anyInUse = true;
+        const who = users.map((u) => `${u.agent && u.agent !== "cli" ? `${u.agent} on ` : ""}${u.machine} (${u.doing})`).join("; ");
+        const action = `Wait for it to finish, or run 'orca-colab down --session ${session.name} --force' to release it anyway.`;
+        log(`not released: ${session.name} is in use from another machine: ${who}. ${action}`, stderr);
+        results.push({
+          ok: false,
+          session: session.name,
+          released: false,
+          state: session.state,
+          reason: "in-use-elsewhere",
+          inUseBy: users,
+          action,
+        });
+        continue;
+      }
+    }
     let deletedByApi = false;
     let apiAccessToken = null;
     if (session.colabRuntime?.id) {
@@ -188,8 +225,8 @@ export async function run(
     if (opts.all || results.length > 1) {
       writeJson(
         {
-          ok: !anyZombie,
-          released: !anyZombie,
+          ok: !anyZombie && !anyInUse,
+          released: !anyZombie && !anyInUse,
           sessions: results,
         },
         stdout,
@@ -199,5 +236,5 @@ export async function run(
     }
   }
 
-  return anyZombie ? EXIT_ZOMBIE : EXIT_OK;
+  return anyZombie ? EXIT_ZOMBIE : anyInUse ? EXIT_ERROR : EXIT_OK;
 }

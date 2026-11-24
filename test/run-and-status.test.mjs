@@ -7,6 +7,7 @@ import { run as runLs } from "../bin/commands/ls.mjs";
 import { run as runCmd } from "../bin/commands/run.mjs";
 import { appendLedgerEvent } from "../bin/lib/credit-ledger.mjs";
 import { writeSession } from "../bin/lib/session-store.mjs";
+import { createFakeRuntime } from "./fake-colab-runtime.mjs";
 
 function makeBuffers() {
   let out = "";
@@ -21,7 +22,7 @@ function makeBuffers() {
 
 const RUNTIME = { id: "r-1", endpoint: "r-1", baseUrl: "https://8080-m.colab.dev", token: "proxy-tok" };
 
-test("run sends the command with env and remoteRoot over /colab/tty and propagates the remote exit code", async (t) => {
+test("run starts the command with env and remoteRoot as a job on the runtime and propagates its exit code", async (t) => {
   const tmpHome = mkdtempSync(path.join(os.tmpdir(), "orca-colab-run-"));
   t.after(() => rmSync(tmpHome, { recursive: true, force: true }));
 
@@ -35,32 +36,41 @@ test("run sends the command with env and remoteRoot over /colab/tty and propagat
     tmpHome,
   );
 
-  const calls = [];
+  const started = [];
+  const runtime = createFakeRuntime({
+    runJob: async ({ script, record, write }) => {
+      started.push({ script, cwd: record.cwd });
+      write("epoch 1\n");
+      return 42;
+    },
+  });
   const io = makeBuffers();
   const code = await runCmd(
     ["--env", "WANDB_MODE=offline", "--", "python", "train.py", "--lr", "0.001"],
     {
-      json: false,
+      json: true,
       stdout: io.stdout,
       stderr: io.stderr,
       homeDir: tmpHome,
       stdinIsTTY: false,
-      execTty: async ({ baseUrl, proxyToken, command, cwd }) => {
-        calls.push({ baseUrl, proxyToken, command, cwd });
-        return { ok: false, exitCode: 42, stdout: "", stderr: "" };
-      },
+      execTty: runtime.execTty,
+      fetchImpl: runtime.fetchImpl,
+      onInterrupt: () => () => {},
     },
   );
 
   assert.equal(code, 42);
-  assert.deepEqual(calls, [
+  assert.deepEqual(started, [
     {
-      baseUrl: "https://8080-m.colab.dev",
-      proxyToken: "proxy-tok",
-      command: "export WANDB_MODE=offline && cd /content/orca/my-repo && python train.py --lr 0.001",
+      script: "export WANDB_MODE=offline && cd /content/orca/my-repo && python train.py --lr 0.001",
       cwd: "/content/orca/my-repo",
     },
   ]);
+  assert.deepEqual(runtime.launches.map(({ baseUrl, proxyToken }) => ({ baseUrl, proxyToken })), [
+    { baseUrl: "https://8080-m.colab.dev", proxyToken: "proxy-tok" },
+  ]);
+  const out = JSON.parse(io.stdoutText);
+  assert.deepEqual({ ok: out.ok, exitCode: out.exitCode, stdout: out.stdout }, { ok: false, exitCode: 42, stdout: "epoch 1" });
 });
 
 test("run on a session from the Tailscale era says to restart it", async (t) => {
@@ -120,6 +130,8 @@ test("status and ls report reachability and ageSeconds in JSON without the runti
         transport: "colab-tty",
         colabRuntime: { id: "r-1", endpoint: "r-1", baseUrl: "https://8080-m.colab.dev", tokenExpiry: null },
         forwards: [],
+        origin: null,
+        startedHere: true,
         reachable: true,
         ageSeconds: 330,
       },

@@ -39,6 +39,14 @@ import {
   setRateOverride,
 } from "../lib/rate-table.mjs";
 import {
+  describeOrigin,
+  directRuntimeChannel,
+  machineName,
+  readRuntimeSessionRecord,
+  sameMachine,
+  writeRuntimeSessionRecord,
+} from "../lib/runtime-records.mjs";
+import {
   deleteSession,
   listSessions,
   readSession,
@@ -52,8 +60,10 @@ export async function run(
     stdout,
     stderr,
     env,
+    cwd = null,
     homeDir,
     signal = null,
+    openRuntimeChannel = null,
     resolveGpuRate = resolveRateFromTable,
     onSessionStart = recordSessionStartEvent,
     onSessionEnd = recordSessionEndEvent,
@@ -346,8 +356,18 @@ export async function run(
           };
     let { rateKey, cuPerHour } = resolveGpuRate(effectiveGpu.name, homeDir);
     const nowIsoVal = nowIso();
+    // A reused runtime may have been started from another machine; its own record says by whom and
+    // under which name, and that record is left as it is.
+    const openChannel =
+      openRuntimeChannel ?? (assignRuntimeFn === defaultAssignRuntime || fetchImpl !== fetch ? directRuntimeChannel : null);
+    const runtimeChannel = openChannel
+      ? openChannel({ baseUrl: colabRuntime.baseUrl, proxyToken: colabRuntime.token, fetchImpl })
+      : null;
+    const runtimeRecord = runtimeChannel ? await readRuntimeSessionRecord(runtimeChannel).catch(() => null) : null;
+    const origin = runtimeRecord ? runtimeRecord.origin : describeOrigin({ env, cwd });
     const rawSuffix =
       opts.name ||
+      runtimeRecord?.name ||
       String(colabRuntime.id || "")
         .replace(/[^a-z0-9]/gi, "")
         .slice(-6)
@@ -423,7 +443,7 @@ export async function run(
       }
     }
 
-    const createdAt = isSameRuntime ? existingSameName.createdAt : nowIsoVal;
+    const createdAt = isSameRuntime ? existingSameName.createdAt : runtimeRecord?.createdAt || nowIsoVal;
 
     const sessionRecord = {
       name: sessionName,
@@ -436,8 +456,10 @@ export async function run(
       createdAt,
       lastActivityAt: nowIsoVal,
       activePids: isSameRuntime ? existingSameName.activePids ?? [] : [],
-      keep: Boolean(opts.keep || (isSameRuntime && existingSameName.keep)),
+      keep: Boolean(opts.keep || (isSameRuntime && existingSameName.keep) || runtimeRecord?.keep),
       state: "active",
+      ...(origin ? { origin } : {}),
+      ...(runtimeRecord && !sameMachine(runtimeRecord.origin, machineName(env)) ? { adopted: true } : {}),
       remoteRoot: isSameRuntime ? existingSameName.remoteRoot ?? null : null,
       ...(isSameRuntime && existingSameName.forwards ? { forwards: existingSameName.forwards } : {}),
       colabRuntime: {
@@ -452,6 +474,15 @@ export async function run(
     const session = writeSession(sessionRecord, homeDir);
     if (onSessionStart && !isSameRuntime) {
       await onSessionStart(session, homeDir);
+    }
+    if (runtimeChannel && (!runtimeRecord || runtimeRecord.name !== session.name || runtimeRecord.keep !== session.keep)) {
+      try {
+        await writeRuntimeSessionRecord(runtimeChannel, session, {
+          email: readOAuthAccountStatus(account.label, homeDir).email || null,
+        });
+      } catch (err) {
+        log(`warning: could not write the session record on the runtime (${err?.message || err}); other machines will show it as unknown origin.`, stderr);
+      }
     }
     if (syncedCcu && typeof syncedCcu.paidComputeUnitsBalance === "number") {
       recordCalibrateEvent(

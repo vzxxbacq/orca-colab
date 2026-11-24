@@ -24,7 +24,6 @@ const COMMANDS = new Set([
   "credits",
   "ledger",
   "rates",
-  "watch",
   "mcp",
   "forward",
 ]);
@@ -45,7 +44,6 @@ Commands:
   credits    Show estimated compute-unit balance, burn rate and budget
   ledger     Show session and calibration history
   rates      View or update the GPU compute-unit rate table
-  watch      Stream panel state for the Orca plugin (runs inside an Orca terminal on a remote server)
   forward    Forward a local HTTP port to a port on the Colab session
   mcp        Serve every command as MCP tools on stdio (connector for Orca bots, Claude Code, Codex)
 

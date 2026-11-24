@@ -961,44 +961,22 @@
           ✕
         </button>
       </div>
-      <div id="bridgeHintBox" class="card hidden" style="border-color: var(--accent-border)">
-        <div class="card-header">
-          <div class="card-title" style="font-size: 13px">Connect this panel to the server</div>
-          <span class="badge info">Remote</span>
+      <div id="shellBox" class="card hidden" style="padding: 10px 12px">
+        <div class="card-header" style="margin-bottom: 6px">
+          <div class="card-title">
+            <span>Shell</span>
+            <span id="shellSessionTag" class="badge neutral mono"></span>
+          </div>
+          <div class="row">
+            <button id="shellCtrlCBtn" class="ghost" style="padding: 2px 6px" title="Send Ctrl-C">^C</button>
+            <button id="shellCloseBtn" class="ghost" style="padding: 2px 6px">Close</button>
+          </div>
         </div>
-        <div id="bridgeHintText" class="card-subtitle">
-          This project lives on an Orca server. The plugin first tries to open the bridge terminal there by
-          itself through the local <span class="mono">orca</span> CLI; that did not work here (see the status
-          line above), so open a terminal in this project yourself and run the command below once. The panel
-          adopts it automatically within a few seconds; leave it running.
-        </div>
-        <div class="row" style="gap: 6px; align-items: center">
-          <code id="bridgeHintCmd" class="mono" style="flex: 1; overflow: auto; white-space: nowrap">orca-colab watch</code>
-          <button id="bridgeHintCopyBtn" class="ghost">Copy</button>
-        </div>
-      </div>
-      <div id="oauthManualBox" class="card hidden" style="border-color: var(--accent-border)">
-        <div class="card-header">
-          <div class="card-title" style="font-size: 13px">Finish Google sign-in on the server</div>
-          <span class="badge info">Remote</span>
-        </div>
-        <div class="card-subtitle">
-          The sign-in runs on the Orca server, so your browser cannot reach its callback. Open the link,
-          approve access, then paste the <span class="mono">http://127.0.0.1:…</span> address your browser lands on.
-        </div>
-        <div class="row" style="gap: 6px; margin-bottom: 8px">
-          <button id="oauthOpenBtn" class="primary">Open sign-in link</button>
-          <button id="oauthCopyBtn" class="ghost">Copy link</button>
-          <button id="oauthCancelBtn" class="ghost">Hide</button>
-        </div>
-        <div class="banner warn" style="margin-bottom: 8px; font-size: 11px">
-          The redirected address is a one-time key to your Colab. Paste it only here; never send it to
-          anyone or paste it into a website or chat.
-        </div>
-        <input id="oauthRedirectInput" type="text" placeholder="Paste the redirected http://127.0.0.1:PORT/?state=…&code=… URL here" />
-        <div class="row" style="gap: 6px; margin-top: 8px">
-          <button id="oauthCompleteBtn" class="primary">Complete sign-in</button>
-          <span id="oauthManualStatus" class="muted" style="font-size: 11px"></span>
+        <div id="shellOutputPre" class="terminal-box" style="white-space: pre-wrap"></div>
+        <input id="shellInput" type="text" class="mono" autocomplete="off" spellcheck="false" placeholder="Type a command and press Enter" style="margin-top: 6px" />
+        <div class="muted" style="font-size: 10.5px; margin-top: 6px">
+          A shell on the runtime over its own HTTPS proxy, one line at a time (no full-screen programs). For a full terminal, paste this into any terminal on this computer:
+          <code id="shellCliHint" class="mono"></code>
         </div>
       </div>
 
@@ -1258,9 +1236,7 @@
               font-size: 11px;
             "
           >
-            <button id="launchInTermBtn" class="ghost" style="font-size: 10.5px">
-              &gt;_ Or launch via Terminal
-            </button>
+            <span></span>
             <button id="launcherToPastTasksBtn" class="ghost hidden" style="font-size: 10.5px">
               View Past Task Logs →
             </button>
@@ -1388,6 +1364,9 @@
                 <div class="card-title">Agent Hardware Guardrails</div>
                 <div class="card-subtitle" style="margin-bottom: 0; margin-top: 2px">
                   Click to enable or disable which GPU tiers the Agent is allowed to provision. The Agent selects the optimal GPU within your boundary.
+                </div>
+                <div id="guardrailsScopeNote" class="banner info" style="margin-top: 6px; font-size: 11px">
+                  You are editing this computer's guardrails. Allowed GPUs, the session cap, the monthly budget and idle auto-stop are stored on this computer and apply to agents and panels running here; another machine signed in to the same Google account keeps its own.
                 </div>
               </div>
             </div>
@@ -1761,6 +1740,21 @@
         .getElementById("removeAgentSkillBtn")
         .addEventListener("click", () => runAgentSkillAction("colab.removeAgentSkill", "Removed the skill from"));
 
+      // Where a runtime was started: this computer, another machine (from the record on the runtime),
+      // or unknown when the runtime carries no record (an older orca-colab, or a notebook opened in Colab).
+      function originLabel(s) {
+        if (s.startedHere) return { text: "started here", tone: "neutral", title: "Started from this computer" };
+        if (!s.origin) return { text: "unknown origin", tone: "warn", title: "This runtime has no orca-colab record: it was started by an older version or outside orca-colab (for example a notebook open in Colab). It is never auto-stopped from here." };
+        const who = `${s.origin.agent && s.origin.agent !== "cli" ? `${s.origin.agent} · ` : ""}${s.origin.machine}`;
+        return { text: `from ${who}`, tone: "info", title: `Started by ${s.origin.agent || "cli"} on ${s.origin.machine}${s.origin.workspace ? ` (${s.origin.workspace})` : ""}` };
+      }
+      function originBadgeHtml(s, small) {
+        const o = originLabel(s);
+        const use = (s.inUseBy || []).map((u) => `${u.agent && u.agent !== "cli" ? `${u.agent} on ` : ""}${u.machine}`);
+        const style = small ? ' style="font-size:9px;padding:1px 5px"' : "";
+        return `<span class="badge ${o.tone}"${style} title="${esc(o.title)}">${esc(o.text)}</span>${use.length ? `<span class="badge info"${style} title="A command from that machine is running right now">in use: ${esc(use.join(", "))}</span>` : ""}`;
+      }
+
       function renderTaskOutputBox(payload) {
         const tag = document.getElementById("outputTaskTag");
         const pre = document.getElementById("taskOutputPre");
@@ -1803,53 +1797,26 @@
         const dot = document.getElementById("topStatusDot");
         const statusTxt = document.getElementById("topStatusText");
         const originBadge = document.getElementById("originBadge");
-        const isRemote = snap.origin?.kind === "remote";
-        originBadge.className = `badge ${isRemote ? "info" : "neutral"}`;
-        originBadge.textContent = isRemote
-          ? `⚙ Server · ${snap.origin.host || snap.origin.workspaceName || snap.origin.hostId || "remote"}`
-          : `⚙ Local · ${snap.origin?.host || "this computer"}`;
-        originBadge.parentElement.title = isRemote
-          ? `Colab state of the Orca server "${snap.origin.host || snap.origin.hostId}" that hosts workspace "${snap.origin.workspaceName || ""}" (bridge terminal "Colab Bridge"${snap.bridge?.remoteCli ? `, ${snap.bridge.remoteCli}` : ""}). Click for Setup.`
-          : "Colab state of this computer. Click for Setup.";
-        const hintBox = document.getElementById("bridgeHintBox");
-        if (isRemote && !snap.bridge?.connected) {
-          dot.className = "status-dot warn";
-          statusTxt.textContent = snap.bridge?.needsManualTerminal
-            ? `Waiting for the bridge terminal on the server${snap.bridge?.helper?.error ? ` (${snap.bridge.helper.error})` : ""}`
-            : snap.bridge?.error
-              ? `Server bridge unavailable: ${snap.bridge.error}`
-              : "Connecting to the Colab bridge on the server...";
-          if (snap.bridge?.needsManualTerminal) {
-            hintBox.classList.remove("hidden");
-            document.getElementById("bridgeHintCmd").textContent = snap.bridge.manualCommand || "orca-colab watch";
-            document.getElementById("bridgeHintText").textContent =
-              snap.bridge.autoBridge === false
-                ? "Automatic bridging is turned off in the plugin settings. Open a terminal in any project on this server and run the command below once; the panel adopts it within a few seconds. One terminal serves every project on the server."
-                : "This project lives on an Orca server. The plugin tried to open the bridge terminal there by itself through the local orca CLI; that did not work here (see the status line above), so open a terminal in this project and run the command below once. The panel adopts it automatically within a few seconds; leave it running.";
-          } else {
-            hintBox.classList.add("hidden");
-          }
-        } else if (!readyToLaunch) {
-          hintBox.classList.add("hidden");
+        const elsewhere = activeSessions.filter((x) => !x.startedHere).length;
+        originBadge.className = "badge neutral";
+        originBadge.textContent = `⚙ ${snap.machine || snap.origin?.host || "this computer"}`;
+        originBadge.parentElement.title =
+          "Shows every Colab runtime of the Google account signed in on this computer, whichever machine started it. Click for Setup.";
+        if (!readyToLaunch) {
           dot.className = "status-dot warn";
           statusTxt.textContent = "Sign-In Required";
         } else if (activeSessions.length === 0) {
-          hintBox.classList.add("hidden");
           dot.className = "status-dot";
           statusTxt.textContent = "Google Connected · No Active GPU";
         } else {
-          hintBox.classList.add("hidden");
           const s0 = activeSessions[0];
           const gpuName =
             s0.rateKey && s0.rateKey !== "unknown" ? s0.rateKey : "GPU";
           dot.className = "status-dot ok";
-          statusTxt.textContent = `${gpuName} Active · Direct API`;
+          statusTxt.textContent = `${gpuName} Active · Direct API${elsewhere ? ` · ${elsewhere} from another machine` : ""}`;
         }
-        if (snap.bridge?.pendingOps > 0) {
-          statusTxt.textContent += " · syncing…";
-        }
-        if (snap.bridge?.outdatedWatch) {
-          statusTxt.textContent += " · bridge runs an older orca-colab, close its terminal to restart it";
+        if (snap.runtimeSync?.error) {
+          statusTxt.textContent += " · could not refresh from Colab";
         }
 
         // Decide which view to show if not explicitly overridden by user navigation
@@ -2134,6 +2101,7 @@
                 <span class="badge neutral mono" style="font-size:10px">${esc(s.name.replace(/^orca-colab-/, ""))}</span>
                 ${vramTotal ? `<span class="badge neutral">${vramTotal} GB</span>` : ""}
                 ${s.keep ? `<span class="badge info">KEEP</span>` : ""}
+                ${originBadgeHtml(s, false)}
               </div>
               <div class="row">
                 <button onclick="window.__openShell('${esc(s.name)}')" title="Open interactive Colab shell">
@@ -2149,7 +2117,7 @@
             </div>
             <div class="runtime-meta">
               ${oauthAccounts.length > 1 && sessAccEmail ? `<span>Account: <strong>${esc(sessAccEmail)}</strong></span>` : ""}
-              <span class="mono">Direct API (/colab/tty)</span>
+              <span class="mono">Direct API</span>
               <span>Uptime: ${formatDuration(s.ageSeconds)}</span>
               <span>Burn: ≈ ${s.costSoFarCu ?? 0} CU (${s.cuPerHour ?? 0} CU/h)</span>${(s.forwards || [])
                 .map((f) => `<span title="orca-colab forward, pid ${esc(String(f.pid))}">⇄ ${esc(f.listen)} → :${esc(String(f.remotePort))}</span>`)
@@ -2210,6 +2178,7 @@
                           ${vramTotal ? `<span class="muted" style="font-size:10.5px">${vramUsed ? `${vramUsed}/` : ""}${vramTotal}G</span>` : ""}
                           ${activeRunOnSess ? `<span class="badge info" style="font-size:9px;padding:1px 5px">⚡ RUNNING</span>` : ""}
                           ${s.keep ? `<span class="badge info" style="font-size:9px;padding:1px 5px">KEEP</span>` : ""}
+                          ${originBadgeHtml(s, true)}
                         </div>
                         <div class="row" style="gap:4px;flex-shrink:0" onclick="event.stopPropagation()">
                           <button style="padding:2px 6px;font-size:10px" onclick="window.__openShell('${esc(s.name)}')">&gt;_</button>
@@ -2382,6 +2351,11 @@
                             ? `<span class="badge neutral mono" style="font-size:9.5px;padding:1px 5px" title="Runtime ${esc(t.sessionName)}">${esc(gpuLabel)}·${esc(shortSess.slice(0, 6))}</span>`
                             : ""
                         }
+                        ${
+                          t.origin?.machine && t.origin.machine !== snap.machine
+                            ? `<span class="badge info" style="font-size:9.5px;padding:1px 5px" title="Submitted by ${esc(t.origin.agent || "cli")} on ${esc(t.origin.machine)}">${esc(t.origin.machine)}</span>`
+                            : ""
+                        }
                         <span class="muted mono" style="font-size:10px">${dur}</span>
                       </div>
                     </div>
@@ -2548,9 +2522,7 @@
         btnEl.disabled = true;
         btnEl.textContent = "Waiting for browser login...";
         showNotice(
-          dashboardState?.origin?.kind === "remote"
-            ? "Opened your default browser for Google Sign-In. The account will be stored on the Orca server that hosts this project."
-            : "Opened your default browser for Google Sign-In (select any Google account). Complete sign-in to return here automatically.",
+          "Opened your default browser for Google Sign-In (select any Google account). Complete sign-in to return here automatically.",
           "info",
         );
         try {
@@ -2643,17 +2615,6 @@
           }
         });
 
-      document
-        .getElementById("launchInTermBtn")
-        .addEventListener("click", async () => {
-          const keep = document.getElementById("launcherKeepCheck").checked;
-          await callWorker("colab.startSession", {
-            gpu: selectedGpu,
-            keep,
-            useTerminal: true,
-          });
-        });
-
       // Sync CCU
       async function handleSyncCcu() {
         try {
@@ -2705,15 +2666,88 @@
         });
 
       // Global inline handlers for dynamic cards
+      // The shell is a Jupyter terminal on the runtime held by the worker; this box shows its output as
+      // plain text and sends whole lines.
+      let shellId = null;
+      let shellText = "";
+      function appendShellOutput(data) {
+        const cleaned = String(data)
+          .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+          .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "")
+          .replace(/\x1b[=>()][0-9A-Za-z]?/g, "")
+          .replace(/\r\n/g, "\n");
+        for (const ch of cleaned) {
+          if (ch === "\b") {
+            shellText = shellText.slice(0, -1);
+          } else if (ch === "\r") {
+            shellText = shellText.slice(0, shellText.lastIndexOf("\n") + 1);
+          } else if (ch !== "\x07") {
+            shellText += ch;
+          }
+        }
+        if (shellText.length > 200000) {
+          shellText = shellText.slice(-150000);
+        }
+        const pre = document.getElementById("shellOutputPre");
+        pre.textContent = shellText;
+        pre.scrollTop = pre.scrollHeight;
+      }
+
+      async function closeShellBox() {
+        const id = shellId;
+        shellId = null;
+        document.getElementById("shellBox").classList.add("hidden");
+        if (id) {
+          await callWorker("colab.shellClose", { id }).catch(() => {});
+        }
+      }
+
       window.__openShell = async (sessionName) => {
-        const res = await callWorker("colab.openTerminal", {
-          session: sessionName,
-          title: `Colab: ${sessionName}`,
-        });
+        if (shellId) {
+          await closeShellBox();
+        }
+        const res = await callWorker("colab.shellOpen", { session: sessionName }, { timeoutMs: 30000 });
         if (res?.code === "NO_ACTIVE_SESSION") {
           window.__goLaunchHelper(res.message);
+          return;
         }
+        shellId = res.id;
+        shellText = "";
+        document.getElementById("shellOutputPre").textContent = "";
+        document.getElementById("shellSessionTag").textContent = String(res.session || "").replace(/^orca-colab-/, "");
+        const box = document.getElementById("shellBox");
+        box.classList.remove("hidden");
+        box.scrollIntoView({ behavior: "smooth", block: "start" });
+        document.getElementById("shellInput").focus();
+        callWorker("colab.cliCommand", {})
+          .then((cli) => {
+            document.getElementById("shellCliHint").textContent = `${cli.command} run --session ${res.session} -- bash -l`;
+          })
+          .catch(() => {});
       };
+
+      document.getElementById("shellInput").addEventListener("keydown", async (e) => {
+        if (e.key !== "Enter" || !shellId) return;
+        const line = e.currentTarget.value;
+        e.currentTarget.value = "";
+        const res = await callWorker("colab.shellInput", { id: shellId, data: `${line}\n` }).catch(() => null);
+        if (!res?.ok) {
+          appendShellOutput("\n[shell closed]\n");
+        }
+      });
+      document.getElementById("shellCtrlCBtn").addEventListener("click", () => {
+        if (shellId) callWorker("colab.shellInput", { id: shellId, data: "\x03" }).catch(() => {});
+      });
+      document.getElementById("shellCloseBtn").addEventListener("click", () => void closeShellBox());
+      onWorkerEvent("colab.shellOutput", (payload) => {
+        if (payload?.id === shellId) appendShellOutput(payload.data);
+      });
+      onWorkerEvent("colab.shellClosed", (payload) => {
+        if (payload?.id === shellId) {
+          shellId = null;
+          appendShellOutput("\n[shell closed]\n");
+        }
+      });
 
       window.__toggleKeep = async (sessionName) => {
         const res = await callWorker("colab.toggleKeep", {
@@ -2722,10 +2756,23 @@
         renderAll(res.dashboard);
       };
 
+      let pendingForceStop = null;
       window.__stopSession = async (sessionName) => {
+        const force = pendingForceStop?.name === sessionName && Date.now() < pendingForceStop.until;
+        pendingForceStop = null;
         const res = await callWorker("colab.stopSession", {
           session: sessionName,
+          ...(force ? { force: true } : {}),
         });
+        if (res?.code === "IN_USE_ELSEWHERE") {
+          const who = (res.inUseBy || [])
+            .map((u) => `${u.agent && u.agent !== "cli" ? `${u.agent} on ` : ""}${u.machine} (${u.doing})`)
+            .join("; ");
+          pendingForceStop = { name: sessionName, until: Date.now() + 20000 };
+          showNotice(`${sessionName} is in use from another machine right now: ${who}. Press Stop again within 20 seconds to stop it anyway.`, "warn");
+          renderAll(res.dashboard);
+          return;
+        }
         userForcedView = null;
         renderAll(res.dashboard);
       };
@@ -2833,82 +2880,7 @@
       });
 
       onWorkerEvent("colab.oauthUrl", (payload) => {
-        if (!payload?.authUrl) return;
-        window.__lastOAuthUrl = payload.authUrl;
-        if (payload.manual) {
-          showOAuthManualBox(payload.authUrl);
-        }
-      });
-
-      function showOAuthManualBox(authUrl) {
-        const box = document.getElementById("oauthManualBox");
-        box.classList.remove("hidden");
-        document.getElementById("oauthRedirectInput").value = "";
-        document.getElementById("oauthManualStatus").textContent = "";
-        box.dataset.authUrl = authUrl;
-        box.scrollIntoView({ behavior: "smooth", block: "start" });
-      }
-
-      document.getElementById("bridgeHintCopyBtn").addEventListener("click", async (e) => {
-        const cmd = document.getElementById("bridgeHintCmd").textContent;
-        try {
-          await navigator.clipboard.writeText(cmd);
-          e.currentTarget.textContent = "Copied";
-          setTimeout(() => (e.target.textContent = "Copy"), 1500);
-        } catch {
-          showNotice(cmd, "info");
-        }
-      });
-
-      document.getElementById("oauthOpenBtn").addEventListener("click", () => {
-        const url = document.getElementById("oauthManualBox").dataset.authUrl;
-        if (!url) return;
-        if (typeof orcaApi?.shell?.openExternal === "function") {
-          orcaApi.shell.openExternal(url);
-        } else {
-          document.getElementById("oauthManualStatus").textContent =
-            "Cannot open a browser from here; use Copy link.";
-        }
-      });
-      document.getElementById("oauthCopyBtn").addEventListener("click", async () => {
-        const url = document.getElementById("oauthManualBox").dataset.authUrl;
-        const status = document.getElementById("oauthManualStatus");
-        try {
-          await navigator.clipboard.writeText(url);
-          status.textContent = "Link copied.";
-        } catch {
-          status.textContent = url;
-        }
-      });
-      document.getElementById("oauthCancelBtn").addEventListener("click", () => {
-        document.getElementById("oauthManualBox").classList.add("hidden");
-      });
-      document.getElementById("oauthCompleteBtn").addEventListener("click", async (e) => {
-        const btn = e.currentTarget;
-        const status = document.getElementById("oauthManualStatus");
-        const redirectUrl = document.getElementById("oauthRedirectInput").value.trim();
-        if (!redirectUrl) {
-          status.textContent = "Paste the redirected URL first.";
-          return;
-        }
-        btn.disabled = true;
-        status.textContent = "Delivering to the server...";
-        try {
-          await callWorker("colab.oauthReplay", { redirectUrl }, { timeoutMs: 30000 });
-          status.textContent = "Delivered. Finishing sign-in...";
-          document.getElementById("oauthManualBox").classList.add("hidden");
-        } catch (err) {
-          status.textContent = err?.message || String(err);
-        } finally {
-          btn.disabled = false;
-        }
-      });
-
-      onWorkerEvent("colab.actionFailed", (payload) => {
-        showNotice(
-          `${payload?.action || "Change"} was not applied on the server: ${payload?.error || "unknown error"}`,
-          "error",
-        );
+        if (payload?.authUrl) window.__lastOAuthUrl = payload.authUrl;
       });
 
       onWorkerEvent("colab.taskOutput", (payload) => {
