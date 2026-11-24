@@ -25,7 +25,7 @@ import { inspectAgentSkills, installAgentSkill, removeAgentSkill } from "./agent
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOCAL_CLI_PATH = path.resolve(__dirname, "..", "bin", "orca-colab.mjs");
-const DEFAULT_CLI_COMMAND = "npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/2944ee151e7ef2d08a5598c00c6cce4e3109f13c";
+const DEFAULT_CLI_COMMAND = "npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/2a0a69ea98df5a273690886b3c7888becfeebdbb";
 
 let cleanupFns = [];
 

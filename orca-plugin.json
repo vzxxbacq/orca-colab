@@ -62,7 +62,7 @@
         "title": "orca-colab command",
         "description": "The orca-colab command the panel shows for you to paste into a terminal of your own (for example a full interactive shell on a runtime). The panel itself talks to Colab directly and does not run it.",
         "type": "string",
-        "default": "npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/2944ee151e7ef2d08a5598c00c6cce4e3109f13c"
+        "default": "npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/2a0a69ea98df5a273690886b3c7888becfeebdbb"
       }
     ]
   },
