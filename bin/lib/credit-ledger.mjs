@@ -83,9 +83,10 @@ export function recordSessionStartEvent(session, homeDir = os.homedir()) {
   );
 }
 
+// `colabSaid` is what the Colab API answered about the runtime when it was found gone, if anything.
 export function recordSessionEndEvent(
   session,
-  { cause = "user", endedAt = new Date().toISOString(), homeDir = os.homedir() } = {},
+  { cause = "user", endedAt = new Date().toISOString(), homeDir = os.homedir(), colabSaid = null } = {},
 ) {
   return appendLedgerEvent(
     {
@@ -98,6 +99,9 @@ export function recordSessionEndEvent(
       cuPerHour: session.cuPerHour,
       ...(session.project && !session.adopted ? { project: session.project } : {}),
       cause,
+      // When a client of this machine was last connected to the runtime; absent when none ever was.
+      ...(session.lastPresenceAt ? { lastPresenceAt: session.lastPresenceAt } : {}),
+      ...(colabSaid ? { colabSaid: String(colabSaid).slice(0, 300) } : {}),
     },
     homeDir,
   );
@@ -110,6 +114,33 @@ const SESSION_END_REASONS = {
     "Colab no longer had this runtime assigned, so the local session was dropped. This machine did not release it: it was released from another machine or ended on Colab's side (its web UI, an idle or lifetime limit, or Colab reclaiming it).",
 };
 
+const minutesBetween = (fromIso, toIso) => {
+  const ms = Date.parse(toIso) - Date.parse(fromIso);
+  return Number.isFinite(ms) && ms >= 0 ? Math.round(ms / 60_000) : null;
+};
+
+// Colab gives no reason for taking a runtime back, so the one thing this machine knows decides the
+// wording: whether a client of its own was connected until the end.
+function describeColabEnd(ev) {
+  const afterMinutes = ev.startedAt ? minutesBetween(ev.startedAt, ev.at) : null;
+  const unattendedMinutes = ev.lastPresenceAt ? minutesBetween(ev.lastPresenceAt, ev.at) : null;
+  const lasted = afterMinutes === null ? "" : ` after about ${afterMinutes < 120 ? `${afterMinutes} min` : `${Math.round(afterMinutes / 6) / 10} h`}`;
+  const summary = `ended by Colab${lasted}`;
+  const said = ev.colabSaid ? ` Colab's API said: ${ev.colabSaid}.` : " Colab's API gives no reason.";
+  let why;
+  if (unattendedMinutes !== null && unattendedMinutes < 5) {
+    why =
+      "An orca-colab client on this machine was connected until the end, so this was not Colab's reclaim of an unattended runtime: it was released from another machine or from Colab's web UI, or Colab ended it (maximum lifetime, compute units used up, or capacity).";
+  } else {
+    const gap =
+      unattendedMinutes === null
+        ? "No orca-colab client on this machine was connected to it"
+        : `No orca-colab client on this machine had been connected to it for the last ${unattendedMinutes} min`;
+    why = `${gap}. Colab takes back runtimes it considers unattended, whatever is running on them (seen 20 to 40 minutes after the start on GPU runtimes); orca-colab stays connected while a command, job or forward of this machine runs and for a kept session ('up --keep'), as long as this machine is on and online. It may also have been released from another machine or from Colab's web UI.`;
+  }
+  return { afterMinutes, unattendedMinutes, summary, reason: `Colab no longer had this runtime assigned (${summary}); this machine did not release it. ${why}${said}` };
+}
+
 // Sessions that ended recently, newest first, so a vanished session is explained instead of just missing.
 export function listRecentSessionEnds(homeDir = os.homedir(), { nowMs = Date.now(), withinMs = 24 * 3_600_000, limit = 5 } = {}) {
   // A stale reader can log a second end for a session that was already released; the first one is the cause.
@@ -118,7 +149,7 @@ export function listRecentSessionEnds(homeDir = os.homedir(), { nowMs = Date.now
   for (const ev of readLedgerEvents(homeDir)) {
     if (ev?.type === "session.start") {
       ended.delete(ev.session);
-    } else if (ev?.type === "session.end" && !ended.has(ev.session)) {
+    } else if (ev?.type === "session.end" && ev.cause !== "duplicate-record" && !ended.has(ev.session)) {
       ended.add(ev.session);
       ends.push(ev);
     }
@@ -127,13 +158,20 @@ export function listRecentSessionEnds(homeDir = os.homedir(), { nowMs = Date.now
     .filter((ev) => nowMs - Date.parse(ev.at) <= withinMs)
     .slice(-limit)
     .reverse()
-    .map((ev) => ({
-      session: ev.session ?? null,
-      account: ev.account ?? "default",
-      endedAt: ev.at,
-      cause: ev.cause ?? "user",
-      reason: SESSION_END_REASONS[ev.cause ?? "user"] ?? `Ended (${ev.cause}).`,
-    }));
+    .map((ev) => {
+      const cause = ev.cause ?? "user";
+      const byColab = cause === "colab-died" ? describeColabEnd(ev) : null;
+      return {
+        session: ev.session ?? null,
+        account: ev.account ?? "default",
+        endedAt: ev.at,
+        cause,
+        reason: byColab?.reason ?? SESSION_END_REASONS[cause] ?? `Ended (${cause}).`,
+        summary: byColab?.summary ?? (cause === "idle-watchdog" ? "stopped by the idle auto-stop" : cause === "user" ? "released with down" : `ended (${cause})`),
+        afterMinutes: byColab ? byColab.afterMinutes : ev.startedAt ? minutesBetween(ev.startedAt, ev.at) : null,
+        ...(byColab ? { unattendedMinutes: byColab.unattendedMinutes, colabSaid: ev.colabSaid ?? null } : {}),
+      };
+    });
 }
 
 export function recordCalibrateEvent(

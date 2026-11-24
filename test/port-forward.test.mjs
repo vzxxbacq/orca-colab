@@ -256,3 +256,57 @@ test("a running forward is recorded in the session for status and the idle watch
 
   await assert.rejects(runForward([], { json: true, ...io, homeDir }), /usage: orca-colab forward --port/);
 });
+
+test("the forwarding helper is restarted only after two bad heartbeat checks in a row, and the old one is ended first", async (t) => {
+  const homeDir = tmpDir(t);
+  writeSession(
+    { name: "orca-colab-fwd", createdAt: "2026-11-23T10:00:00.000Z", colabRuntime: { id: "r-1", endpoint: "r-1", baseUrl: BASE, token: "proxy-1" } },
+    homeDir,
+  );
+  // What the runtime answers for the helper's heartbeat file, one entry per check.
+  const beats = ["fresh", "refused", "fresh", "stale", "missing", "fresh"];
+  const checked = [];
+  const commands = [];
+  const logs = [];
+  const fetchImpl = async (url, init = {}) => {
+    const u = new URL(url);
+    if (u.hostname === "colaboratory.googleapis.com") {
+      return new Response(JSON.stringify({ name: "runtimes/r-1", connectionInfo: { url: BASE, token: "proxy-1" } }), { status: 200 });
+    }
+    if (u.pathname.endsWith("/beat") && (init.method || "GET") === "GET") {
+      const answer = beats.shift() ?? "fresh";
+      checked.push(answer);
+      const date = "Mon, 23 Nov 2026 10:10:00 GMT";
+      if (answer === "refused") return new Response("{}", { status: 404, headers: { date } });
+      if (answer === "missing") return new Response("{}", { status: 404, headers: { date } });
+      return new Response(JSON.stringify({ last_modified: answer === "fresh" ? "2026-11-23T10:09:55.000Z" : "2026-11-23T10:08:00.000Z" }), { status: 200, headers: { date } });
+    }
+    return new Response("{}", { status: 200 });
+  };
+  saveOAuthCredentials(
+    "default",
+    { refreshToken: "r", accessToken: "a", expiryDate: Date.now() + 3_600_000, clientId: resolveOAuthClientConfig(homeDir).clientId },
+    homeDir,
+  );
+  const forward = await startPortForward({
+    sessionName: "orca-colab-fwd",
+    remotePort: 8000,
+    listenPort: 0,
+    homeDir,
+    fetchImpl,
+    execTty: async ({ command }) => {
+      commands.push(command);
+      return { ok: true, exitCode: 0, stdout: "" };
+    },
+    onLog: (line) => logs.push(line),
+    keepAliveMs: 5,
+  });
+  t.after(() => forward.close());
+  while (checked.length < 6) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  assert.equal(commands.length, 2);
+  assert.equal(commands[1].includes(`test -e ${forward.root}/pid && kill "$(cat ${forward.root}/pid)"`), true);
+  assert.deepEqual(logs, ["forwarding helper on the runtime is not running (HTTP 404 for its heartbeat file); starting it again"]);
+});

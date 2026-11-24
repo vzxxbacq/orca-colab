@@ -17,7 +17,7 @@ import {
   readUseByOtherMachines,
   stampRuntimeActivity,
 } from "../bin/lib/runtime-records.mjs";
-import { listSessions, readSession } from "../bin/lib/session-store.mjs";
+import { distinctRuntimeSessions, listSessions, readSession } from "../bin/lib/session-store.mjs";
 import { readTask, readTaskLog } from "../bin/lib/task-store.mjs";
 import { createFakeRuntime, STATE_DIR } from "./fake-colab-runtime.mjs";
 
@@ -258,4 +258,48 @@ test("the idle rule follows the runtime's records: busy elsewhere is never idle,
   assert.deepEqual(quiet.busyBy, []);
   assert.deepEqual({ isIdle: idleFor(quiet).isIdle, reason: idleFor(quiet).reason }, { isIdle: false, reason: "recent-cli-activity" });
   assert.equal(idleFor({ ...quiet, idleMs: 25 * 60_000 }).isIdle, true);
+});
+
+test("a runtime adopted while its own up was still writing the session keeps one record, charged once", async (t) => {
+  const runtime = createFakeRuntime();
+  const home = machine(t);
+  // Discovery saw the runtime before `up` had written its session or the record on the runtime.
+  await discoverAccountRuntimes({ homeDir: home, env: MACHINE_A, fetchImpl: runtime.fetchImpl, listRuntimesFn: async () => [LISTED], nowMs: () => Date.parse("2026-11-24T07:59:59.000Z") });
+  await upOnMachineA(home, runtime);
+  assert.deepEqual(listSessions(home).map((s) => s.name).sort(), ["orca-colab-r7", "orca-colab-train"]);
+  assert.deepEqual(distinctRuntimeSessions(listSessions(home)).map((s) => s.name), ["orca-colab-train"]);
+
+  await discoverAccountRuntimes({ homeDir: home, env: MACHINE_A, fetchImpl: runtime.fetchImpl, listRuntimesFn: async () => [LISTED], nowMs: () => Date.parse("2026-11-24T08:01:00.000Z") });
+  assert.deepEqual(listSessions(home).map((s) => s.name), ["orca-colab-train"]);
+  assert.deepEqual(
+    readLedgerEvents(home).filter((e) => e.session === "orca-colab-r7").map((e) => [e.type, e.at, e.cause ?? null]),
+    [
+      ["session.start", "2026-11-24T07:59:59.000Z", null],
+      ["session.end", "2026-11-24T07:59:59.000Z", "duplicate-record"],
+    ],
+  );
+});
+
+test("a session missing from Colab's list is dropped only when Colab no longer answers for its runtime, with what Colab said", async (t) => {
+  const runtime = createFakeRuntime();
+  const home = machine(t);
+  await upOnMachineA(home, runtime);
+  const discover = (getRuntimeFn) =>
+    discoverAccountRuntimes({ homeDir: home, env: MACHINE_A, fetchImpl: runtime.fetchImpl, listRuntimesFn: async () => [], getRuntimeFn, nowMs: () => Date.parse("2026-11-24T08:23:00.000Z") });
+
+  await discover(async () => LISTED);
+  assert.deepEqual(listSessions(home).map((s) => s.name), ["orca-colab-train"]);
+
+  await discover(async () => {
+    throw Object.assign(new Error("gone"), {
+      status: 404,
+      responseBody: JSON.stringify({ error: { code: 404, status: "NOT_FOUND", message: "Runtime was preempted.", details: [{ reason: "RUNTIME_PREEMPTED" }] } }),
+    });
+  });
+  assert.deepEqual(listSessions(home), []);
+  const end = readLedgerEvents(home).at(-1);
+  assert.deepEqual(
+    [end.type, end.session, end.cause, end.at, end.colabSaid],
+    ["session.end", "orca-colab-train", "colab-died", "2026-11-24T08:23:00.000Z", "404 NOT_FOUND RUNTIME_PREEMPTED Runtime was preempted."],
+  );
 });

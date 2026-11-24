@@ -82,6 +82,8 @@ def complete(path):
 # Jupyter stats a file again right after saving it, so a request file stays in place for a while; this set
 # is what keeps it from running twice.
 seen = {entry.name[4:-5] for entry in os.scandir(root) if entry.name.startswith("res-") and entry.name.endswith(".json")}
+with open(os.path.join(root, "pid"), "w") as f:
+    f.write(str(os.getpid()))
 open(os.path.join(root, "alive"), "w").close()
 last_beat = 0
 while True:
@@ -171,6 +173,7 @@ export async function startPortForward({
   execTty = execCommandOverTty,
   onLog = () => {},
   pollMs = 250,
+  keepAliveMs = 30_000,
 } = {}) {
   const channel = createRuntimeChannel({ sessionName, homeDir, fetchImpl });
   const root = `/tmp/orca-colab-forward-${remotePort}-${randomBytes(4).toString("hex")}`;
@@ -182,7 +185,9 @@ export async function startPortForward({
       baseUrl: session.colabRuntime.baseUrl,
       proxyToken: session.colabRuntime.token,
       fetchImpl,
-      command: `mkdir -p ${root} && cat > ${root}/helper.py && (setsid nohup python3 ${root}/helper.py ${root} ${remotePort} ${requestTimeoutSeconds} > ${root}/helper.log 2>&1 < /dev/null &) && for i in 1 2 3 4 5 6 7 8 9 10; do test -e ${root}/beat && break; sleep 0.2; done; test -e ${root}/beat`,
+      // Two helpers on one directory would replay every request twice, so one that is still there
+      // (stuck, or only out of sight for a moment) is ended before the new one starts.
+      command: `mkdir -p ${root} && cat > ${root}/helper.py && { test -e ${root}/pid && kill "$(cat ${root}/pid)" 2>/dev/null && sleep 0.3; rm -f ${root}/beat ${root}/stop; (setsid nohup python3 ${root}/helper.py ${root} ${remotePort} ${requestTimeoutSeconds} >> ${root}/helper.log 2>&1 < /dev/null &) ; } && for i in 1 2 3 4 5 6 7 8 9 10; do test -e ${root}/beat && break; sleep 0.2; done; test -e ${root}/beat`,
       stdinBase64: Buffer.from(HELPER_SOURCE, "utf8").toString("base64"),
       timeoutMs: 60_000,
     });
@@ -194,6 +199,10 @@ export async function startPortForward({
   const remoteFile = (name) => `${channel.baseUrl()}/api/contents${root}/${name}`;
 
   // Keeps the helper alive, and starts a new one when the old one died with its runtime's processes.
+  // One unanswered or refused read proves nothing (the proxy holds or refuses a request now and then,
+  // and answers 404 to an expired token), so the helper is restarted only after two bad checks in a
+  // row, the second one with a fresh token; its age is measured on the runtime side's clock.
+  let badBeats = 0;
   async function keepAlive() {
     if (closed) return;
     try {
@@ -205,14 +214,31 @@ export async function startPortForward({
       const beat = await channel.fetch(`${remoteFile("beat")}?content=0`);
       const info = beat.ok ? await beat.json() : null;
       await beat.arrayBuffer().catch(() => {});
-      if (!info || Date.now() - Date.parse(info.last_modified) > 30_000) {
-        onLog("forwarding helper on the runtime is not running; starting it again");
-        await startHelper();
+      const serverNowMs = Date.parse(beat.headers?.get?.("date") || "") || Date.now();
+      if (info && serverNowMs - Date.parse(info.last_modified) <= 30_000) {
+        badBeats = 0;
+        return;
       }
+      badBeats += 1;
+      if (badBeats === 1) {
+        await channel.refreshToken();
+        return;
+      }
+      badBeats = 0;
+      onLog(
+        `forwarding helper on the runtime is not running (${info ? `its last sign of life is ${Math.round((serverNowMs - Date.parse(info.last_modified)) / 1000)}s old` : `HTTP ${beat.status} for its heartbeat file`}); starting it again`,
+      );
+      await startHelper();
     } catch (err) {
+      if (err instanceof SessionGoneError) {
+        if (!goneLogged) onLog(`keep-alive stopped: ${err.message}`);
+        goneLogged = true;
+        return;
+      }
       onLog(`keep-alive failed: ${err.message}`);
     }
   }
+  let goneLogged = false;
 
   async function forward(req, res) {
     const id = randomBytes(8).toString("hex");
@@ -342,7 +368,7 @@ export async function startPortForward({
     server.once("error", reject);
     server.listen(listenPort, listenHost, resolve);
   });
-  const timer = setInterval(() => void keepAlive(), 30_000);
+  const timer = setInterval(() => void keepAlive(), keepAliveMs);
   timer.unref?.();
   const address = server.address();
   const record = {

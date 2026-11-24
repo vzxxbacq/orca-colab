@@ -3,6 +3,7 @@ import { discoverAccountRuntimes } from "../lib/account-runtimes.mjs";
 import { CliError, EXIT_OK, log, writeJson } from "../lib/cli-output.mjs";
 import { listRecentSessionEnds } from "../lib/credit-ledger.mjs";
 import { liveForwards } from "../lib/port-forward.mjs";
+import { presenceOf } from "../lib/runtime-presence.mjs";
 import { listSessions } from "../lib/session-store.mjs";
 
 export function describeSessionOrigin(session) {
@@ -56,6 +57,8 @@ export async function run(
       ...session,
       ...(session.colabRuntime ? { colabRuntime } : {}),
       forwards: liveForwards(session),
+      // Whether a client of this machine is connected to the runtime; Colab reclaims one without any.
+      presence: presenceOf(session, now),
       origin: session.origin ?? null,
       startedHere: !session.adopted,
       reachable: Boolean(session.colabRuntime?.baseUrl) && session.state !== "zombie",
@@ -74,7 +77,7 @@ export async function run(
   }
 
   for (const ended of recentlyEnded) {
-    log(`ended ${ended.endedAt}: ${ended.session} (${ended.cause}). ${ended.reason}`, stderr);
+    log(`${ended.session}: ${ended.summary} at ${ended.endedAt} (${ended.cause}). ${ended.reason}`, stderr);
   }
   if (enriched.length === 0) {
     log("No sessions.", stderr);
@@ -84,7 +87,7 @@ export async function run(
   for (const s of enriched) {
     const gpuLabel = s.gpu?.name ?? "unknown";
     log(
-      `${s.name} (account=${s.account}) gpu="${gpuLabel}" reachable=${s.reachable} state=${s.state} age=${s.ageSeconds}s started-by="${describeSessionOrigin(s)}"`,
+      `${s.name} (account=${s.account}) gpu="${gpuLabel}" reachable=${s.reachable} state=${s.state} age=${s.ageSeconds}s started-by="${describeSessionOrigin(s)}" client-connected=${s.presence.connected ? "yes" : "no"}`,
       stderr,
     );
     for (const f of s.forwards) {

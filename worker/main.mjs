@@ -11,6 +11,7 @@ import {
   evaluateBudgetAlert,
   evaluateSessionIdleState,
   GRACE_PERIOD_MINUTES,
+  LOW_GPU_UTIL_THRESHOLD_PERCENT,
 } from "../bin/lib/idle-watchdog.mjs";
 import { estimateProjectMonthlyUse, readLedgerEvents } from "../bin/lib/credit-ledger.mjs";
 import { checkNetwork } from "../bin/lib/network-check.mjs";
@@ -18,6 +19,7 @@ import { installNetworkProxy } from "../bin/lib/network-proxy.mjs";
 import { createPanelActions, PANEL_ACTION_NAMES } from "../bin/lib/panel-actions.mjs";
 import { describeProjectGuardrails } from "../bin/lib/project-guardrails.mjs";
 import { createRuntimeChannel } from "../bin/lib/runtime-channel.mjs";
+import { RuntimePresenceKeeper, sessionNeedsPresence } from "../bin/lib/runtime-presence.mjs";
 import { describeOrigin, machineName, stampRuntimeActivity } from "../bin/lib/runtime-records.mjs";
 import { openRuntimeShell } from "../bin/lib/runtime-shell.mjs";
 import { listSessions, readSession } from "../bin/lib/session-store.mjs";
@@ -143,6 +145,8 @@ class AccountDashboard {
     this.graceTimers = new Map();
     this.timers = [];
     this.watchers = [];
+    this.presence = new RuntimePresenceKeeper({ homeDir });
+    this.autoStopIdleMinutes = DEFAULT_AUTO_STOP_IDLE_MINUTES;
   }
 
   selectTask(taskId) {
@@ -191,6 +195,27 @@ class AccountDashboard {
     this.timers.push(setInterval(() => void this.broadcastIfChanged(), 1500));
     this.timers.push(setInterval(() => void this.syncTick(), 2000));
     this.timers.push(setInterval(() => void this.watchdogTick(), 5 * 60_000));
+    this.timers.push(setInterval(() => this.presenceTick(), 30_000));
+    this.presenceTick();
+  }
+
+  // Colab takes back runtimes it considers unattended. Between an agent's commands, and for a job
+  // whose follower is gone or a kept session, this worker is the client; it lets go once the session
+  // has been unused for as long as the idle auto-stop waits.
+  presenceTick() {
+    try {
+      const tasks = listTasks(this.homeDir);
+      this.presence.reconcile((session) =>
+        sessionNeedsPresence({
+          session,
+          runningTasksCount: tasks.filter((t) => t.sessionName === session.name && t.status === "running").length,
+          gpuBusy: (this.builder.gpuUtilSamplesBySession.get(session.name)?.at(-1) ?? 0) >= LOW_GPU_UTIL_THRESHOLD_PERCENT,
+          activeWithinMinutes: this.autoStopIdleMinutes > 0 ? this.autoStopIdleMinutes : DEFAULT_AUTO_STOP_IDLE_MINUTES,
+        }),
+      );
+    } catch {
+      // Transient read error; the next tick retries.
+    }
   }
 
   stop() {
@@ -203,6 +228,7 @@ class AccountDashboard {
       }
     }
     for (const t of this.graceTimers.values()) clearTimeout(t);
+    void this.presence.stop();
     this.timers = [];
     this.watchers = [];
   }
@@ -280,6 +306,7 @@ class AccountDashboard {
     const autoStopIdleMinutes = Number(
       await readSetting(this.orca, "autoStopIdleMinutes", DEFAULT_AUTO_STOP_IDLE_MINUTES),
     );
+    this.autoStopIdleMinutes = autoStopIdleMinutes;
     await this.builder.syncFromRuntimes({ maxAgeMs: 0 });
     // A runtime started under a project file that sets the idle minutes keeps them on every machine.
     const idleMinutesFor = (session) =>

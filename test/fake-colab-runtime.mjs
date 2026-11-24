@@ -1,6 +1,7 @@
 // An in-memory stand-in for a Colab runtime's Jupyter server: the contents API, /files with ranges, and
 // an `execTty` that plays the job runner. `runJob({ id, script, record, write })` returns the exit code.
-// `stall({ method, path })` picks requests the proxy never answers.
+// `stall({ method, path })` picks requests the proxy never answers. Jupyter sessions and kernels are served
+// too, with `FakeWebSocket` as the client side of a kernel's channels: `kernels` shows who is connected.
 export function createFakeRuntime({ baseUrl = "https://8080-m.colab.dev", runJob = async () => 0, exec = null, colabRuntimeId = null, stall = null } = {}) {
   const files = new Map();
   const dirs = new Set(["/content"]);
@@ -8,7 +9,39 @@ export function createFakeRuntime({ baseUrl = "https://8080-m.colab.dev", runJob
   const launches = [];
   const jobs = [];
   let nowMs = Date.parse("2026-11-24T00:00:00.000Z");
-  const state = { unreachable: false };
+  const state = { unreachable: false, proxyToken: "proxy-tok" };
+  const kernels = new Map();
+  const sockets = [];
+  let kernelSeq = 0;
+  class FakeWebSocket extends EventTarget {
+    constructor(url, { headers = {} } = {}) {
+      super();
+      this.url = url;
+      this.headers = headers;
+      this.sent = [];
+      this.kernel = kernels.get(/\/api\/kernels\/([^/]+)\/channels/.exec(new URL(url).pathname)?.[1]);
+      sockets.push(this);
+      queueMicrotask(() => {
+        if (!this.kernel || headers["X-Colab-Runtime-Proxy-Token"] !== state.proxyToken || state.unreachable) {
+          this.dispatchEvent(new Event("error"));
+          this.dispatchEvent(new Event("close"));
+          return;
+        }
+        this.kernel.connections += 1;
+        this.open = true;
+        this.dispatchEvent(new Event("open"));
+      });
+    }
+    send(text) {
+      this.sent.push(JSON.parse(text));
+    }
+    close() {
+      if (!this.open) return;
+      this.open = false;
+      this.kernel.connections -= 1;
+      this.dispatchEvent(new Event("close"));
+    }
+  }
   const spentSignals = new WeakSet();
 
   const json = (status, body, headers = {}) =>
@@ -31,7 +64,7 @@ export function createFakeRuntime({ baseUrl = "https://8080-m.colab.dev", runJob
     // Colab's own API: the runtime still exists and hands out its proxy token.
     if (u.hostname === "colaboratory.googleapis.com") {
       return colabRuntimeId && decoded === `/v1beta/runtimes/${colabRuntimeId}`
-        ? json(200, { name: `runtimes/${colabRuntimeId}`, connectionInfo: { url: baseUrl, token: "proxy-tok" } })
+        ? json(200, { name: `runtimes/${colabRuntimeId}`, connectionInfo: { url: baseUrl, token: state.proxyToken } })
         : json(404, {});
     }
     if (state.unreachable) {
@@ -66,6 +99,28 @@ export function createFakeRuntime({ baseUrl = "https://8080-m.colab.dev", runJob
       }
       const entry = files.get(p);
       return entry ? json(200, { ...model(p, entry), content: entry.bytes.toString("utf8"), format: "text" }) : json(404, {});
+    }
+    if (init.headers?.["X-Colab-Runtime-Proxy-Token"] && state.proxyToken !== "proxy-tok" && init.headers["X-Colab-Runtime-Proxy-Token"] !== state.proxyToken) {
+      return json(404, {});
+    }
+    if (decoded === "/api/sessions" && method === "POST") {
+      const wanted = JSON.parse(init.body);
+      let kernel = [...kernels.values()].find((k) => k.path === wanted.path);
+      if (!kernel) {
+        kernelSeq += 1;
+        kernel = { id: `kernel-${kernelSeq}`, sessionId: `session-${kernelSeq}`, path: wanted.path, connections: 0 };
+        kernels.set(kernel.id, kernel);
+      }
+      return json(201, { id: kernel.sessionId, path: kernel.path, kernel: { id: kernel.id, connections: kernel.connections } });
+    }
+    if (decoded.startsWith("/api/kernels/") && method === "GET") {
+      const kernel = kernels.get(decoded.slice("/api/kernels/".length));
+      return kernel ? json(200, { id: kernel.id, connections: kernel.connections }) : json(404, {});
+    }
+    if (decoded.startsWith("/api/sessions/") && method === "DELETE") {
+      const kernel = [...kernels.values()].find((k) => k.sessionId === decoded.slice("/api/sessions/".length));
+      if (kernel) kernels.delete(kernel.id);
+      return kernel ? new Response(null, { status: 204 }) : json(404, {});
     }
     if (decoded.startsWith("/files/")) {
       const entry = files.get(decoded.slice("/files".length));
@@ -122,6 +177,17 @@ export function createFakeRuntime({ baseUrl = "https://8080-m.colab.dev", runJob
     settle: () => Promise.all(jobs),
     advance: (ms) => (nowMs += ms),
     setUnreachable: (value) => (state.unreachable = value),
+    FakeWebSocket,
+    kernels,
+    sockets,
+    // Colab hands out a new proxy token; the old one is answered like a missing page.
+    rotateProxyToken: (token) => (state.proxyToken = token),
+    // Colab takes the runtime back: its API no longer knows it and every connection drops.
+    reclaim: () => {
+      colabRuntimeId = null;
+      state.unreachable = true;
+      for (const socket of sockets) socket.close();
+    },
     text: (p) => files.get(p)?.bytes.toString("utf8") ?? null,
     json: (p) => (files.has(p) ? JSON.parse(files.get(p).bytes.toString("utf8")) : null),
     write: put,

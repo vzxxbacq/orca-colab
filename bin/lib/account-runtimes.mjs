@@ -1,5 +1,8 @@
+import { readFileSync } from "node:fs";
 import os from "node:os";
-import { listRuntimes, stripResourcePrefix } from "./colab-api-client.mjs";
+import path from "node:path";
+import { getRuntime, listRuntimes, stripResourcePrefix } from "./colab-api-client.mjs";
+import { getColabPaths } from "./colab-home.mjs";
 import { getValidAccessToken, listOAuthAccounts } from "./colab-oauth.mjs";
 import { recordSessionEndEvent, recordSessionStartEvent, resolveDeadSessionEndIso } from "./credit-ledger.mjs";
 import { resolveGpuRate } from "./rate-table.mjs";
@@ -22,6 +25,37 @@ function freeSessionName(wanted, runtimeId, taken) {
   return `${wanted}-${suffix}`;
 }
 
+// An `up` on this machine that has its runtime but has not written the session yet.
+function upInProgress(homeDir) {
+  try {
+    const lock = JSON.parse(readFileSync(path.join(getColabPaths(homeDir).baseDir, "assign.lock"), "utf8"));
+    process.kill(lock.pid, 0);
+    return Date.now() - (lock.ts || 0) < 90_000;
+  } catch {
+    return false;
+  }
+}
+
+async function askColabAbout(runtimeId, { accessToken, fetchImpl, getRuntimeFn }) {
+  try {
+    const runtime = await getRuntimeFn({ runtimeId, accessToken, fetchImpl, signal: AbortSignal.timeout(10_000) });
+    return { alive: Boolean(runtime?.connectionInfo?.token), text: null };
+  } catch (err) {
+    let error = null;
+    try {
+      error = JSON.parse(err?.responseBody || "null")?.error ?? null;
+    } catch {
+      // Not JSON: nothing to quote.
+    }
+    const reasons = (error?.details || []).map((d) => d?.reason).filter((r) => r && r !== "NOT_FOUND");
+    const plainNotFound = err?.status === 404 && reasons.length === 0 && (!error?.message || error.message === "Requested entity was not found.");
+    return {
+      alive: false,
+      text: plainNotFound || !err?.status ? null : [err.status, error?.status, ...reasons, error?.message].filter(Boolean).join(" "),
+    };
+  }
+}
+
 // Colab's runtime list is the account's truth, whichever machine started a runtime. Runtimes this
 // machine has no session for become sessions here (named and attributed from the record on the
 // runtime; "unknown origin" without one), known ones get their fresh proxy token and keep flag, and
@@ -31,6 +65,7 @@ export async function discoverAccountRuntimes({
   env = process.env,
   fetchImpl = fetch,
   listRuntimesFn = listRuntimes,
+  getRuntimeFn = getRuntime,
   nowMs = () => Date.now(),
 } = {}) {
   const changes = { adopted: [], dropped: [], accountsListed: [], unreachable: null };
@@ -38,8 +73,9 @@ export async function discoverAccountRuntimes({
     if (!authenticated) continue;
     const listStartedMs = nowMs();
     let runtimes;
+    let accessToken;
     try {
-      const accessToken = await getValidAccessToken({ account, homeDir, fetchImpl });
+      accessToken = await getValidAccessToken({ account, homeDir, fetchImpl });
       if (!accessToken) continue;
       runtimes = await listRuntimesFn({ accessToken, fetchImpl, signal: AbortSignal.timeout(15_000) });
     } catch (err) {
@@ -49,6 +85,14 @@ export async function discoverAccountRuntimes({
     }
     changes.accountsListed.push(account);
 
+    // A runtime adopted while its own `up` was still writing the session has two records: the adopted
+    // one goes, with an end at its start so the ledger charges the runtime once.
+    const ownRuntimeIds = new Set(listSessions(homeDir).filter((s) => !s.adopted && s.colabRuntime?.id).map((s) => s.colabRuntime.id));
+    for (const s of listSessions(homeDir)) {
+      if (s.adopted && ownRuntimeIds.has(s.colabRuntime?.id) && deleteSession(s.name, homeDir)) {
+        recordSessionEndEvent(s, { cause: "duplicate-record", endedAt: s.createdAt, homeDir });
+      }
+    }
     const sessions = listSessions(homeDir);
     const mine = sessions.filter((s) => (s.account || "default") === account);
     const takenNames = new Set(sessions.map((s) => s.name));
@@ -103,6 +147,8 @@ export async function discoverAccountRuntimes({
       }
       // The record could not be read: the runtime may be ours after all, so wait for a poll that can.
       if (record === undefined) continue;
+      // No record yet and an `up` running here: most likely its runtime, about to get its session.
+      if (!record && upInProgress(homeDir)) continue;
 
       const gpu = record?.gpu || gpuFromSpec(rt.runtimeSpec);
       const rate = resolveGpuRate(gpu.name, homeDir);
@@ -146,8 +192,12 @@ export async function discoverAccountRuntimes({
       if (!s.colabRuntime?.id || listedIds.has(s.colabRuntime.id) || !(Date.parse(s.createdAt) < listStartedMs)) {
         continue;
       }
+      // The runtime itself is asked before its session is dropped: a list that left it out is no proof,
+      // and anything Colab says beyond "not found" is the only reason there will ever be.
+      const said = await askColabAbout(s.colabRuntime.id, { accessToken, fetchImpl, getRuntimeFn });
+      if (said.alive) continue;
       if (!deleteSession(s.name, homeDir)) continue;
-      recordSessionEndEvent(s, { cause: "colab-died", endedAt: resolveDeadSessionEndIso(s, nowMs()), homeDir });
+      recordSessionEndEvent(s, { cause: "colab-died", endedAt: resolveDeadSessionEndIso(s, nowMs()), homeDir, colabSaid: said.text });
       for (const t of listTasks(homeDir, { reconcile: false })) {
         if (t.sessionName === s.name && t.status === "running" && t.runtimeBacked) {
           writeTask({ ...t, status: "failed", exitCode: 1, finishedAt: new Date(nowMs()).toISOString(), localPid: null }, homeDir);

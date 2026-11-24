@@ -103,7 +103,15 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
       setting, `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` and the macOS / Windows system proxy for every fetch and
       WebSocket; failures name host, cause code and proxy; `doctor --network` reaches each endpoint
       (`test/network-proxy.test.mjs`, with a CONNECT and a SOCKS5 proxy inside the test process).
-- [ ] **A runtime adopted while `up` is still writing its session.** Seen 2026-11-24: the panel's discovery listed
+- [x] **Colab ends runtimes orca-colab uses (D28).** — Done 2026-11-24 (`v0.4.3`): three G4 runtimes left Colab's
+      list 21 to 38 minutes after `up`. orca-colab started no kernel, and a kernel with a connected client is what
+      Colab's own client treated as use; `bin/lib/runtime-presence.mjs` now holds that connection while a runtime is
+      in use (commands over 10 s, the worker and the MCP server), `status` / the panel show it, and a session Colab
+      ended says after how long and whether a client was connected. The forwarding helper is restarted only after two
+      failed checks and never doubled. Cause not proven on CPU: see `docs/colab-internal-endpoints.md` § 6.
+- [x] **A runtime adopted while `up` is still writing its session.** — Done 2026-11-24 (`v0.4.3`): discovery skips a
+      recordless runtime while an `up` here holds `assign.lock`, removes an adopted record whose runtime has a
+      session of its own (ledger end at its start), and `up` counts each runtime once. Was: seen 2026-11-24: the panel's discovery listed
       the runtime between Colab assigning it and `up` writing the session file and the record on the runtime, and
       created a second session (`orca-colab-<suffix>`, origin unknown, wrong rate) for the same runtime; it counts
       toward the concurrent-session limit and starts a second ledger entry. Discovery cannot tell this from a

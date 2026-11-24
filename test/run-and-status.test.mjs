@@ -130,6 +130,7 @@ test("status and ls report reachability and ageSeconds in JSON without the runti
         transport: "colab-tty",
         colabRuntime: { id: "r-1", endpoint: "r-1", baseUrl: "https://8080-m.colab.dev", tokenExpiry: null },
         forwards: [],
+        presence: { connected: false, lastAt: null },
         origin: null,
         startedHere: true,
         reachable: true,
@@ -144,14 +145,15 @@ test("status and ls report reachability and ageSeconds in JSON without the runti
 test("status says when and why a session ended, newest first, for the last 24 hours", async (t) => {
   const tmpHome = mkdtempSync(path.join(os.tmpdir(), "orca-colab-status-"));
   t.after(() => rmSync(tmpHome, { recursive: true, force: true }));
-  for (const [at, session, cause] of [
+  for (const [at, session, cause, extra] of [
     ["2026-11-08T09:00:00.000Z", "orca-colab-old", "user"],
-    ["2026-11-09T09:00:00.000Z", "orca-colab-a", "user"],
+    ["2026-11-09T09:00:00.000Z", "orca-colab-a", "user", { startedAt: "2026-11-09T08:00:00.000Z" }],
     ["2026-11-09T09:01:00.000Z", "orca-colab-a", "colab-died"],
     ["2026-11-09T09:30:00.000Z", "orca-colab-b", "idle-watchdog"],
-    ["2026-11-09T09:58:00.744Z", "orca-colab-h3", "colab-died"],
+    ["2026-11-09T09:40:00.000Z", "orca-colab-kept", "colab-died", { startedAt: "2026-11-08T21:40:00.000Z", lastPresenceAt: "2026-11-09T09:39:30.000Z" }],
+    ["2026-11-09T09:58:00.744Z", "orca-colab-h3", "colab-died", { startedAt: "2026-11-09T09:34:30.000Z" }],
   ]) {
-    appendLedgerEvent({ type: "session.end", at, account: "default", session, cause }, tmpHome);
+    appendLedgerEvent({ type: "session.end", at, account: "default", session, cause, ...extra }, tmpHome);
   }
 
   const io = makeBuffers();
@@ -165,7 +167,23 @@ test("status says when and why a session ended, newest first, for the last 24 ho
         endedAt: "2026-11-09T09:58:00.744Z",
         cause: "colab-died",
         reason:
-          "Colab no longer had this runtime assigned, so the local session was dropped. This machine did not release it: it was released from another machine or ended on Colab's side (its web UI, an idle or lifetime limit, or Colab reclaiming it).",
+          "Colab no longer had this runtime assigned (ended by Colab after about 24 min); this machine did not release it. No orca-colab client on this machine was connected to it. Colab takes back runtimes it considers unattended, whatever is running on them (seen 20 to 40 minutes after the start on GPU runtimes); orca-colab stays connected while a command, job or forward of this machine runs and for a kept session ('up --keep'), as long as this machine is on and online. It may also have been released from another machine or from Colab's web UI. Colab's API gives no reason.",
+        summary: "ended by Colab after about 24 min",
+        afterMinutes: 24,
+        unattendedMinutes: null,
+        colabSaid: null,
+      },
+      {
+        session: "orca-colab-kept",
+        account: "default",
+        endedAt: "2026-11-09T09:40:00.000Z",
+        cause: "colab-died",
+        reason:
+          "Colab no longer had this runtime assigned (ended by Colab after about 12 h); this machine did not release it. An orca-colab client on this machine was connected until the end, so this was not Colab's reclaim of an unattended runtime: it was released from another machine or from Colab's web UI, or Colab ended it (maximum lifetime, compute units used up, or capacity). Colab's API gives no reason.",
+        summary: "ended by Colab after about 12 h",
+        afterMinutes: 720,
+        unattendedMinutes: 1,
+        colabSaid: null,
       },
       {
         session: "orca-colab-b",
@@ -173,6 +191,8 @@ test("status says when and why a session ended, newest first, for the last 24 ho
         endedAt: "2026-11-09T09:30:00.000Z",
         cause: "idle-watchdog",
         reason: "Released by the idle auto-stop: no command, job or GPU load for the configured time.",
+        summary: "stopped by the idle auto-stop",
+        afterMinutes: null,
       },
       {
         session: "orca-colab-a",
@@ -180,6 +200,8 @@ test("status says when and why a session ended, newest first, for the last 24 ho
         endedAt: "2026-11-09T09:00:00.000Z",
         cause: "user",
         reason: "Released with 'down' (CLI, MCP or the panel's Stop button).",
+        summary: "released with down",
+        afterMinutes: 60,
       },
     ],
     networkError: null,
