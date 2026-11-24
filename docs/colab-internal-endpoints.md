@@ -169,6 +169,14 @@ The same Jupyter Server answers these with the `X-Colab-Runtime-Proxy-Token` hea
 - `GET https://colaboratory.googleapis.com/v1beta/runtimes` returns every runtime of the account with
   `connectionInfo.url` and a fresh `connectionInfo.token`, whichever machine assigned it.
 
+- `/api/contents` and `/files` are answered by one process, `colab-fileshim.py` (behind the `node` front on
+  8080), not by `jupyter-server`, which serves terminals and kernels (verified 2026-11-24 on a CPU runtime:
+  with the shim paused every contents and `/files` request hangs while terminals still open; with
+  `jupyter-server` paused they answer in milliseconds). File requests therefore queue behind each other and
+  behind the disk: during a 130 GB download with 16 workers on a G4 runtime they timed out (20 s) for minutes,
+  and a missing file under a directory that was removed meanwhile answers 404, not a timeout. Whether a
+  process is alive is asked over a terminal (`/proc/<pid>/cmdline`), never concluded from a file read.
+
 Layout under `/content/orca/.orca-colab/` (DESIGN D25): `session.json`, `tasks/<id>.json`, `tasks/<id>.log`,
 `tasks/<id>.sh` (read and deleted by the runner), `tasks/<id>.stop` (stop request), `tasks/_job-runner-v1.py`,
 `activity/<machine>.json`.
