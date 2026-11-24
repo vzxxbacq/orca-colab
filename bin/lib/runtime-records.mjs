@@ -151,12 +151,6 @@ export async function readRuntimeFileTail(channel, rel, maxBytes) {
   return { bytes: bytes.subarray(Math.max(0, bytes.length - maxBytes)), totalBytes: bytes.length };
 }
 
-export async function removeRuntimeFile(channel, rel) {
-  const res = await send(channel, apiUrl(channel, "api/contents", statePath(rel)), { method: "DELETE" });
-  await res.arrayBuffer().catch(() => {});
-  return res.ok;
-}
-
 function machineFileId(machine) {
   return String(machine || "unknown").replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 80) || "unknown";
 }
