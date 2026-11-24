@@ -20,6 +20,7 @@ import {
   readJsonFile,
   writeJsonAtomic,
 } from "./colab-home.mjs";
+import { normalizeSessionOrigin } from "./session-store.mjs";
 
 export function generateTaskId(nowMs = Date.now()) {
   const ts = Math.floor(nowMs / 1000).toString(36);
@@ -132,6 +133,17 @@ export function normalizeTask(input, homeDir = os.homedir()) {
       typeof input.logPath === "string" && input.logPath
         ? input.logPath
         : taskLogPath(input.id, homeDir),
+    // The job runs detached on the runtime, which keeps its record and full log; this file is a copy.
+    ...(input.runtimeBacked
+      ? {
+          runtimeBacked: true,
+          runtimeLogOffset:
+            Number.isInteger(input.runtimeLogOffset) && input.runtimeLogOffset > 0 ? input.runtimeLogOffset : 0,
+          logComplete: Boolean(input.logComplete),
+          ...(Number.isInteger(input.localLogBytes) && input.localLogBytes >= 0 ? { localLogBytes: input.localLogBytes } : {}),
+        }
+      : {}),
+    ...(normalizeSessionOrigin(input.origin) ? { origin: normalizeSessionOrigin(input.origin) } : {}),
   };
 }
 
@@ -150,6 +162,10 @@ export function writeTask(task, homeDir = os.homedir()) {
 
 export function reconcileTask(task, homeDir = os.homedir(), { checkPid = isProcessAlive } = {}) {
   if (!task || task.status !== "running") {
+    return task;
+  }
+  // A job on the runtime outlives the local process that followed it; its record there decides.
+  if (task.runtimeBacked) {
     return task;
   }
   if (task.localPid && !checkPid(task.localPid)) {

@@ -27,12 +27,20 @@ function tmpDir(t, prefix = "orca-colab-mcp-") {
 }
 
 // An MCP client wired to the server in-process: the same line protocol, without a child process.
-function connect(t, { homeDir = tmpDir(t), roots = null, ...toolOptions } = {}) {
+function connect(t, { homeDir = tmpDir(t), roots = null, commandContext = {}, ...toolOptions } = {}) {
   const input = new PassThrough();
   const waiting = new Map();
   const lines = [];
   let nextId = 1;
-  const tools = createColabMcpTools({ runMain: main, homeDir, env: { PATH: process.env.PATH ?? "" }, ...toolOptions });
+  // No Colab and no runtime behind these tests: every request a command makes on its own is refused.
+  const offline = async () => new Response("{}", { status: 503 });
+  const tools = createColabMcpTools({
+    runMain: main,
+    homeDir,
+    env: { PATH: process.env.PATH ?? "" },
+    commandContext: { fetchImpl: offline, ...commandContext },
+    ...toolOptions,
+  });
   const server = serveMcpOverStdio({
     input,
     write: (line) => {
@@ -148,7 +156,7 @@ test("every CLI command and flag is covered by an MCP tool or listed as not expo
     }
   }
   assert.deepEqual([...toolNames].sort(), [...covered].sort());
-  for (const command of ["watch", "mcp"]) {
+  for (const command of ["mcp"]) {
     assert.deepEqual(CLI_COVERAGE[command].tools, []);
   }
 });

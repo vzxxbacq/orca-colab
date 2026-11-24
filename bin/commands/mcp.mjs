@@ -25,7 +25,9 @@ export async function run(
     process.stdout.on("error", () => {});
   }
 
-  const tools = createColabMcpTools({ runMain: cliMain, homeDir, env, ...toolOptions });
+  // Runtimes and jobs started through this server are attributed to the MCP client that asked.
+  const toolEnv = { ...env };
+  const tools = createColabMcpTools({ runMain: cliMain, homeDir, env: toolEnv, ...toolOptions });
   log(`MCP server ready on stdio (orca-colab ${PACKAGE.version}, ${tools.tools.length} tools).`, stderr);
   const server = serveMcpOverStdio({
     input: stdin,
@@ -34,6 +36,11 @@ export async function run(
     instructions: MCP_INSTRUCTIONS,
     tools: tools.tools,
     callTool: tools.call,
+    onClientInfo: (info) => {
+      if (!toolEnv.ORCA_COLAB_AGENT && typeof info?.name === "string" && info.name) {
+        toolEnv.ORCA_COLAB_AGENT = info.name;
+      }
+    },
   });
   await server.closed;
   await tools.settle();

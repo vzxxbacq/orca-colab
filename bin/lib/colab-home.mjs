@@ -36,12 +36,12 @@ export function ensureColabHome(homeDir = os.homedir()) {
   return paths;
 }
 
-export function writeJsonAtomic(filePath, value, { mode = 0o600 } = {}) {
+export function writeJsonAtomic(filePath, value, { mode = 0o600, header = [] } = {}) {
   const dir = path.dirname(filePath);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const suffix = `${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   const tmpPath = `${filePath}.${suffix}`;
-  const serialized = `${JSON.stringify(value, null, 2)}\n`;
+  const serialized = `${header.map((line) => `${line}\n`).join("")}${JSON.stringify(value, null, 2)}\n`;
   try {
     writeFileSync(tmpPath, serialized, { encoding: "utf8", mode });
     chmodSync(tmpPath, mode);

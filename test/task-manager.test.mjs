@@ -6,6 +6,7 @@ import test from "node:test";
 import { run as runJob } from "../bin/commands/job.mjs";
 import { writeSession } from "../bin/lib/session-store.mjs";
 import { readTask, readTaskLog } from "../bin/lib/task-store.mjs";
+import { createFakeRuntime, STATE_DIR } from "./fake-colab-runtime.mjs";
 
 function makeTempHome() {
   return mkdtempSync(path.join(os.tmpdir(), "orca-colab-job-test-"));
@@ -41,11 +42,13 @@ test("job submit --wait streams live output to task log and records succeeded st
       homeDir,
     );
 
-    const fakeTty = async ({ onOutput }) => {
-      onOutput("Epoch 1/2: loss=0.412\n");
-      onOutput("Epoch 2/2: loss=0.189\n");
-      return { ok: true, exitCode: 0, stdout: "" };
-    };
+    const runtime = createFakeRuntime({
+      runJob: async ({ write }) => {
+        write("Epoch 1/2: loss=0.412\n");
+        write("Epoch 2/2: loss=0.189\n");
+        return 0;
+      },
+    });
 
     const submitIo = makeBuffers();
     const code = await runJob(
@@ -55,13 +58,16 @@ test("job submit --wait streams live output to task log and records succeeded st
         stdout: submitIo.stdout,
         stderr: submitIo.stderr,
         homeDir,
-        execTty: fakeTty,
+        execTty: runtime.execTty,
+        fetchImpl: runtime.fetchImpl,
       },
     );
 
     assert.equal(code, 0);
     const submitRes = JSON.parse(submitIo.stdoutText);
     assert.equal(submitRes.ok, true);
+    assert.match(runtime.text(`${STATE_DIR}/tasks/${submitRes.task.id}.log`), /\$ python3 train\.py\nEpoch 1\/2: loss=0\.412\nEpoch 2\/2: loss=0\.189\n$/);
+    assert.equal(runtime.json(`${STATE_DIR}/tasks/${submitRes.task.id}.json`).status, "succeeded");
     assert.equal(submitRes.task.name, "Train ResMLP");
     assert.equal(submitRes.task.status, "succeeded");
     assert.equal(submitRes.task.exitCode, 0);
@@ -74,6 +80,7 @@ test("job submit --wait streams live output to task log and records succeeded st
       stdout: lsIo.stdout,
       stderr: lsIo.stderr,
       homeDir,
+      fetchImpl: runtime.fetchImpl,
     });
     const lsRes = JSON.parse(lsIo.stdoutText);
     assert.equal(lsRes.tasks.length, 1);
@@ -85,6 +92,7 @@ test("job submit --wait streams live output to task log and records succeeded st
       stdout: logsIo.stdout,
       stderr: logsIo.stderr,
       homeDir,
+      fetchImpl: runtime.fetchImpl,
     });
     const logsRes = JSON.parse(logsIo.stdoutText);
     assert.equal(logsRes.ok, true);

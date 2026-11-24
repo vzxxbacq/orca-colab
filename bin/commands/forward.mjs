@@ -1,8 +1,9 @@
 import { parseArgs } from "node:util";
+import { resolveSessionAcrossMachines } from "../lib/account-runtimes.mjs";
 import { CliError, EXIT_OK, log, writeJson } from "../lib/cli-output.mjs";
 import { startPortForward } from "../lib/port-forward.mjs";
 import { withSessionActivity } from "../lib/session-activity.mjs";
-import { requireColabRuntime, resolveSession } from "../lib/session-store.mjs";
+import { requireColabRuntime } from "../lib/session-store.mjs";
 
 function parsePort(value, what, lowest = 1) {
   const port = Number(value);
@@ -20,6 +21,7 @@ export async function run(
     json,
     stdout,
     stderr,
+    env = process.env,
     homeDir,
     signal,
     fetchImpl = fetch,
@@ -63,7 +65,7 @@ export async function run(
     throw new CliError(`invalid --timeout: ${opts.timeout}`);
   }
 
-  const session = resolveSession({ sessionName: opts.session ?? null, homeDir });
+  const session = await resolveSessionAcrossMachines({ sessionName: opts.session ?? null, homeDir, fetchImpl });
   requireColabRuntime(session);
 
   // Started by the MCP server, the listener outlives the pipes it was given.
@@ -106,5 +108,5 @@ export async function run(
   };
 
   // The live pid keeps the idle watchdog from stopping a session that only serves requests.
-  return withActivity ? withActivity(session.name, homeDir, serve) : serve();
+  return withActivity ? withActivity(session.name, homeDir, serve, { env, command: "forward", fetchImpl }) : serve();
 }

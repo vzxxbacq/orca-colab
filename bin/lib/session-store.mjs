@@ -8,6 +8,22 @@ import {
   readJsonFile,
   writeJsonAtomic,
 } from "./colab-home.mjs";
+import { normalizeRecordedGuardrails } from "./project-guardrails.mjs";
+
+export function normalizeSessionOrigin(input) {
+  if (!input || typeof input !== "object" || typeof input.machine !== "string" || !input.machine) {
+    return null;
+  }
+  return {
+    machine: input.machine,
+    platform: typeof input.platform === "string" ? input.platform : null,
+    agent: typeof input.agent === "string" && input.agent ? input.agent : "cli",
+    workspace: typeof input.workspace === "string" && input.workspace ? input.workspace : null,
+    // Where on that machine the work was started, and which Orca workspace that is when Orca said so.
+    ...(typeof input.directory === "string" && input.directory ? { directory: input.directory } : {}),
+    ...(typeof input.orcaWorkspace === "string" && input.orcaWorkspace ? { orcaWorkspace: input.orcaWorkspace } : {}),
+  };
+}
 
 function assertSafeSessionName(name) {
   if (
@@ -56,6 +72,25 @@ export function normalizeSession(input) {
 
   if (typeof input.transport === "string" && input.transport) {
     normalized.transport = input.transport;
+  }
+
+  // `origin` is who started the runtime (from its own record); `adopted` marks a session this machine
+  // did not start but found in the account's runtime list. Adopted without origin = unknown origin.
+  const origin = normalizeSessionOrigin(input.origin);
+  if (origin) {
+    normalized.origin = origin;
+  }
+  if (input.adopted) {
+    normalized.adopted = true;
+  }
+
+  // The project whose `.orca/colab.json` governed this runtime, and the guardrails in force at `up`.
+  if (typeof input.project === "string" && input.project) {
+    normalized.project = input.project;
+  }
+  const guardrails = normalizeRecordedGuardrails(input.guardrails);
+  if (guardrails) {
+    normalized.guardrails = guardrails;
   }
 
   if (Array.isArray(input.forwards) && input.forwards.length > 0) {
@@ -169,8 +204,10 @@ export function selectDefaultSession(sessions, requestedName = null) {
     return sessions[0];
   }
 
+  // A runtime another machine started is used only when asked for by name or when it is the only one.
   const active = sessions.filter((s) => s.state !== "zombie");
-  const pool = active.length > 0 ? active : sessions;
+  const own = active.filter((s) => !s.adopted);
+  const pool = own.length > 0 ? own : active.length > 0 ? active : sessions;
   return [...pool].sort(compareSessionsNewestFirst)[0];
 }
 

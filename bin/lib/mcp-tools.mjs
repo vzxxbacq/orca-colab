@@ -8,7 +8,7 @@ import { listOAuthAccounts, remoteBrowserSignInNote } from "./colab-oauth.mjs";
 import { openUrlInSystemBrowser } from "./open-url.mjs";
 import { liveForwards } from "./port-forward.mjs";
 import { listSessions } from "./session-store.mjs";
-import { listTasks, readTask, readTaskLog, taskLogPath } from "./task-store.mjs";
+import { isProcessAlive, listTasks, readTask, readTaskLog, taskLogPath } from "./task-store.mjs";
 
 const CLI_ENTRY_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "orca-colab.mjs");
 
@@ -24,13 +24,13 @@ const REMOTE_BROWSER_NOTE = remoteBrowserSignInNote("give it to you for the auth
 export const MCP_INSTRUCTIONS = `Colab GPU: use a Google Colab runtime (T4, L4, A100 and other GPUs, or CPU) as a remote compute backend. The workspace, the agent and the Google credentials stay on this machine; the runtime is a disposable box reached over public HTTPS. Reach for it when a task needs a GPU or CUDA, training, fine-tuning or inference too heavy for this machine, or when the user mentions Colab.
 
 Order of work
-1. doctor: needs ok true. Read policy.allowedGpus and policy.maxConcurrentSessions: the owner's guardrails, set in the Colab GPU panel in Orca together with the monthly budget; they are not yours to change. If checks.oauth.ok is false, sign in (below).
-2. status: reuse a runtime that is already reachable instead of starting another.
+1. doctor (pass workspace_path): needs ok true. Read policy.allowedGpus and policy.maxConcurrentSessions: the owner's guardrails. policy.source "project" means they come from the project's own file (policy.file, .orca/colab.json in the project), "machine" from this machine's defaults set in the Colab GPU panel together with the monthly budget; either way they are not yours to change, and you never create or edit that file. Pass the same workspace_path to up and credits so the project's guardrails and budget apply. If checks.oauth.ok is false, sign in (below).
+2. status: reuse a runtime that is already reachable instead of starting another. It lists every runtime of the signed-in Google account, also ones started from another machine (startedHere false, origin names the machine and agent; origin null is a runtime of unknown origin, for example a notebook the owner has open in Colab). All tools work on any of them by session name, and jobs submitted elsewhere appear in job_list.
 3. credits: approximate balance (estimatedBalanceCu), burn rate and monthly budget. Every figure is an estimate. The monthly budget is a hard limit: once estimatedMonthlyUsedCu reaches budgetCu, up refuses to start a new runtime (reusing a running one still works). If the balance is close to zero, ask the owner before up.
 4. up with an allowed GPU: T4 for inference and debugging, L4 or A100 for training, CPU for checks that need no GPU. It returns when the runtime is ready, and the runtime bills compute units until down. Tell the owner the rate (estimatedCuPerHour) before long work.
 5. sync the workspace (pass workspace_path), then job_submit for anything longer than a minute (it returns a job id at once; follow with job_wait or job_logs) or run for short commands.
 6. pull results as soon as they exist: runtimes die (about 90 minutes idle on the free tier, 12 hours at most) and nothing on them persists.
-7. down as soon as the GPU work is finished.
+7. down as soon as the GPU work is finished, for the runtimes you started. A runtime another machine is using is left alone (reason "in-use-elsewhere"); tell the owner who is using it and pass force only when they say so.
 
 Sign-in
 Call auth_login. It opens Google's consent page in the owner's browser on this machine and returns the URL; show the owner the URL in case the browser did not open. Tell them to tick the Colab permission ("Read, write and delete your Colab resources", or Select all): it starts unticked and sign-in fails without it. Then call auth_wait until state is "signed_in". Always tell the owner this too, because you cannot know where their browser runs: ${REMOTE_BROWSER_NOTE}
@@ -68,6 +68,11 @@ const WORKSPACE_PROP = {
   type: "string",
   description:
     "Absolute path of the workspace directory on this machine. This server does not run in your working directory, so pass it unless the client exposes exactly one MCP root.",
+};
+const PROJECT_PROP = {
+  type: "string",
+  description:
+    "Absolute path of the project directory on this machine the work is for. Its guardrails file (.orca/colab.json, in that directory or one above it) then applies instead of the machine's defaults. Pass it unless the client exposes exactly one MCP root; without either, the directory this server was started in is used.",
 };
 const COMMAND_PROPS = {
   command: {
@@ -111,8 +116,8 @@ const TOOL_SPECS = [
     name: "doctor",
     title: "Check prerequisites and guardrails",
     description:
-      "Checks Node, git, tar and the Google sign-in, and returns the owner's guardrails in policy (allowedGpus, maxConcurrentSessions). Call it first. mode is \"direct-api\" once signed in; when checks.oauth.ok is false, call auth_login.",
-    inputSchema: schema(),
+      "Checks Node, git, tar and the Google sign-in, and returns the owner's guardrails in policy (allowedGpus, maxConcurrentSessions, and monthlyBudgetCu and autoStopIdleMinutes when the project sets them). policy.source says where they come from: \"project\" (policy.file, the project's .orca/colab.json) or \"machine\" (this machine's defaults). They are the owner's to change, not yours. Call it first, with workspace_path. mode is \"direct-api\" once signed in; when checks.oauth.ok is false, call auth_login. checks.guardrails.ok false means the project's guardrails file is broken: tell the owner, nothing can start until it is fixed.",
+    inputSchema: schema({ workspace_path: PROJECT_PROP }),
     annotations: READ_ONLY,
   },
   {
@@ -188,15 +193,17 @@ const TOOL_SPECS = [
     name: "status",
     title: "List Colab runtimes",
     description:
-      "Lists the sessions (runtimes) known on this machine: name, gpu, rateKey, cuPerHour, account, remoteRoot, ageSeconds, state and reachable. Same as the CLI's status and ls. forwards lists active port forwards (listen address, remote port, pid). A session with reachable false is a zombie: call down for it. recentlyEnded lists the sessions that ended in the last 24 hours with endedAt, cause (user, idle-watchdog, colab-died) and a reason, so a session that is missing is explained: tell the owner the cause instead of guessing.",
-    inputSchema: schema(),
+      "Lists the runtimes of the Google account signed in on this machine, including ones started from other machines (asked from Colab on every call; local: true skips that): name, gpu, rateKey, cuPerHour, account, remoteRoot, ageSeconds, state and reachable. startedHere false means another machine started it; origin then names that machine and agent, or is null for a runtime without an orca-colab record (unknown origin: an older version, or a notebook the owner has open in Colab; leave it alone unless the owner says otherwise). Every command works on any listed runtime by its name. Same as the CLI's status and ls. forwards lists active port forwards (listen address, remote port, pid). A session with reachable false is a zombie: call down for it. recentlyEnded lists the sessions that ended in the last 24 hours with endedAt, cause (user, idle-watchdog, colab-died) and a reason, so a session that is missing is explained: tell the owner the cause instead of guessing.",
+    inputSchema: schema({
+      local: { type: "boolean", description: "Only what this machine already knows; no call to Colab." },
+    }),
     annotations: READ_ONLY,
   },
   {
     name: "up",
     title: "Start or reuse a Colab runtime",
     description:
-      "Assigns a Colab runtime (or reuses the one already assigned), queries its GPU and records the session. Usually takes under a minute, up to a few minutes while Colab is allocating a scarce GPU; if your client times out first the call still finishes, so call status. The runtime bills compute units (estimatedCuPerHour) until down. The owner's guardrails apply: gpu must be in policy.allowedGpus and new is refused beyond policy.maxConcurrentSessions (step \"policy\"), and a new runtime is refused once the estimated use this month has reached the monthly budget (step \"budget\", with budgetCu and estimatedMonthlyUsedCu; only the owner raises it). step \"prerequisites\" means sign in with auth_login.",
+      "Assigns a Colab runtime (or reuses the one already assigned), queries its GPU and records the session. Usually takes under a minute, up to a few minutes while Colab is allocating a scarce GPU; if your client times out first the call still finishes, so call status. The runtime bills compute units (estimatedCuPerHour) until down. The owner's guardrails apply: gpu must be in policy.allowedGpus and new is refused beyond policy.maxConcurrentSessions (step \"policy\"), and a new runtime is refused once the estimated use this month has reached the monthly budget (step \"budget\", with budgetCu and estimatedMonthlyUsedCu; only the owner raises it). The guardrails are the project's (.orca/colab.json found from workspace_path; scope \"project\" and file in a budget refusal) when it has such a file, else this machine's; budgets are counted per project or per machine, never per Google account. step \"prerequisites\" means sign in with auth_login.",
     inputSchema: schema({
       gpu: {
         type: "string",
@@ -210,6 +217,7 @@ const TOOL_SPECS = [
         description: "Start an additional runtime next to the running ones instead of reusing one.",
       },
       keep: { type: "boolean", description: "Exempt this session from the idle auto-stop. Only when the owner asks." },
+      workspace_path: PROJECT_PROP,
     }),
   },
   {
@@ -246,7 +254,7 @@ const TOOL_SPECS = [
     name: "job_submit",
     title: "Submit a long-running job",
     description:
-      "Starts a command on the runtime as a managed job and returns at once with task.id. Output streams to a log the owner watches live in the panel; read it with job_logs, wait for the end with job_wait, stop it with job_stop. The job keeps running if this server or your session ends. With sync true the workspace is pushed first, inside the job.",
+      "Starts a command on the runtime as a managed job and returns at once with task.id. It runs detached on the runtime with its record and complete output there, which the owner watches live in the panel (on any machine signed in to the account); read it with job_logs, wait for the end with job_wait, stop it with job_stop. The job keeps running if this server, your session or this machine goes away. With sync true the workspace is pushed first, inside the job.",
     inputSchema: schema({
       ...COMMAND_PROPS,
       name: { type: "string", description: "Short title shown in the panel." },
@@ -323,10 +331,11 @@ const TOOL_SPECS = [
     name: "down",
     title: "Release a Colab runtime",
     description:
-      "Deletes the runtime at Colab so it stops billing, and removes the session. Call it as soon as the GPU work is finished and the results are pulled. Succeeds when the runtime is already gone. reason \"api-delete-failed\" means it may still be running: sign in with auth_login and call down again, or have the owner delete it at colab.research.google.com.",
+      "Deletes the runtime at Colab so it stops billing, and removes the session. Call it as soon as the GPU work is finished and the results are pulled. Succeeds when the runtime is already gone. reason \"api-delete-failed\" means it may still be running: sign in with auth_login and call down again, or have the owner delete it at colab.research.google.com. reason \"in-use-elsewhere\" means another machine has a command or job running on it right now (inUseBy lists who): it was not released; wait, or ask the owner before passing force. reason \"use-unknown\" means the runtime did not answer, so that could not be checked: try again, and pass force only when the owner says so. Release only runtimes you started unless the owner asks.",
     inputSchema: schema({
       session: SESSION_PROP,
       all: { type: "boolean", description: "Release every session." },
+      force: { type: "boolean", description: "Release it even while another machine is using it. Only when the owner asks." },
     }),
     annotations: DESTRUCTIVE,
   },
@@ -362,8 +371,8 @@ const TOOL_SPECS = [
     name: "credits",
     title: "Compute-unit balance and budget",
     description:
-      "Approximate balance (estimatedBalanceCu), burn rate (estimatedBurnCuPerHour), hours left (estimatedHoursRemaining) and monthly budget use (budgetCu, estimatedMonthlyUsedCu, estimatedBudgetUsedPercent) for an account. At 100 percent up refuses new runtimes. Refreshes from Colab when signed in. Every figure is an estimate; say so when you quote one.",
-    inputSchema: schema({ account: ACCOUNT_PROP }),
+      "Approximate balance (estimatedBalanceCu), burn rate (estimatedBurnCuPerHour), hours left (estimatedHoursRemaining) and monthly budget use (budgetCu, estimatedMonthlyUsedCu, estimatedBudgetUsedPercent) for an account. When the project (workspace_path) sets its own monthly budget, projectBudget carries that budget and the project's estimated use on this machine, and up is held to it instead. At 100 percent up refuses new runtimes. Refreshes from Colab when signed in. Every figure is an estimate; say so when you quote one.",
+    inputSchema: schema({ account: ACCOUNT_PROP, workspace_path: PROJECT_PROP }),
   },
   {
     name: "credits_calibrate",
@@ -425,7 +434,7 @@ export const CLI_COVERAGE = {
     flags: ["account", "add", "all", "no-browser"],
   },
   up: { tools: ["up"], flags: ["name", "account", "gpu", "high-ram", "new", "keep"] },
-  status: { tools: ["status"], flags: [] },
+  status: { tools: ["status"], flags: ["local"] },
   ls: { tools: ["status"], flags: [] },
   run: {
     tools: ["run"],
@@ -441,13 +450,12 @@ export const CLI_COVERAGE = {
   pull: { tools: ["pull"], flags: ["session"] },
   down: {
     tools: ["down"],
-    flags: ["session", "all"],
+    flags: ["session", "all", "force"],
     notExposed: { cause: "ledger cause set by the idle watchdog" },
   },
   credits: { tools: ["credits", "credits_calibrate", "credits_set", "credits_budget"], flags: ["account", "browser"] },
   ledger: { tools: ["ledger"], flags: ["month", "account"] },
   rates: { tools: ["rates"], flags: ["set"] },
-  watch: { tools: [], flags: [], notExposed: { "auto-stop-idle-minutes": "plugin bridge", "no-watchdog": "plugin bridge" } },
   mcp: { tools: [], flags: [] },
   forward: { tools: ["forward_start", "forward_stop"], flags: ["session", "port", "listen", "timeout"] },
 };
@@ -654,6 +662,16 @@ export function createColabMcpTools({
     return result;
   }
 
+  // A job no process on this machine follows (another machine submitted it, or its follower ended) has
+  // its state and output on the runtime; `job logs` copies both here.
+  async function refreshFromRuntime(id, ctx) {
+    const task = readTask(id, homeDir, { reconcile: false });
+    const followed = task?.localPid && isProcessAlive(task.localPid);
+    if (!task || (task.runtimeBacked && !task.logComplete && !followed)) {
+      await runCli(["job", "logs", id, "--tail=1"], ctx).catch(() => {});
+    }
+  }
+
   const boundedTty = (seconds, signal) => (options) =>
     execTty({
       ...options,
@@ -686,6 +704,19 @@ export function createColabMcpTools({
         ? `The client exposes several workspace roots (${roots.join(", ")}); pass workspace_path.`
         : "Pass workspace_path: the absolute path of the workspace directory on this machine (this server does not run in your working directory).",
     );
+  }
+
+  // Guardrails come from the project the work is for: workspace_path, else the client's single root,
+  // else the directory this server was started in (what the CLI would use).
+  async function projectContext(args, ctx) {
+    let dir = null;
+    if (args.workspace_path) {
+      dir = await resolveWorkspace(args, ctx);
+    } else {
+      const roots = (await ctx.listRoots?.()) ?? [];
+      if (roots.length === 1) dir = requireDirectory(roots[0], "workspace root");
+    }
+    return dir ? { cwd: dir, context: { projectDir: dir } } : {};
   }
 
   function requireDirectory(dir, label) {
@@ -853,7 +884,7 @@ export function createColabMcpTools({
   }
 
   const handlers = {
-    doctor: async (_args, ctx) => toResult(await runCli(["doctor"], ctx)),
+    doctor: async (args, ctx) => toResult(await runCli(["doctor"], { ...ctx, ...(await projectContext(args, ctx)) })),
 
     auth_status: async (args, ctx) => {
       const result = toResult(await runCli(["auth", "status", ...accountFlags(args)], ctx));
@@ -891,7 +922,7 @@ export function createColabMcpTools({
         signInHint: false,
       }),
 
-    status: async (_args, ctx) => toResult(await runCli(["status"], ctx)),
+    status: async (args, ctx) => toResult(await runCli(["status", ...(args.local ? ["--local"] : [])], ctx)),
 
     up: async (args, ctx) => {
       const argv = ["up", ...accountFlags(args)];
@@ -900,7 +931,8 @@ export function createColabMcpTools({
       if (args.high_ram) argv.push("--high-ram");
       if (args.new) argv.push("--new");
       if (args.keep) argv.push("--keep");
-      return toResult(await toCompletion(runCli(argv, { onProgress: ctx.onProgress })));
+      const project = await projectContext(args, ctx);
+      return toResult(await toCompletion(runCli(argv, { onProgress: ctx.onProgress, ...project })));
     },
 
     sync: async (args, ctx) => {
@@ -988,6 +1020,7 @@ export function createColabMcpTools({
     job_logs: async (args, ctx) => {
       const id = taskId(args);
       if (args.since_bytes !== undefined && args.since_bytes !== null) {
+        await refreshFromRuntime(id, ctx);
         const task = readTask(id, homeDir);
         if (!task) {
           throw new ToolInputError(`task not found: ${id}`);
@@ -1004,11 +1037,19 @@ export function createColabMcpTools({
     job_wait: async (args, ctx) => {
       const id = taskId(args);
       const deadline = Date.now() + (args.timeout_seconds ?? DEFAULT_WAIT_SECONDS) * 1000;
+      await refreshFromRuntime(id, ctx);
       let task = readTask(id, homeDir);
+      let refreshedAt = Date.now();
       while (task && task.status === "running" && Date.now() < deadline && !ctx.signal?.aborted) {
         await sleep(taskPollMs, ctx.signal);
+        if (Date.now() - refreshedAt > 3000) {
+          refreshedAt = Date.now();
+          await refreshFromRuntime(id, ctx);
+        }
         task = readTask(id, homeDir);
       }
+      await refreshFromRuntime(id, ctx);
+      task = readTask(id, homeDir);
       if (!task) {
         throw new ToolInputError(`task not found: ${id}`);
       }
@@ -1070,10 +1111,12 @@ export function createColabMcpTools({
       const argv = ["down"];
       if (args.session) argv.push(`--session=${args.session}`);
       if (args.all) argv.push("--all");
+      if (args.force) argv.push("--force");
       return toResult(await toCompletion(runCli(argv)));
     },
 
-    credits: async (args, ctx) => toResult(await runCli(["credits", ...accountFlags(args)], ctx)),
+    credits: async (args, ctx) =>
+      toResult(await runCli(["credits", ...accountFlags(args)], { ...ctx, ...(await projectContext(args, ctx)) })),
 
     credits_calibrate: async (args, ctx) =>
       toResult(

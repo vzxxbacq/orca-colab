@@ -1,18 +1,46 @@
-import { EXIT_OK, log, writeJson } from "../lib/cli-output.mjs";
+import { parseArgs } from "node:util";
+import { discoverAccountRuntimes } from "../lib/account-runtimes.mjs";
+import { CliError, EXIT_OK, log, writeJson } from "../lib/cli-output.mjs";
 import { listRecentSessionEnds } from "../lib/credit-ledger.mjs";
 import { liveForwards } from "../lib/port-forward.mjs";
 import { listSessions } from "../lib/session-store.mjs";
 
+export function describeSessionOrigin(session) {
+  if (!session.adopted) return "this machine";
+  if (!session.origin) return "unknown origin";
+  return `${session.origin.agent && session.origin.agent !== "cli" ? `${session.origin.agent} on ` : ""}${session.origin.machine}`;
+}
+
 export async function run(
-  _argv,
+  argv,
   {
     json,
     stdout,
     stderr,
+    env = process.env,
     homeDir,
+    fetchImpl = fetch,
+    discover = discoverAccountRuntimes,
     nowMs = () => Date.now(),
   },
 ) {
+  let opts;
+  try {
+    opts = parseArgs({
+      args: argv,
+      options: {
+        local: { type: "boolean", default: false },
+      },
+      strict: true,
+      allowPositionals: false,
+    }).values;
+  } catch (err) {
+    throw new CliError(err instanceof Error ? err.message : String(err));
+  }
+  // The account's runtimes at Colab, including ones started from other machines; --local skips the call.
+  if (!opts.local) {
+    await discover({ homeDir, env, fetchImpl }).catch(() => {});
+  }
   const sessions = listSessions(homeDir);
   const now = nowMs();
 
@@ -27,6 +55,8 @@ export async function run(
       ...session,
       ...(session.colabRuntime ? { colabRuntime } : {}),
       forwards: liveForwards(session),
+      origin: session.origin ?? null,
+      startedHere: !session.adopted,
       reachable: Boolean(session.colabRuntime?.baseUrl) && session.state !== "zombie",
       ageSeconds,
     };
@@ -49,7 +79,7 @@ export async function run(
   for (const s of enriched) {
     const gpuLabel = s.gpu?.name ?? "unknown";
     log(
-      `${s.name} (account=${s.account}) gpu="${gpuLabel}" reachable=${s.reachable} state=${s.state} age=${s.ageSeconds}s`,
+      `${s.name} (account=${s.account}) gpu="${gpuLabel}" reachable=${s.reachable} state=${s.state} age=${s.ageSeconds}s started-by="${describeSessionOrigin(s)}"`,
       stderr,
     );
     for (const f of s.forwards) {

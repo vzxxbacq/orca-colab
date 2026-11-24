@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { resolveSessionAcrossMachines } from "../lib/account-runtimes.mjs";
 import {
   CliError,
   EXIT_ERROR,
@@ -14,7 +15,7 @@ import {
 import { execCommandOverTty } from "../lib/colab-api-client.mjs";
 import { downloadJupyterFile } from "../lib/jupyter-files.mjs";
 import { withSessionActivity } from "../lib/session-activity.mjs";
-import { requireColabRuntime, resolveSession } from "../lib/session-store.mjs";
+import { requireColabRuntime } from "../lib/session-store.mjs";
 import { shellQuote } from "./run.mjs";
 
 export async function run(
@@ -23,6 +24,7 @@ export async function run(
     json,
     stdout,
     stderr,
+    env = process.env,
     cwd,
     homeDir,
     spawnProcess = spawnSync,
@@ -52,9 +54,10 @@ export async function run(
     );
   }
 
-  const session = resolveSession({
+  const session = await resolveSessionAcrossMachines({
     sessionName: parsed.values.session ?? null,
     homeDir,
+    fetchImpl,
   });
 
   const remotePath =
@@ -125,7 +128,7 @@ export async function run(
   };
 
   if (withActivity) {
-    return withActivity(session.name, homeDir, execute);
+    return withActivity(session.name, homeDir, execute, { env, command: "pull", fetchImpl });
   }
   return execute();
 }

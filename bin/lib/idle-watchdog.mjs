@@ -12,6 +12,7 @@ export function evaluateSessionIdleState({
   autoStopIdleMinutes = DEFAULT_AUTO_STOP_IDLE_MINUTES,
   nowMs = Date.now(),
   checkPid = isProcessAlive,
+  runtimeUsage = null,
 }) {
   if (!session || session.state === "zombie") {
     return {
@@ -31,6 +32,16 @@ export function evaluateSessionIdleState({
     };
   }
 
+  // A runtime without a record of ours may be a notebook the user has open in Colab; never auto-stopped.
+  if (session.adopted && !session.origin) {
+    return {
+      isIdle: false,
+      reason: "unknown-origin",
+      consecutiveLowSamples: 0,
+      idleMinutes: 0,
+    };
+  }
+
   if (!autoStopIdleMinutes || autoStopIdleMinutes <= 0) {
     return {
       isIdle: false,
@@ -42,7 +53,8 @@ export function evaluateSessionIdleState({
 
   const activePids = Array.isArray(session.activePids) ? session.activePids : [];
   const hasLivePid = activePids.some((pid) => checkPid(pid));
-  if (hasLivePid || runningTasksCount > 0) {
+  // `runtimeUsage` is what the runtime's own records say about every machine, not only this one.
+  if (hasLivePid || runningTasksCount > 0 || runtimeUsage?.busyBy?.length > 0) {
     return {
       isIdle: false,
       reason: "active-process",
@@ -52,9 +64,10 @@ export function evaluateSessionIdleState({
   }
 
   const lastActivityMs = Date.parse(session.lastActivityAt || session.createdAt);
-  const idleMs = Number.isFinite(lastActivityMs)
+  const localIdleMs = Number.isFinite(lastActivityMs)
     ? Math.max(0, nowMs - lastActivityMs)
     : 0;
+  const idleMs = typeof runtimeUsage?.idleMs === "number" ? Math.min(localIdleMs, runtimeUsage.idleMs) : localIdleMs;
   const idleMinutes = idleMs / 60_000;
 
   let consecutiveLowSamples = 0;

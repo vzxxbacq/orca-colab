@@ -28,7 +28,7 @@ test("parseOrcaJson unwraps the CLI envelope and rejects failures", () => {
   assert.equal(parseOrcaJson("not json"), null);
 });
 
-test("helper maps worktree show and terminal create through a fake orca binary", async () => {
+test("helper lists this machine's terminals through a fake orca binary", async () => {
   const calls = [];
   const fakeSpawn = (bin, args) => {
     calls.push(args);
@@ -36,27 +36,18 @@ test("helper maps worktree show and terminal create through a fake orca binary",
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
     child.kill = () => {};
-    const reply = args[0] === "worktree"
-      ? { ok: true, result: { worktree: { id: "repo::/srv/p", identity: { key: "wt2:host9:abc", executionHostId: "host9" }, hostId: "host9", displayName: "remote-host-bridge", path: "/srv/p", branch: "refs/heads/main" } } }
-      : { ok: true, result: { terminal: { handle: "term_42" } } };
     setImmediate(() => {
-      child.stdout.emit("data", JSON.stringify(reply));
+      child.stdout.emit("data", JSON.stringify({ ok: true, result: { terminals: [{ handle: "term_42", title: "zsh", worktreePath: "/srv/p" }] } }));
       child.emit("close", 0);
     });
     return child;
   };
   const helper = createOrcaRemoteHelper({ orcaBin: "/fake/orca", spawnProcess: fakeSpawn });
-  const wt = await helper.activeWorktree();
-  assert.deepEqual(wt.data, {
-    id: "repo::/srv/p", identity: "wt2:host9:abc", hostId: "host9", displayName: "remote-host-bridge", path: "/srv/p", branch: "refs/heads/main",
-  });
-  const created = await helper.createTerminal({ selector: "name:remote-host-bridge", title: "Colab Bridge", command: "orca-colab watch", environment: "macpro" });
-  assert.equal(created.data.handle, "term_42");
-  assert.deepEqual(calls[1], [
-    "terminal", "create", "--worktree", "name:remote-host-bridge", "--title", "Colab Bridge", "--command", "orca-colab watch", "--environment", "macpro", "--json",
-  ]);
+  const listed = await helper.listTerminals(undefined);
+  assert.deepEqual(listed.data, [{ handle: "term_42", title: "zsh", preview: "", connected: true, worktreePath: "/srv/p" }]);
+  assert.deepEqual(calls, [["terminal", "list", "--limit", "200", "--json"]]);
 
   const missing = createOrcaRemoteHelper({ orcaBin: null });
   assert.equal(missing.available, false);
-  assert.match((await missing.activeWorktree()).error, /not found/);
+  assert.match((await missing.listTerminals(undefined)).error, /not found/);
 });

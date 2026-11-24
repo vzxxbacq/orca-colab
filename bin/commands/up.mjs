@@ -18,7 +18,6 @@ import {
   getColabPaths,
   readConfig,
   resolveAccount,
-  resolveAgentPolicy,
 } from "../lib/colab-home.mjs";
 import {
   getValidAccessToken,
@@ -27,6 +26,7 @@ import {
   resolveOAuthAccountKey,
 } from "../lib/colab-oauth.mjs";
 import {
+  estimateProjectMonthlyUse,
   projectAccountCredits,
   readLedgerEvents,
   recordCalibrateEvent,
@@ -34,10 +34,19 @@ import {
   recordSessionStartEvent,
   resolveDeadSessionEndIso,
 } from "../lib/credit-ledger.mjs";
+import { guardrailsForRecord, resolveGuardrails } from "../lib/project-guardrails.mjs";
 import {
   resolveGpuRate as resolveRateFromTable,
   setRateOverride,
 } from "../lib/rate-table.mjs";
+import {
+  describeOrigin,
+  directRuntimeChannel,
+  machineName,
+  readRuntimeSessionRecord,
+  sameMachine,
+  writeRuntimeSessionRecord,
+} from "../lib/runtime-records.mjs";
 import {
   deleteSession,
   listSessions,
@@ -52,8 +61,11 @@ export async function run(
     stdout,
     stderr,
     env,
+    cwd = null,
+    projectDir = cwd,
     homeDir,
     signal = null,
+    openRuntimeChannel = null,
     resolveGpuRate = resolveRateFromTable,
     onSessionStart = recordSessionStartEvent,
     onSessionEnd = recordSessionEndEvent,
@@ -88,7 +100,10 @@ export async function run(
   const opts = parsed.values;
 
   const config = readConfig(homeDir);
-  const policy = resolveAgentPolicy(config);
+  // The project's .orca/colab.json, found from where the work is started, over this machine's config.
+  const policy = resolveGuardrails({ cwd: projectDir || null, homeDir });
+  const policyOrigin = policy.source === "project" ? `this project's guardrails (${policy.file})` : "user policy in Orca Colab settings";
+  const startedFromProject = (s) => policy.source !== "project" || !policy.setByProject.includes("maxConcurrentSessions") || s?.project === policy.project;
   const paths = getColabPaths(homeDir);
   const allNonZombieSessions = listSessions(homeDir).filter(
     (s) => s?.state !== "zombie",
@@ -136,13 +151,14 @@ export async function run(
       : requestedGpuRaw;
 
   if (!policy.allowedGpus.includes(selectedGpu)) {
-    const errMsg = `GPU '${selectedGpu}' is disabled by user policy in Orca Colab settings. Allowed GPUs: ${policy.allowedGpus.join(", ")}`;
+    const errMsg = `GPU '${selectedGpu}' is disabled by ${policyOrigin}. Allowed GPUs: ${policy.allowedGpus.join(", ")}`;
     throw new CliError(errMsg, {
       exitCode: EXIT_ERROR,
       payload: {
         ok: false,
         error: errMsg,
         allowedGpus: policy.allowedGpus,
+        ...(policy.source === "project" ? { source: "project", file: policy.file } : {}),
         step: "policy",
       },
     });
@@ -151,11 +167,12 @@ export async function run(
   const activeAccountSessions = listSessions(homeDir).filter(
     (s) => s?.state !== "zombie" && (s?.account || "default") === account.label,
   );
+  // A cap set by the project counts the runtimes started from that project; the machine's counts all.
   if (
     opts.new &&
-    activeAccountSessions.length >= policy.maxConcurrentSessions
+    activeAccountSessions.filter(startedFromProject).length >= policy.maxConcurrentSessions
   ) {
-    const errMsg = `Max concurrent sessions (${policy.maxConcurrentSessions}) reached by user policy.`;
+    const errMsg = `Max concurrent sessions (${policy.maxConcurrentSessions}) reached by ${policyOrigin}.`;
     throw new CliError(errMsg, {
       exitCode: EXIT_ERROR,
       payload: {
@@ -168,7 +185,35 @@ export async function run(
   }
 
   // The budget stops new spending only: attaching to a runtime that is already billing stays allowed.
-  if (opts.new || activeAccountSessions.length === 0) {
+  if (policy.monthlyBudgetCu && (opts.new || activeAccountSessions.length === 0)) {
+    // The project's own budget, counted from what this machine's ledger holds for this project.
+    const used = estimateProjectMonthlyUse({
+      events: readLedgerEvents(homeDir),
+      activeSessions: listSessions(homeDir),
+      project: policy.project,
+      nowMs: nowMs(),
+    });
+    if (used >= policy.monthlyBudgetCu) {
+      const errMsg = `Monthly compute-unit budget reached for this project (${policy.file}): about ${used} of ${policy.monthlyBudgetCu} CU used this month by runtimes started from it on this machine (estimate). No new runtime was started.`;
+      throw new CliError(errMsg, {
+        exitCode: EXIT_ERROR,
+        payload: {
+          ok: false,
+          code: "BUDGET_REACHED",
+          error: errMsg,
+          scope: "project",
+          project: policy.project,
+          file: policy.file,
+          approximate: true,
+          budgetCu: policy.monthlyBudgetCu,
+          estimatedMonthlyUsedCu: used,
+          estimatedBudgetUsedPercent: Math.round((used / policy.monthlyBudgetCu) * 100),
+          hint: `Only the owner can raise this project's budget: monthlyBudgetCu in ${policy.file} (or the Guardrails view of the Colab GPU panel on the machine that has the project).`,
+          step: "budget",
+        },
+      });
+    }
+  } else if (opts.new || activeAccountSessions.length === 0) {
     const credits = projectAccountCredits({
       events: readLedgerEvents(homeDir),
       activeSessions: listSessions(homeDir),
@@ -285,9 +330,9 @@ export async function run(
     );
     if (
       opts.new &&
-      currentActiveSessions.length >= policy.maxConcurrentSessions
+      currentActiveSessions.filter(startedFromProject).length >= policy.maxConcurrentSessions
     ) {
-      const errMsg = `Max concurrent sessions (${policy.maxConcurrentSessions}) reached by user policy.`;
+      const errMsg = `Max concurrent sessions (${policy.maxConcurrentSessions}) reached by ${policyOrigin}.`;
       throw new CliError(errMsg, {
         exitCode: EXIT_ERROR,
         payload: {
@@ -346,8 +391,18 @@ export async function run(
           };
     let { rateKey, cuPerHour } = resolveGpuRate(effectiveGpu.name, homeDir);
     const nowIsoVal = nowIso();
+    // A reused runtime may have been started from another machine; its own record says by whom and
+    // under which name, and that record is left as it is.
+    const openChannel =
+      openRuntimeChannel ?? (assignRuntimeFn === defaultAssignRuntime || fetchImpl !== fetch ? directRuntimeChannel : null);
+    const runtimeChannel = openChannel
+      ? openChannel({ baseUrl: colabRuntime.baseUrl, proxyToken: colabRuntime.token, fetchImpl })
+      : null;
+    const runtimeRecord = runtimeChannel ? await readRuntimeSessionRecord(runtimeChannel).catch(() => null) : null;
+    const origin = runtimeRecord ? runtimeRecord.origin : describeOrigin({ env, cwd });
     const rawSuffix =
       opts.name ||
+      runtimeRecord?.name ||
       String(colabRuntime.id || "")
         .replace(/[^a-z0-9]/gi, "")
         .slice(-6)
@@ -423,7 +478,7 @@ export async function run(
       }
     }
 
-    const createdAt = isSameRuntime ? existingSameName.createdAt : nowIsoVal;
+    const createdAt = isSameRuntime ? existingSameName.createdAt : runtimeRecord?.createdAt || nowIsoVal;
 
     const sessionRecord = {
       name: sessionName,
@@ -436,8 +491,22 @@ export async function run(
       createdAt,
       lastActivityAt: nowIsoVal,
       activePids: isSameRuntime ? existingSameName.activePids ?? [] : [],
-      keep: Boolean(opts.keep || (isSameRuntime && existingSameName.keep)),
+      keep: Boolean(opts.keep || (isSameRuntime && existingSameName.keep) || runtimeRecord?.keep),
       state: "active",
+      ...(origin ? { origin } : {}),
+      ...(runtimeRecord && !sameMachine(runtimeRecord.origin, machineName(env)) ? { adopted: true } : {}),
+      // A reused runtime stays under the guardrails it was started with; a new one records these.
+      project: runtimeRecord ? runtimeRecord.project : policy.project,
+      guardrails: runtimeRecord
+        ? runtimeRecord.guardrails
+        : guardrailsForRecord(policy, {
+            machineBudgetCu: projectAccountCredits({
+              events: readLedgerEvents(homeDir),
+              activeSessions: [],
+              account: account.label,
+              nowMs: nowMs(),
+            }).budgetCu,
+          }),
       remoteRoot: isSameRuntime ? existingSameName.remoteRoot ?? null : null,
       ...(isSameRuntime && existingSameName.forwards ? { forwards: existingSameName.forwards } : {}),
       colabRuntime: {
@@ -452,6 +521,15 @@ export async function run(
     const session = writeSession(sessionRecord, homeDir);
     if (onSessionStart && !isSameRuntime) {
       await onSessionStart(session, homeDir);
+    }
+    if (runtimeChannel && (!runtimeRecord || runtimeRecord.name !== session.name || runtimeRecord.keep !== session.keep)) {
+      try {
+        await writeRuntimeSessionRecord(runtimeChannel, session, {
+          email: readOAuthAccountStatus(account.label, homeDir).email || null,
+        });
+      } catch (err) {
+        log(`warning: could not write the session record on the runtime (${err?.message || err}); other machines will show it as unknown origin.`, stderr);
+      }
     }
     if (syncedCcu && typeof syncedCcu.paidComputeUnitsBalance === "number") {
       recordCalibrateEvent(

@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
 import { locateOrcaBinary } from "./orca-binary.mjs";
 
-// The plugin host API on a desktop client cannot see workspaces that live on a remote Orca server, but
-// the local `orca` CLI can: it resolves the focused worktree and manages its terminals through the same
-// client↔server connection. This helper wraps the few CLI calls the bridge needs.
+// The plugin host API names the focused workspace but not where it lives; the local `orca` CLI lists
+// this machine's terminals, which tells a local checkout from a workspace on a remote Orca server.
+// This helper wraps that one call.
 export function buildOrcaArgs(command, options = {}) {
   const args = [...command];
   for (const [key, value] of Object.entries(options)) {
@@ -57,9 +57,7 @@ export function createOrcaRemoteHelper({
 } = {}) {
   const available = Boolean(orcaBin);
 
-  // Two lanes: writes to a terminal must never overlap each other (their text and Enter keys would
-  // interleave), and reads must not queue behind writes or a burst of them starves everything into
-  // timeouts. Each lane runs one orca process at a time.
+  // One orca process at a time per lane, so a slow call cannot pile up behind itself.
   const lanes = { send: Promise.resolve(), read: Promise.resolve() };
   const timings = [];
   const run = (command, options = {}, lane = "read") => {
@@ -117,20 +115,16 @@ export function createOrcaRemoteHelper({
       });
     });
 
-  const envOpt = (environment) => (environment ? { environment } : {});
-
   return {
     available,
     orcaBin,
     recentTimings: () => timings.slice(),
 
-    // Saved paired servers; the worktree the client shows may live on one of them.
+    // Saved paired servers; a project the client shows may live on one of them.
     async listEnvironments() {
       const res = await run(["environment", "list"]);
       if (!res.ok) return res;
-      const rows = Array.isArray(res.data?.environments)
-        ? res.data.environments
-        : Object.values(res.data || {}).find(Array.isArray) || [];
+      const rows = Array.isArray(res.data?.environments) ? res.data.environments : [];
       return {
         ok: true,
         error: null,
@@ -140,49 +134,30 @@ export function createOrcaRemoteHelper({
       };
     },
 
-    async listWorktrees({ environment = null } = {}) {
-      const res = await run(["worktree", "list"], { limit: 500, ...envOpt(environment) });
-      if (!res.ok) return res;
-      const rows = Array.isArray(res.data?.worktrees) ? res.data.worktrees : [];
-      return {
-        ok: true,
-        error: null,
-        data: rows.map((w) => ({
-          id: w.id || null,
-          identity: w.identity?.key || null,
-          hostId: w.hostId || w.identity?.executionHostId || null,
-          displayName: w.displayName || null,
-          path: w.path || null,
-          branch: typeof w.branch === "string" ? w.branch.replace(/^refs\/heads\//, "") : null,
-          isArchived: Boolean(w.isArchived),
-        })),
-      };
+    // Opens a file of a workspace on a paired server in Orca's own editor, where the user edits and
+    // saves it over Orca's connection. Which server holds the workspace is not known to a plugin, so
+    // each saved one is asked with each selector until one opens it; every refusal is kept for the
+    // panel (a headless server answers renderer_unavailable and cannot open tabs at all).
+    async openFileOnServer({ file, selectors }) {
+      const envs = await this.listEnvironments();
+      const attempts = [];
+      if (!envs.ok) {
+        return { ok: false, attempts: [{ environment: null, selector: null, error: envs.error }] };
+      }
+      for (const env of envs.data) {
+        for (const selector of selectors) {
+          const res = await run(["file", "open", file], { worktree: selector, environment: env.id || env.name, focus: true });
+          if (res.ok) {
+            return { ok: true, environment: env.name || env.id, selector, attempts };
+          }
+          attempts.push({ environment: env.name || env.id, selector, error: res.error });
+        }
+      }
+      return { ok: false, attempts };
     },
 
-    async showWorktree(selector, { environment = null } = {}) {
-      const res = await run(["worktree", "show"], { worktree: selector, ...envOpt(environment) });
-      if (!res.ok) return res;
-      const wt = res.data?.worktree || res.data;
-      return {
-        ok: true,
-        error: null,
-        data: {
-          id: wt?.id || null,
-          identity: wt?.identity?.key || null,
-          hostId: wt?.hostId || wt?.identity?.executionHostId || null,
-          displayName: wt?.displayName || null,
-          path: wt?.path || null,
-          branch: wt?.branch || null,
-        },
-      };
-    },
-
-    async activeWorktree() {
-      return this.showWorktree("active");
-    },
-
-    async listTerminals(selector, { environment = null } = {}) {
-      const res = await run(["terminal", "list"], { worktree: selector, limit: selector ? 50 : 200, ...envOpt(environment) });
+    async listTerminals(selector) {
+      const res = await run(["terminal", "list"], { worktree: selector, limit: selector ? 50 : 200 });
       if (!res.ok) return res;
       const rows = Array.isArray(res.data?.terminals) ? res.data.terminals : [];
       return {
@@ -197,33 +172,5 @@ export function createOrcaRemoteHelper({
         })),
       };
     },
-
-    async createTerminal({ selector, title, command, environment = null }) {
-      const res = await run(["terminal", "create"], { worktree: selector, title, command, ...envOpt(environment) });
-      if (!res.ok) return res;
-      const handle = res.data?.terminal?.handle || res.data?.handle || null;
-      return handle
-        ? { ok: true, error: null, data: { handle } }
-        : { ok: false, error: "orca terminal create returned no handle", data: null };
-    },
-
-    // Accumulated output since `cursor` (not the rendered screen), so frames that scrolled off are
-    // still delivered; the caller keeps `nextCursor` for the following read.
-    async readTerminal(handle, { cursor = undefined, limit = 2000, environment = null } = {}) {
-      const res = await run(["terminal", "read"], { terminal: handle, cursor, limit, ...envOpt(environment) });
-      if (!res.ok) return res;
-      const d = res.data?.terminal || res.data;
-      const lines = Array.isArray(d?.tail) ? d.tail : Array.isArray(d?.lines) ? d.lines : [];
-      return {
-        ok: true,
-        error: null,
-        data: { lines, nextCursor: d?.nextCursor ?? null, status: d?.status ?? null },
-      };
-    },
-
-    async sendTerminal(handle, text, { environment = null } = {}) {
-      return run(["terminal", "send"], { terminal: handle, text, enter: true, ...envOpt(environment) }, "send");
-    },
-
   };
 }

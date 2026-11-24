@@ -34,6 +34,7 @@ test("sync unpacks the workspace over /colab/tty and records remoteRoot in the s
   const ttyCalls = [];
   const io = makeBuffers();
   const code = await runSync(["."], {
+    withActivity: (_name, _home, fn) => fn(),
     json: true,
     stdout: io.stdout,
     stderr: io.stderr,
@@ -87,6 +88,7 @@ test("pull packs the remote path, downloads it from Jupyter /files with the prox
       ttyCommands.push(command);
       return { ok: true, exitCode: 0, stdout: "" };
     },
+    withActivity: (_name, _home, fn) => fn(),
     fetchImpl: async (url, init) => {
       fetched.push({ url, token: init.headers["X-Colab-Runtime-Proxy-Token"] });
       return new Response(readFileSync(archive));

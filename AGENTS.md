@@ -3,7 +3,8 @@
 A skill, a CLI, an MCP server and a thin Orca plugin that let a coding agent running locally in Orca set up a Google
 Colab GPU runtime together with the user and use it as a compute backend. Agents, the workspace and
 credentials stay local; Colab is a disposable GPU box reached only through public HTTPS/WSS endpoints
-(the Colab API and the runtime's proxy). Never assume a VPN, tailnet, SSH or inbound port (DESIGN D19).
+(the Colab API and the runtime's proxy). Never assume a VPN, tailnet, SSH or inbound port (DESIGN D19), and
+never reach a runtime or another machine through an Orca terminal (DESIGN D25).
 
 Read in this order before touching code:
 
@@ -23,7 +24,9 @@ bin/orca-colab.mjs          CLI entry; bin/commands/<name>.mjs per command; bin/
 bin/commands/forward.mjs    `orca-colab forward`: local HTTP listener to a port on the runtime (bin/lib/port-forward.mjs)
 bin/commands/mcp.mjs        `orca-colab mcp`: the same commands as MCP tools on stdio (bin/lib/mcp-tools.mjs,
                             bin/lib/mcp-stdio-server.mjs); what `orca bot tools add` and other clients start
-orca-plugin.json, worker/, panel/      thin Orca plugin (M2): sessions panel, status bar, terminal launcher
+bin/lib/runtime-records.mjs, runtime-jobs.mjs, account-runtimes.mjs   records on the runtime and the account's
+                            runtime list (DESIGN D25): how one machine sees and uses what another started
+orca-plugin.json, worker/, panel/      thin Orca plugin (M2): account-wide runtimes panel, status bar; opens no terminal
 docs/                       design, verified Orca facts, TODO
 ```
 
@@ -76,8 +79,7 @@ Run `node --test` (and, once the plugin exists, `orca plugin validate .`) before
   - `test`: `node --test` on Ubuntu, macOS and Windows × Node 20 and 22.
   - `manifest`: `orca-plugin.json` against Orca's published JSON schema; versions agree; no runtime deps.
   - `compat` (PRs): `scripts/compat-contract.mjs` extracts the public contract (commands, flags,
-    subcommands, exit codes, offline `--json` key paths, session/config/task/ledger formats, `watch`
-    protocol and panel actions, MCP tool and argument names, plugin id/settings/commands/capabilities/`engines.orca`) from the PR and
+    subcommands, exit codes, offline `--json` key paths, session/config/task/ledger formats, panel actions, MCP tool and argument names, plugin id/settings/commands/capabilities/`engines.orca`) from the PR and
     from its base; `scripts/compat-diff.mjs` fails on anything removed or changed, on a new capability and
     on a raised `engines.orca`. After the owner approves a break, add the `breaking-change` label to the
     PR (or bump the major version); the job re-runs on labelling and lists the breaks in its summary.
@@ -120,7 +122,10 @@ verifiable locally first (JSON contract, fake `execTty` / `fetchImpl` injections
 - **Breaking changes need advance warning**, in the same message that proposes the work, before any code
   is written: anything that renames or removes a CLI command, flag, `--json` field, exit code, plugin
   setting key or capability; renames or removes an MCP tool or argument; changes the session, task or ledger file formats under `~/.orca-colab`;
-  changes the `watch` frame protocol; or raises `engines.orca`. State what breaks, who is affected
-  (skill, plugin, MCP clients, remote `watch` of an older version) and the migration, and wait for a go-ahead.
+  renames or removes a field of the project guardrails file `<project>/.orca/colab.json` (DESIGN D26);
+  changes the records on the runtime under `/content/orca/.orca-colab` (DESIGN D25: session, task and activity
+  files, the job runner's file names) that other machines on older versions read; or raises `engines.orca`.
+  State what breaks, who is affected (skill, plugin, MCP clients, another machine on an older version) and
+  the migration, and wait for a go-ahead.
 - A tag listed in the Orca community catalog can never move. Ship fixes as a new tag.
 

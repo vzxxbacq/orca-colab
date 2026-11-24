@@ -18,6 +18,7 @@ export function serveMcpOverStdio({
   instructions,
   tools,
   callTool,
+  onClientInfo = null,
   clientRequestTimeoutMs = 5000,
 }) {
   const inFlight = new Map();
@@ -100,6 +101,7 @@ export function serveMcpOverStdio({
   function handleRequest({ id, method, params }) {
     if (method === "initialize") {
       clientCapabilities = params?.capabilities ?? {};
+      onClientInfo?.(params?.clientInfo ?? null);
       const requested = params?.protocolVersion;
       reply(id, {
         protocolVersion: MCP_PROTOCOL_VERSIONS.includes(requested) ? requested : MCP_PROTOCOL_VERSIONS[0],

@@ -11,6 +11,7 @@ import { locateOrcaBinary } from "../lib/orca-binary.mjs";
 import { readConfig } from "../lib/colab-home.mjs";
 import { getValidAccessToken } from "../lib/colab-oauth.mjs";
 import {
+  estimateProjectMonthlyUse,
   projectAccountCredits,
   readLedgerEvents,
   recordBudgetSetEvent,
@@ -18,6 +19,7 @@ import {
   recordSessionEndEvent,
   resolveDeadSessionEndIso,
 } from "../lib/credit-ledger.mjs";
+import { resolveGuardrails } from "../lib/project-guardrails.mjs";
 import { setRateOverride } from "../lib/rate-table.mjs";
 import { deleteSession, listSessions, writeSession } from "../lib/session-store.mjs";
 
@@ -188,6 +190,8 @@ export async function run(
     stdout,
     stderr,
     env = process.env,
+    cwd = null,
+    projectDir = cwd,
     homeDir,
     fetchImpl = fetch,
     nowMs = () => Date.now(),
@@ -309,11 +313,35 @@ export async function run(
     nowMs: nowMs(),
   });
 
+  // A project with its own monthly budget is held to that instead of the account's budget on this machine.
+  let projectBudget = null;
+  try {
+    const guardrails = resolveGuardrails({ cwd: projectDir || null, homeDir });
+    if (guardrails.monthlyBudgetCu) {
+      const used = estimateProjectMonthlyUse({ events, activeSessions, project: guardrails.project, nowMs: nowMs() });
+      projectBudget = {
+        project: guardrails.project,
+        file: guardrails.file,
+        budgetCu: guardrails.monthlyBudgetCu,
+        estimatedMonthlyUsedCu: used,
+        estimatedBudgetUsedPercent: Math.round((used / guardrails.monthlyBudgetCu) * 100),
+      };
+    }
+  } catch {
+    // An unreadable project file is reported by doctor and by up; the account figures still stand.
+  }
+
   if (json) {
-    writeJson(projection, stdout);
+    writeJson(projectBudget ? { ...projection, projectBudget } : projection, stdout);
     return EXIT_OK;
   }
 
+  if (projectBudget) {
+    log(
+      `This project (${projectBudget.file}, approximate): month used ≈ ${projectBudget.estimatedMonthlyUsedCu} CU / budget ${projectBudget.budgetCu} CU, counted on this machine`,
+      stderr,
+    );
+  }
   const balText =
     projection.estimatedBalanceCu !== null
       ? `≈ ${projection.estimatedBalanceCu} CU (calibrated ${projection.calibrationAgeSeconds ?? 0}s ago)`

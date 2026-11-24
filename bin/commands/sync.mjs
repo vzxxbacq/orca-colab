@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { resolveSessionAcrossMachines } from "../lib/account-runtimes.mjs";
 import {
   CliError,
   EXIT_ERROR,
@@ -13,7 +14,7 @@ import { execCommandOverTty } from "../lib/colab-api-client.mjs";
 import { readConfig } from "../lib/colab-home.mjs";
 import { resolveRemoteRoot } from "../lib/file-transfer.mjs";
 import { withSessionActivity } from "../lib/session-activity.mjs";
-import { requireColabRuntime, resolveSession, writeSession } from "../lib/session-store.mjs";
+import { requireColabRuntime, writeSession } from "../lib/session-store.mjs";
 import { shellQuote } from "./run.mjs";
 
 export async function run(
@@ -27,6 +28,7 @@ export async function run(
     homeDir,
     spawnProcess = spawnSync,
     execTty = execCommandOverTty,
+    fetchImpl = fetch,
     withActivity = withSessionActivity,
   },
 ) {
@@ -49,9 +51,10 @@ export async function run(
   const localArg = parsed.positionals[0] ?? ".";
   const localDir = path.resolve(cwd, localArg);
 
-  const session = resolveSession({
+  const session = await resolveSessionAcrossMachines({
     sessionName: opts.session ?? null,
     homeDir,
+    fetchImpl,
   });
   const config = readConfig(homeDir);
   const remoteRoot = resolveRemoteRoot({
@@ -138,7 +141,7 @@ export async function run(
   };
 
   if (withActivity) {
-    return withActivity(session.name, homeDir, execute);
+    return withActivity(session.name, homeDir, execute, { env, command: "sync", fetchImpl });
   }
   return execute();
 }

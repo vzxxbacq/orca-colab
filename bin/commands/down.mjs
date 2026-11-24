@@ -1,6 +1,7 @@
 import { parseArgs } from "node:util";
 import {
   CliError,
+  EXIT_ERROR,
   EXIT_OK,
   EXIT_ZOMBIE,
   log,
@@ -15,6 +16,8 @@ import {
   getConsumptionUserInfo as defaultGetConsumptionUserInfo,
 } from "../lib/colab-api-client.mjs";
 import { getValidAccessToken } from "../lib/colab-oauth.mjs";
+import { createRuntimeChannel } from "../lib/runtime-channel.mjs";
+import { machineName, readUseByOtherMachines } from "../lib/runtime-records.mjs";
 import {
   deleteSession,
   listSessions,
@@ -29,11 +32,13 @@ export async function run(
     json,
     stdout,
     stderr,
+    env = process.env,
     homeDir,
     signal = null,
     onSessionEnd = recordSessionEndEvent,
     deleteRuntimeFn = defaultDeleteRuntime,
     fetchImpl = fetch,
+    readOtherUse = null,
     nowIso = () => new Date().toISOString(),
   },
 ) {
@@ -44,6 +49,7 @@ export async function run(
       options: {
         session: { type: "string" },
         all: { type: "boolean", default: false },
+        force: { type: "boolean", default: false },
         cause: { type: "string", default: "user" },
       },
       strict: true,
@@ -86,10 +92,62 @@ export async function run(
     return EXIT_OK;
   }
 
+  // A runtime is shared by every machine signed in to the account. One that another machine is using
+  // right now (per the records on the runtime) is released only with --force, and so is one whose
+  // records cannot be read: not knowing is not the same as nobody. The proxy token is refreshed first,
+  // because the proxy answers an expired token like a missing file, which would read as "no records".
+  const otherUse =
+    readOtherUse ??
+    (deleteRuntimeFn === defaultDeleteRuntime || fetchImpl !== fetch
+      ? async (session) => {
+          const channel = createRuntimeChannel({ sessionName: session.name, homeDir, fetchImpl });
+          try {
+            await channel.refreshToken();
+          } catch (err) {
+            if (err?.runtimeGone) return [];
+            throw err;
+          }
+          return readUseByOtherMachines(channel, machineName(env));
+        }
+      : null);
+
   const results = [];
   let anyZombie = false;
+  let anyInUse = false;
 
   for (const session of targets) {
+    if (otherUse && !opts.force && session.colabRuntime?.baseUrl && session.colabRuntime?.token) {
+      let users;
+      let unreadable = null;
+      try {
+        users = await otherUse(session);
+      } catch (err) {
+        users = [];
+        unreadable = err?.message || String(err);
+      }
+      if (users.length > 0 || unreadable) {
+        anyInUse = true;
+        const who = users.map((u) => `${u.agent && u.agent !== "cli" ? `${u.agent} on ` : ""}${u.machine} (${u.doing})`).join("; ");
+        const action = `${unreadable ? "Try again when the runtime answers" : "Wait for it to finish"}, or run 'orca-colab down --session ${session.name} --force' to release it anyway.`;
+        log(
+          unreadable
+            ? `not released: could not read from ${session.name} whether another machine is using it (${unreadable}). ${action}`
+            : `not released: ${session.name} is in use from another machine: ${who}. ${action}`,
+          stderr,
+        );
+        results.push({
+          ok: false,
+          session: session.name,
+          released: false,
+          state: session.state,
+          reason: unreadable ? "use-unknown" : "in-use-elsewhere",
+          inUseBy: users,
+          ...(unreadable ? { error: unreadable } : {}),
+          action,
+        });
+        continue;
+      }
+    }
     let deletedByApi = false;
     let apiAccessToken = null;
     if (session.colabRuntime?.id) {
@@ -188,8 +246,8 @@ export async function run(
     if (opts.all || results.length > 1) {
       writeJson(
         {
-          ok: !anyZombie,
-          released: !anyZombie,
+          ok: !anyZombie && !anyInUse,
+          released: !anyZombie && !anyInUse,
           sessions: results,
         },
         stdout,
@@ -199,5 +257,5 @@ export async function run(
     }
   }
 
-  return anyZombie ? EXIT_ZOMBIE : EXIT_OK;
+  return anyZombie ? EXIT_ZOMBIE : anyInUse ? EXIT_ERROR : EXIT_OK;
 }

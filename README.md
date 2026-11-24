@@ -26,13 +26,16 @@ CLI alone with `npx`. A community project, not affiliated with Google.
 - **Humans set guardrails**: sign in with Google, pick the allowed GPU tiers (T4, L4, A100, CPU), cap
   concurrent runtimes and the monthly Compute Unit budget. The agent cannot step outside them: once the
   estimated use this month reaches the budget, `up` refuses to start a new runtime (running ones keep going)
-  until you raise it in the panel or with `orca-colab credits budget <cu>`.
+  until you raise it in the panel or with `orca-colab credits budget <cu>`. A project can carry its own
+  guardrails in `.orca/colab.json` ([Guardrails per project](#guardrails-per-project)).
 - **Multiple runtimes and sessions**: run several GPUs side by side, name them, address them per command
   with `--session`, and switch between Google accounts.
 - **Public endpoints only**: everything goes over HTTPS to Google's Colab API and the runtime's own
   proxy; no VPN, tailnet, SSH or open ports. `pull` downloads results (binary-safe) from the runtime.
-- **Remote Orca servers (beta)**: the panel follows a project that lives on an Orca server and shows that
-  server's runtimes, runs and credits through a Bridge Terminal. See [below](#remote-orca-servers-beta).
+- **Every machine sees the same runtimes**: the panel and the CLI list all runtimes of the Google account
+  you are signed in to, including ones an agent started on another computer or on a remote Orca server,
+  with their jobs and live output. No bridge and no terminal is involved. See
+  [below](#several-machines-one-account).
 
 ## Quick Start
 
@@ -232,6 +235,8 @@ Any other MCP client: command `npx`, arguments `-y https://codeload.github.com/v
 - **Same state as the panel**: the server reads and writes the same `~/.orca-colab` as the CLI. Runtimes,
   runs, jobs with live output, credits and the sign-in appear in the **Colab GPU** panel as they happen, and
   what you change there (guardrails, account, stopping a runtime or a job) is what the agent's next call sees.
+  A panel on another computer signed in to the same Google account shows the runtimes and jobs too
+  ([Several machines, one account](#several-machines-one-account)).
 - **Paths**: the server does not run in your workspace, so `sync`, `pull` and `job_submit` with `sync` take
   `workspace_path` (clients that expose a single MCP root need not pass it).
 - **Long work**: `job_submit` returns a job id at once; `job_wait` and `job_logs` follow it. Waits default to
@@ -239,37 +244,90 @@ Any other MCP client: command `npx`, arguments `-y https://codeload.github.com/v
   created (`status` shows it), or set `tool_timeout_sec = 300` under `[mcp_servers.colab]` in
   `~/.codex/config.toml`.
 
-## Remote Orca servers (Beta)
+## Several machines, one account
 
-If your project lives on a remote Orca server, the **Colab GPU** panel in the desktop app shows that
-server's Colab state, not your laptop's: its runtimes, agent runs with live output, compute-unit
-estimates and Google accounts. Local projects keep working exactly as before; the badge in the top bar
-tells you which one you are looking at (`Local · <host>` or `Server · <host>`).
+A Colab runtime belongs to a Google account, not to a computer. Every machine signed in to that account
+(your laptop, a remote Orca server where an agent works, a second desktop) sees the same runtimes:
 
-**How it works: a Bridge Terminal.** Orca gives plugins no way to run code on a remote server other than
-its terminals, so the plugin keeps one terminal per server, titled `Colab Bridge · <server>`, running
-`orca-colab watch`. That process streams the server's state back as compact frames and receives panel
-actions as typed commands; the plugin opens it in the first project that needs it (through the local
-`orca` CLI, over the connection you already have to the server) and every other project on that server
-shares it. Leave it running; close it and the panel reopens it. Nothing else is installed, no port is
-opened and no SSH or VPN is required.
+- **The panel and `orca-colab status` ask Colab** for the account's runtimes each time and show all of
+  them, labelled by where they came from: *started here*, *from Claude Code · build-server*, or *unknown
+  origin* for a runtime without an orca-colab record (an older version, or a notebook you have open in
+  Colab).
+- **What used to live only on the machine that ran `up` now also lives on the runtime**, under
+  `/content/orca/.orca-colab/`, written and read over HTTPS through the runtime's own proxy (Jupyter):
+  `session.json` (name, account, the machine and agent that started it, GPU, start time, keep flag),
+  `tasks/<id>.json` and `tasks/<id>.log` for every `run` and `job`, and `activity/<machine>.json` (who used
+  it last).
+- **Jobs run detached on the runtime** with their output in that log file, so the log is complete for
+  whoever reads it and the job survives the client that submitted it going away. `job ls`, `job logs
+  [--follow]`, `job stop`, `run`, `sync`, `pull`, `forward` and `down` work from any machine, by session
+  name.
+- **A runtime in use is not stopped from elsewhere**: the idle auto-stop and `down` read the records on the
+  runtime (jobs still running, commands still going, from any machine). `down` on a runtime another machine
+  is using right now answers `reason: "in-use-elsewhere"` and needs `--force`; the panel asks you to press
+  Stop twice. The same holds when the records cannot be read (`reason: "use-unknown"`): not knowing is not
+  treated as nobody. Runtimes of unknown origin are never auto-stopped.
+- **A project on a remote Orca server** needs nothing special: open the panel in the desktop app and it
+  shows the account's runtimes, whichever project is focused. The panel never opens an Orca terminal; its
+  **Terminal** button is a shell on the runtime, shown in the panel. (For a full-screen terminal run
+  `orca-colab run -- bash -l` in a terminal of your own.)
 
-Settings:
+What stays on each machine: the Google sign-in (`~/.orca-colab/google-oauth.json`), the credit ledger, and
+the machine's default guardrails. Guardrails that should follow a project to whatever machine it is on live
+in the project ([Guardrails per project](#guardrails-per-project)). The balance itself is the account's and
+is read from Colab.
 
-- **orca-colab command on remote Orca servers**: how to start `watch` on the server. Defaults to `npx` of
-  this repository; for a checkout on the server use `node /path/to/orca-colab/bin/orca-colab.mjs`.
-- **Open the bridge terminal on remote servers automatically**: turn off to start the terminal
-  yourself; the panel then shows the exact command.
+Limits: "Sync this workspace" from the panel only works for a project whose files are on this computer;
+for a project on a remote server let the agent there run `sync`. Two machines that share a hostname should
+set `ORCA_COLAB_MACHINE` to tell them apart. A job started by an older orca-colab has no record on the
+runtime and shows only on the machine that started it.
 
-Google sign-in from the panel happens in your own browser; the tokens are sealed to the server's `watch`
-process (X25519 + AES-256-GCM) before they cross the terminal, and nothing is stored on the laptop.
-Changes such as guardrails, budget or Keep apply in the panel immediately and are confirmed by the server
-within a couple of seconds; a failure shows up as a notice.
+## Guardrails per project
 
-Known limits of the beta: the bridge terminal is visible (Orca has no hidden terminals); the panel follows
-your focused project with about a second of delay; live output shows the last 120 lines of the selected
-task; a project with the same name and branch on the laptop and on a server may be told apart only once
-either has a terminal open; browser clients run no plugin worker, so this works from the desktop app only.
+Guardrails are looked up in two places, the project first:
+
+1. **The project**: `<project>/.orca/colab.json`, in Orca's hidden folder of the project. The CLI finds it by
+   walking up from the directory it runs in; the MCP server from `workspace_path` (or the client's single
+   root, or the directory it was started in). The nearest file wins, and it applies on whatever machine the
+   project is on: your laptop or an Orca server.
+2. **The machine**: `~/.orca-colab/config.json` plus the monthly budget set with `orca-colab credits budget`
+   or in the panel. It supplies every field the project file leaves out, and everything when there is no
+   file. Without a file nothing changes from earlier versions.
+
+```jsonc
+// <project>/.orca/colab.json — every field is optional; lines starting with // are comments
+{
+  // GPU tiers agents may start from this project: T4, L4, A100, G4, H100, CPU
+  "allowedGpus": ["T4", "CPU"],
+  // runtimes started from this project that may run at once
+  "maxConcurrentSessions": 1,
+  // hard limit on this project's estimated compute units per month; leave out (or 0) to use the machine's budget
+  "monthlyBudgetCu": 50,
+  // idle minutes before a panel stops a runtime of this project; 0 = never
+  "autoStopIdleMinutes": 20
+}
+```
+
+- **Budgets are per project or per machine, never per Google account.** A project's `monthlyBudgetCu` is
+  compared with the estimated compute units of the runtimes started from that project, as recorded in the
+  ledger of the machine that starts them; once it is reached, `up` refuses a new runtime
+  (`code: "BUDGET_REACHED"`, `scope: "project"`). The same project on a second machine counts separately
+  there, and the machine budget (per account label on that machine) is not consulted for a project that has
+  its own. Google's balance for the account is the only account-wide number, and it is not a limit.
+- **Commit or ignore?** Commit `.orca/colab.json` when the limits are the project's (everyone and every
+  machine that checks it out gets them). Add `.orca/colab.json` to `.gitignore` when they are your personal
+  limits. orca-colab never creates `.orca/` by itself: the file appears only when you write it or set
+  something in the panel's Guardrails view, and it is removed again when the last field is cleared.
+- **A broken file stops work**: if the file cannot be parsed or holds a value out of range, `up` and
+  `doctor` fail with the reason instead of falling back to the machine's defaults.
+- **`doctor --json`** shows what applies where you are: `policy.source` is `"project"` (with `policy.file`)
+  or `"machine"`. `credits --json` adds `projectBudget` when the project has one.
+- **In the panel**: for a project on this computer, the Guardrails view edits that project's file (switch
+  to *This computer's default* to edit the machine instead). For a project on an Orca server the panel
+  cannot read or write its files, so it shows, read-only, the guardrails each runtime recorded when it was
+  started (and whether they came from the project file or that machine's default), with a button that opens
+  the file in Orca's editor on the server. If Orca cannot open it (a headless server answers
+  `renderer_unavailable`), the panel shows the exact path to open from Orca's file tree.
 
 ## License
 
