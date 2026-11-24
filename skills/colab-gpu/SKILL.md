@@ -46,7 +46,7 @@ If this session already has the Colab GPU MCP tools (`doctor`, `auth_login`, `up
    - **Quick command (`run`)**: `run [--session N] --json -- python3 -c "import torch; ..."` executes directly and returns `{ ok, session, exitCode, stdout, stderr }` (also recorded in the panel's Agent Runs history).
    - **Inspect / manage tasks**: `job ls --json`, `job logs <id> --json`, `job stop <id> --json`.
 3. **Pull artifacts**: `pull [--session N] <remotePath> <localDir> --json` downloads a file or directory (checkpoints, weights, metrics) into `<localDir>/<basename>` over HTTPS; binary files arrive intact.
-4. **Reach a service on the runtime**: there is no port forwarding. Query it from the runtime itself, e.g. `run --json -- curl -s localhost:8000/metrics`.
+4. **Reach a service on the runtime**: for a one-off query run it from the runtime itself, e.g. `run --json -- curl -s localhost:8000/metrics`. To make an HTTP service there reachable from the local machine, start `forward --port 8000 [--listen 127.0.0.1:8000] --json` in the background (it keeps running and prints one JSON line with `url` once it listens; MCP: `forward_start` / `forward_stop`): requests to `http://127.0.0.1:8000` are replayed against that port on the runtime, about half a second on top each, HTTP only (no WebSockets, no streaming). Never start a tunnel (cloudflared, ngrok, `ssh -R`) on the runtime: Colab takes such runtimes away; a public tunnel, if the user wants one, runs on the local machine in front of the forward.
 
 ## 5. Hygiene
 
@@ -62,4 +62,5 @@ If this session already has the Colab GPU MCP tools (`doctor`, `auth_login`, `up
 | `run` / `sync` / `pull` says the session has no Colab runtime proxy | Session was started by an older orca-colab over Tailscale | Run `down --session <name>` then `up`. |
 | `run` / `sync` / `pull` fails with a WebSocket or HTTP error | Colab runtime died or was recycled | Run `status --json`; offer `down` + `up` and re-`sync`. |
 | A session is missing from `status` | It ended: released with `down`, stopped by the idle auto-stop, or ended on Colab's side | Read `recentlyEnded` in `status --json` (`endedAt`, `cause`, `reason`) and tell the user which; `up` again and re-`sync` if work remains. |
+| A forwarded request answers `502` with `error: "session_gone"` / `"port_unreachable"`, or `504` `"forward_timeout"` | The runtime was released / nothing listens on that port on the runtime / the service took longer than `--timeout` | `up` again, start the service and restart `forward` / start the service on the runtime / raise `--timeout`. |
 | `down` exits `4` (`reason: "api-delete-failed"`) | The Colab API refused to delete the runtime (sign-in expired, network) | Ask the user to `auth login` and retry `down`, or delete the runtime at colab.research.google.com (`Runtime → Disconnect and delete runtime`). |

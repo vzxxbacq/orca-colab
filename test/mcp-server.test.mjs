@@ -109,7 +109,7 @@ test("mcp handshake: initialize, ping, tools/list and JSON-RPC errors", async (t
     [
       "doctor", "auth_status", "auth_login", "auth_wait", "auth_redirect", "auth_list", "auth_switch", "auth_logout",
       "status", "up", "sync", "run", "job_submit", "job_list", "job_logs", "job_wait", "job_stop", "pull", "down",
-      "credits", "credits_calibrate", "credits_set", "credits_budget", "ledger", "rates",
+      "forward_start", "forward_stop", "credits", "credits_calibrate", "credits_set", "credits_budget", "ledger", "rates",
     ],
   );
   for (const tool of list.result.tools) {

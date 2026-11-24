@@ -2151,7 +2151,9 @@
               ${oauthAccounts.length > 1 && sessAccEmail ? `<span>Account: <strong>${esc(sessAccEmail)}</strong></span>` : ""}
               <span class="mono">Direct API (/colab/tty)</span>
               <span>Uptime: ${formatDuration(s.ageSeconds)}</span>
-              <span>Burn: ≈ ${s.costSoFarCu ?? 0} CU (${s.cuPerHour ?? 0} CU/h)</span>
+              <span>Burn: ≈ ${s.costSoFarCu ?? 0} CU (${s.cuPerHour ?? 0} CU/h)</span>${(s.forwards || [])
+                .map((f) => `<span title="orca-colab forward, pid ${esc(String(f.pid))}">⇄ ${esc(f.listen)} → :${esc(String(f.remotePort))}</span>`)
+                .join("")}
               ${gpuUtil !== null ? `<span>GPU Load: <strong>${gpuUtil}%</strong></span>` : ""}
               ${vramUsed && vramTotal ? `<span>VRAM: ${vramUsed}/${vramTotal} GiB</span>` : ""}
             </div>

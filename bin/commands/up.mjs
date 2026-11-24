@@ -439,6 +439,7 @@ export async function run(
       keep: Boolean(opts.keep || (isSameRuntime && existingSameName.keep)),
       state: "active",
       remoteRoot: isSameRuntime ? existingSameName.remoteRoot ?? null : null,
+      ...(isSameRuntime && existingSameName.forwards ? { forwards: existingSameName.forwards } : {}),
       colabRuntime: {
         id: colabRuntime.id,
         endpoint: colabRuntime.endpoint,

@@ -58,6 +58,12 @@ export function normalizeSession(input) {
     normalized.transport = input.transport;
   }
 
+  if (Array.isArray(input.forwards) && input.forwards.length > 0) {
+    normalized.forwards = input.forwards
+      .filter((f) => Number.isInteger(f?.pid) && Number.isInteger(f?.remotePort) && typeof f?.listen === "string")
+      .map((f) => ({ pid: f.pid, remotePort: f.remotePort, listen: f.listen, startedAt: f.startedAt ?? null }));
+  }
+
   if (input.colabRuntime && typeof input.colabRuntime === "object") {
     normalized.colabRuntime = {
       id: typeof input.colabRuntime.id === "string" ? input.colabRuntime.id : "",

@@ -15,6 +15,7 @@ import { listRecentSessionEnds, projectAccountCredits, readLedgerEvents } from "
 import { runDoctor } from "./doctor.mjs";
 import { evaluateSessionIdleState } from "./idle-watchdog.mjs";
 import { readRateTable } from "./rate-table.mjs";
+import { liveForwards } from "./port-forward.mjs";
 import { listSessions } from "./session-store.mjs";
 import { listTasks, readTaskLog } from "./task-store.mjs";
 
@@ -259,6 +260,7 @@ export class DashboardSnapshotBuilder {
     return {
       ...s,
       colabRuntime: safeRuntime,
+      forwards: liveForwards(s),
       reachable,
       ageSeconds,
       runningTasksCount: sessionRunningTasks,

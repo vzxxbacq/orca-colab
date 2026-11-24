@@ -119,6 +119,7 @@ test("status and ls report reachability and ageSeconds in JSON without the runti
         remoteRoot: null,
         transport: "colab-tty",
         colabRuntime: { id: "r-1", endpoint: "r-1", baseUrl: "https://8080-m.colab.dev", tokenExpiry: null },
+        forwards: [],
         reachable: true,
         ageSeconds: 330,
       },
