@@ -44,7 +44,7 @@ npx skills add vzxxbacq/orca-colab
 orca plugin dev load .
 ```
 
-CLI 无需单独安装，Agent 通过 `npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/1a5345295e390b47165aa8cd708d71c22df2ee6f <command> --json` 直接调用。
+CLI 无需单独安装，Agent 通过 `npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/97ce739e87722b7cfd7d84838c3461501dd43f78 <command> --json` 直接调用。
 
 ### 2. 配置
 
@@ -203,17 +203,17 @@ orca-colab forward --port 8000 [--session <name>] [--listen 127.0.0.1:8000] [--t
 skill，也不需要 shell。添加到 Orca bot：
 
 ```sh
-orca bot tools add "npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/1a5345295e390b47165aa8cd708d71c22df2ee6f mcp" --name colab
+orca bot tools add "npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/97ce739e87722b7cfd7d84838c3461501dd43f78 mcp" --name colab
 ```
 
 Claude Code 和 Codex（Orca bot 也会自动获得你自己的 Claude Code 或 Codex 里配置的工具）：
 
 ```sh
-claude mcp add colab --scope user -- npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/1a5345295e390b47165aa8cd708d71c22df2ee6f mcp
-codex mcp add colab -- npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/1a5345295e390b47165aa8cd708d71c22df2ee6f mcp
+claude mcp add colab --scope user -- npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/97ce739e87722b7cfd7d84838c3461501dd43f78 mcp
+codex mcp add colab -- npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/97ce739e87722b7cfd7d84838c3461501dd43f78 mcp
 ```
 
-其他 MCP 客户端：命令 `npx`，参数 `-y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/1a5345295e390b47165aa8cd708d71c22df2ee6f mcp`。
+其他 MCP 客户端：命令 `npx`，参数 `-y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/97ce739e87722b7cfd7d84838c3461501dd43f78 mcp`。
 
 - **工具**：`doctor`、`status`、`up`、`sync`、`run`、`job_submit`、`job_list`、`job_logs`、`job_wait`、`job_stop`、
   `pull`、`down`、`credits`、`credits_calibrate`、`credits_set`、`credits_budget`、`ledger`、`rates`，以及
