@@ -31,8 +31,12 @@ export function directRuntimeChannel({ baseUrl, proxyToken, fetchImpl = fetch })
 
 // A runtime that stalls must cost a reader seconds, not minutes; the next poll asks again.
 function send(channel, url, init = {}) {
-  return channel.fetch(url, { ...init, signal: init.signal ?? AbortSignal.timeout(8_000) });
+  return channel.fetch(url, init.signal ? init : { timeoutMs: 8_000, ...init });
 }
+
+// Starting a job has no next poll: its requests wait longer and are sent again after a timeout. Colab's
+// proxy now and then holds one request for many seconds while the next one is answered at once.
+const JOB_START_REQUEST = Object.freeze({ timeoutMs: 20_000, retryTimeouts: true });
 
 function statePath(rel) {
   return rel ? `${RUNTIME_STATE_DIR}/${rel}` : RUNTIME_STATE_DIR;
@@ -43,8 +47,9 @@ function apiUrl(channel, kind, absPath) {
   return `${String(channel.baseUrl()).replace(/\/+$/, "")}/${kind}/${segments.join("/")}`;
 }
 
-async function putContents(channel, absPath, body) {
+async function putContents(channel, absPath, body, request = {}) {
   const res = await send(channel, apiUrl(channel, "api/contents", absPath), {
+    ...request,
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -54,21 +59,21 @@ async function putContents(channel, absPath, body) {
 }
 
 // Jupyter creates one directory level per request and answers 201 for one that already exists.
-export async function ensureRuntimeStateDirs(channel) {
+export async function ensureRuntimeStateDirs(channel, request = {}) {
   for (const dir of ["/content/orca", RUNTIME_STATE_DIR, statePath(TASKS_DIR), statePath(ACTIVITY_DIR)]) {
-    const res = await putContents(channel, dir, { type: "directory" });
+    const res = await putContents(channel, dir, { type: "directory" }, request);
     if (!res.ok) {
       throw new Error(`could not create ${dir} on the runtime (${res.status})`);
     }
   }
 }
 
-export async function writeRuntimeFile(channel, rel, text) {
+export async function writeRuntimeFile(channel, rel, text, request = {}) {
   const body = { type: "file", format: "text", content: text };
-  let res = await putContents(channel, statePath(rel), body);
+  let res = await putContents(channel, statePath(rel), body, request);
   if (!res.ok) {
-    await ensureRuntimeStateDirs(channel);
-    res = await putContents(channel, statePath(rel), body);
+    await ensureRuntimeStateDirs(channel, request);
+    res = await putContents(channel, statePath(rel), body, request);
   }
   if (!res.ok) {
     throw new Error(`could not write ${statePath(rel)} on the runtime (${res.status})`);
@@ -92,8 +97,8 @@ export async function readRuntimeJson(channel, rel) {
 }
 
 // `serverNowMs` is the runtime side's clock, so ages are right on a machine whose own clock is off.
-export async function listRuntimeDir(channel, rel) {
-  const res = await send(channel, `${apiUrl(channel, "api/contents", statePath(rel))}?content=1&type=directory`);
+export async function listRuntimeDir(channel, rel, request = {}) {
+  const res = await send(channel, `${apiUrl(channel, "api/contents", statePath(rel))}?content=1&type=directory`, request);
   if (!res.ok) {
     await res.arrayBuffer().catch(() => {});
     if (res.status === 404) return null;
@@ -362,20 +367,31 @@ export function runtimeTaskFile(id, ext) {
   return `${TASKS_DIR}/${id}.${ext}`;
 }
 
+// A job that did not start says at which step: the caller shows the message as the reason.
+export async function jobStartStep(step, fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err?.code === "SESSION_GONE") throw err;
+    throw Object.assign(new Error(`could not start the job (${step}): ${err?.message || err}`, { cause: err }), { jobStartStep: step });
+  }
+}
+
 // Uploads the job's record, its shell script and the head of its log, and returns the shell line that
 // starts the runner detached from the terminal that types it.
 export async function stageRuntimeTask(channel, { record, script, logHead = "" }) {
-  let listing = await listRuntimeDir(channel, TASKS_DIR);
+  const write = (rel, text) => writeRuntimeFile(channel, rel, text, JOB_START_REQUEST);
+  let listing = await jobStartStep("listing the jobs on the runtime", () => listRuntimeDir(channel, TASKS_DIR, JOB_START_REQUEST));
   if (!listing) {
-    await ensureRuntimeStateDirs(channel);
+    await jobStartStep("creating the job directory on the runtime", () => ensureRuntimeStateDirs(channel, JOB_START_REQUEST));
     listing = { entries: [] };
   }
   if (!listing.entries.some((e) => e.name === JOB_RUNNER_FILE)) {
-    await writeRuntimeFile(channel, `${TASKS_DIR}/${JOB_RUNNER_FILE}`, JOB_RUNNER_SOURCE);
+    await jobStartStep("uploading the job runner", () => write(`${TASKS_DIR}/${JOB_RUNNER_FILE}`, JOB_RUNNER_SOURCE));
   }
-  await writeRuntimeFile(channel, runtimeTaskFile(record.id, "log"), logHead);
-  await writeRuntimeFile(channel, runtimeTaskFile(record.id, "sh"), script);
-  await writeRuntimeFile(channel, runtimeTaskFile(record.id, "json"), `${JSON.stringify(record, null, 2)}\n`);
+  await jobStartStep("creating the job's log", () => write(runtimeTaskFile(record.id, "log"), logHead));
+  await jobStartStep("uploading the job's script", () => write(runtimeTaskFile(record.id, "sh"), script));
+  await jobStartStep("uploading the job's record", () => write(runtimeTaskFile(record.id, "json"), `${JSON.stringify(record, null, 2)}\n`));
   const tasksDir = statePath(TASKS_DIR);
   return `nohup setsid python3 ${tasksDir}/${JOB_RUNNER_FILE} ${tasksDir} ${record.id} > /dev/null 2>&1 < /dev/null & echo started`;
 }

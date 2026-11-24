@@ -144,6 +144,8 @@ export function normalizeTask(input, homeDir = os.homedir()) {
         }
       : {}),
     ...(normalizeSessionOrigin(input.origin) ? { origin: normalizeSessionOrigin(input.origin) } : {}),
+    // Why the job never ran or its following ended; a job that ran and failed has its reason in the log.
+    ...(typeof input.error === "string" && input.error ? { error: input.error.slice(0, 1000) } : {}),
   };
 }
 

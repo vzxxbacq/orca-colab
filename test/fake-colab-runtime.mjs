@@ -1,6 +1,7 @@
 // An in-memory stand-in for a Colab runtime's Jupyter server: the contents API, /files with ranges, and
 // an `execTty` that plays the job runner. `runJob({ id, script, record, write })` returns the exit code.
-export function createFakeRuntime({ baseUrl = "https://8080-m.colab.dev", runJob = async () => 0, exec = null, colabRuntimeId = null } = {}) {
+// `stall({ method, path })` picks requests the proxy never answers.
+export function createFakeRuntime({ baseUrl = "https://8080-m.colab.dev", runJob = async () => 0, exec = null, colabRuntimeId = null, stall = null } = {}) {
   const files = new Map();
   const dirs = new Set(["/content"]);
   const requests = [];
@@ -8,6 +9,7 @@ export function createFakeRuntime({ baseUrl = "https://8080-m.colab.dev", runJob
   const jobs = [];
   let nowMs = Date.parse("2026-11-24T00:00:00.000Z");
   const state = { unreachable: false };
+  const spentSignals = new WeakSet();
 
   const json = (status, body, headers = {}) =>
     new Response(JSON.stringify(body), { status, headers: { date: new Date(nowMs).toUTCString(), ...headers } });
@@ -34,6 +36,12 @@ export function createFakeRuntime({ baseUrl = "https://8080-m.colab.dev", runJob
     }
     if (state.unreachable) {
       throw new TypeError("fetch failed");
+    }
+    // An unanswered request ends when its signal's time is up, and that signal then aborts every later
+    // request it is given; no test waits for the time to pass.
+    if ((init.signal && spentSignals.has(init.signal)) || stall?.({ method, path: decoded })) {
+      if (init.signal) spentSignals.add(init.signal);
+      throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
     }
     if (decoded.startsWith("/api/contents/")) {
       const p = decoded.slice("/api/contents".length);
