@@ -49,6 +49,7 @@ import {
 } from "../lib/runtime-records.mjs";
 import {
   deleteSession,
+  distinctRuntimeSessions,
   listSessions,
   readSession,
   writeSession,
@@ -105,7 +106,7 @@ export async function run(
   const policyOrigin = policy.source === "project" ? `this project's guardrails (${policy.file})` : "user policy in Orca Colab settings";
   const startedFromProject = (s) => policy.source !== "project" || !policy.setByProject.includes("maxConcurrentSessions") || s?.project === policy.project;
   const paths = getColabPaths(homeDir);
-  const allNonZombieSessions = listSessions(homeDir).filter(
+  const allNonZombieSessions = distinctRuntimeSessions(listSessions(homeDir)).filter(
     (s) => s?.state !== "zombie",
   );
   const oauthAccounts = listOAuthAccounts(homeDir);
@@ -164,7 +165,7 @@ export async function run(
     });
   }
 
-  const activeAccountSessions = listSessions(homeDir).filter(
+  const activeAccountSessions = distinctRuntimeSessions(listSessions(homeDir)).filter(
     (s) => s?.state !== "zombie" && (s?.account || "default") === account.label,
   );
   // A cap set by the project counts the runtimes started from that project; the machine's counts all.
@@ -325,7 +326,7 @@ export async function run(
   }
 
   try {
-    const currentActiveSessions = listSessions(homeDir).filter(
+    const currentActiveSessions = distinctRuntimeSessions(listSessions(homeDir)).filter(
       (s) => s?.state !== "zombie" && (s?.account || "default") === account.label,
     );
     if (

@@ -163,6 +163,18 @@ HTTPS and unpacks it locally. Binary files (checkpoints, weights) arrive byte fo
 Colab runtimes are disposable and time-limited. Pull results as soon as they exist; if a runtime is gone,
 `status --json` shows it and the agent can `down`, `up` and `sync` again.
 
+### Why did Colab end my runtime after 20 to 40 minutes?
+Colab takes back runtimes it considers unattended, whatever is running on them, and gives no reason. Its
+own clients count a runtime as in use while a notebook kernel has a connected client. Since v0.4.3
+orca-colab holds such a connection whenever a runtime is in use: every command that runs longer than ten
+seconds (a job being followed, `forward`, a long `run`), and the Orca panel and the MCP server for a session
+with a running job, for 20 minutes after its last command, and always for a kept session (`up --keep`).
+Nothing is executed on that kernel, and the connection ends when the session is idle, so the idle auto-stop
+and Colab's own limits still release unused runtimes. **Some machine must stay on and online**: a job no
+longer survives every client disappearing. `status` shows `client-connected=yes|no` per session
+(`presence` in `--json`), and a session that Colab ended is listed as *ended by Colab after about N min*,
+with whether a client was connected until the end.
+
 ### Sign-in ends with "Google Colab sign-in failed" or "fetch failed". What now?
 Your browser reached Google, but orca-colab itself could not: the last step of sign-in is a request from
 this computer to the token relay and Google, and browsers use the system proxy while Node does not. From
@@ -213,7 +225,8 @@ orca-colab forward --port 8000 [--session <name>] [--listen 127.0.0.1:8000] [--t
 While this runs, `http://127.0.0.1:8000` on your machine answers with whatever port 8000 on the runtime
 answers: method, path, query, headers, body, status and response headers pass through unchanged, so JSON
 APIs, multipart uploads and CORS preflights work as they are. Stop it with Ctrl-C. `status` and the panel show
-active forwards, and a session with one is never auto-stopped as idle.
+active forwards, and a session with one is never auto-stopped as idle and stays connected to Colab (see the
+FAQ on runtimes ended by Colab).
 
 - **How it travels**: Colab's proxy reaches only the runtime's Jupyter server, so each request is written
   there as a file through the Jupyter contents API, replayed against `127.0.0.1:<port>` by a small helper
@@ -290,7 +303,8 @@ A Colab runtime belongs to a Google account, not to a computer. Every machine si
   `tasks/<id>.json` and `tasks/<id>.log` for every `run` and `job`, and `activity/<machine>.json` (who used
   it last).
 - **Jobs run detached on the runtime** with their output in that log file, so the log is complete for
-  whoever reads it and the job survives the client that submitted it going away. `job ls`, `job logs
+  whoever reads it and the job survives the client that submitted it going away, for as long as some
+  machine stays connected to the runtime (a panel, an MCP server or a command; see the FAQ). `job ls`, `job logs
   [--follow]`, `job stop`, `run`, `sync`, `pull`, `forward` and `down` work from any machine, by session
   name.
 - **A runtime in use is not stopped from elsewhere**: the idle auto-stop and `down` read the records on the

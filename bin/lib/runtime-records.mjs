@@ -12,6 +12,7 @@ export const RUNTIME_STATE_DIR = "/content/orca/.orca-colab";
 export const RUNTIME_RECORD_SCHEMA = 1;
 const TASKS_DIR = "tasks";
 const ACTIVITY_DIR = "activity";
+export const PRESENCE_DIR = "presence";
 const JOB_RUNNER_FILE = "_job-runner-v1.py";
 export const BUSY_GRACE_MS = 150_000;
 export const HEARTBEAT_STALE_MS = 120_000;
@@ -60,7 +61,7 @@ async function putContents(channel, absPath, body, request = {}) {
 
 // Jupyter creates one directory level per request and answers 201 for one that already exists.
 export async function ensureRuntimeStateDirs(channel, request = {}) {
-  for (const dir of ["/content/orca", RUNTIME_STATE_DIR, statePath(TASKS_DIR), statePath(ACTIVITY_DIR)]) {
+  for (const dir of ["/content/orca", RUNTIME_STATE_DIR, statePath(TASKS_DIR), statePath(ACTIVITY_DIR), statePath(PRESENCE_DIR)]) {
     const res = await putContents(channel, dir, { type: "directory" }, request);
     if (!res.ok) {
       throw new Error(`could not create ${dir} on the runtime (${res.status})`);
@@ -115,6 +116,11 @@ export async function listRuntimeDir(channel, rel, request = {}) {
       lastModifiedMs: Date.parse(e.last_modified || "") || 0,
     })),
   };
+}
+
+export async function deleteRuntimeFile(channel, rel) {
+  const res = await send(channel, apiUrl(channel, "api/contents", statePath(rel)), { method: "DELETE" });
+  await res.arrayBuffer().catch(() => {});
 }
 
 // Bytes of a file from `from` on; an empty buffer when nothing new was written, null when it is missing.

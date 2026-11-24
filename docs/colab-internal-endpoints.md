@@ -215,3 +215,70 @@ Layout under `/content/orca/.orca-colab/` (DESIGN D25): `session.json`, `tasks/<
     ]
   }
   ```
+
+## 6. What keeps a runtime assigned (investigated 2026-11-24)
+
+**What happened.** Three G4 runtimes of one account left Colab's runtime list without anyone releasing
+them, 38, 21 and 23.5 minutes after `up` (ledger cause `colab-died`). The first two ran a cloudflared
+tunnel; the third ran no tunnel and no SSH, only `orca-colab forward` from another machine, and had just
+answered two requests. All three were used only through terminals, the contents API and `/files`.
+
+**What Colab's reference client does** (`googlecolab/colab-vscode`, the client the `v1beta` API was built for):
+
+- Until 2026-09-25 it sent a keep-alive itself: `GET https://colab.research.google.com/tun/m/<endpoint>/keep-alive/`
+  with the header `X-Colab-Tunnel: Google`, every 5 minutes, per assigned server
+  (`src/colab/keep-alive.ts`, `ColabClient.sendKeepAlive` in `src/colab/client/v1/index.ts`). It sent one
+  only when `GET /api/kernels` on the runtime showed a kernel with `connections > 0`, and that kernel was
+  `starting`, `busy`, `restarting` or `autorestarting` or had a `last_activity` in the last hour; an idle
+  one got a prompt and 30 more minutes when the user answered it.
+- Commit `1e60764` (#718, 2026-09-25) removed that controller: "With cl/982796273 rolled out to Production,
+  the client-side `ServerKeepAliveController` is effectively a no-op now." Colab now decides on its own
+  side; v0.9.7 calls no keep-alive endpoint at all, only `GET /v1beta/runtimes/<id>` to refresh the proxy
+  token five minutes before `expireTime` (`src/colab/connection-refresher.ts`).
+- Its own comment on lifetimes (`src/jupyter/storage.ts`): "An assigned server is ephemeral: an idle one is
+  reclaimed within ~30 minutes and none outlive 24 hours".
+- The API's discovery document (`src/colab/client/v2/colab-api.json`) has no keep-alive, touch or
+  heartbeat method (`runtimes` list/create/get/delete, `runtimespecs`, `subscription`), and a `Runtime`
+  carries no state, idle time or end reason.
+
+So the only signal that client ever treated as "in use" is a kernel with a connected client and recent
+activity. orca-colab started no kernel: `GET /api/status` on its runtimes answered
+`{"connections": 0, "kernels": 0}`, which is what an abandoned runtime looks like.
+
+**What orca-colab does now** (`bin/lib/runtime-presence.mjs`, DESIGN D28): while a runtime is in use, the
+machine using it holds the connection a notebook front end holds.
+
+- `POST /api/sessions` with `{ "path": "orca-colab-presence", "name": "orca-colab", "type": "console",
+  "kernel": { "name": "python3" } }`: Jupyter answers with the existing session when one has that path, so
+  every machine shares one kernel.
+- `wss://<runtime>/api/kernels/<kernel id>/channels?session_id=<uuid>` with the proxy token header, held
+  open; `/api/status` then shows `connections: 1, kernels: 1`. A `kernel_info_request` on the shell channel
+  every 4 minutes keeps the kernel's `last_activity` recent. Nothing is executed on the kernel.
+- **The proxy passes on neither side's close of a websocket** (verified on a CPU runtime): after a client
+  closed (close code 1006 on its side) or its process ended, Jupyter went on reporting `connections: 1`
+  for minutes, and a client whose kernel was deleted stayed in `readyState` 1. So `connections` cannot
+  tell who is there. Each holder writes a lease file `presence/<machine>-<pid>-<id>.json` under
+  `/content/orca/.orca-colab/` every minute and asks `GET /api/kernels/<id>` in the same round (404 =
+  reconnect on a new kernel).
+- On leaving: the holder deletes its lease and, when no other lease is younger than 150 s on the
+  runtime's clock, the session (`DELETE /api/sessions/<id>`, which ends the kernel and with it every
+  connection Jupyter still counts), so a runtime nobody uses looks as it did before. A holder that was
+  killed leaves the kernel behind until the next holder leaves.
+
+**Reproduction on CPU, same day** (account and client as in the incidents, one runtime each, both
+`up --keep`, each with a detached job burning CPU):
+
+| Runtime | Setup | Result |
+|---|---|---|
+| control | no kernel; a job, and `forward` with one request every 20 s (the third incident's setup) | still assigned after 55 min, then released by hand; the forward never logged a helper restart |
+| candidate | one idle kernel with an open websocket, nothing executed, no nudge | still assigned after 59 min, then released by hand (its websocket had dropped at 59 min in a network outage on the client's side) |
+
+So the 20 to 40 minute reclaim did **not** reproduce on CPU runtimes within an hour, with or without a
+kernel: it is either specific to GPU runtimes (all three incidents were G4) or needs more than an hour on
+CPU. Whether the connected kernel prevents it on a GPU is not verified here; the shipped code was checked
+live only for its mechanics (one shared kernel, `connections` 2 with a job follower and a forward, leases
+written, kernel deleted when both ended).
+
+**No reason is given.** After a runtime is gone, `GET /v1beta/runtimes/<id>` answers 404 and the list simply
+omits it; orca-colab records what it knows itself (how long the runtime lived and whether one of its
+clients was connected until the end).

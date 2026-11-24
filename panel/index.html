@@ -1235,7 +1235,7 @@
               "
             >
               <input id="launcherKeepCheck" type="checkbox" />
-              Keep session alive (disable 20m idle auto-stop)
+              Keep session (no 20m idle auto-stop; stays connected so Colab does not reclaim it)
             </label>
           </div>
 
@@ -1997,7 +1997,15 @@
         const o = originLabel(s);
         const use = (s.inUseBy || []).map((u) => `${u.agent && u.agent !== "cli" ? `${u.agent} on ` : ""}${u.machine}`);
         const style = small ? ' style="font-size:9px;padding:1px 5px;white-space:nowrap"' : ' style="white-space:nowrap"';
-        return `<span class="badge ${o.tone}"${style} title="${esc(o.title)}">${esc(o.text)}</span>${use.length ? `<span class="badge info"${style} title="A command from that machine is running right now">in use: ${esc(use.join(", "))}</span>` : ""}`;
+        return `<span class="badge ${o.tone}"${style} title="${esc(o.title)}">${esc(o.text)}</span>${use.length ? `<span class="badge info"${style} title="A command from that machine is running right now">in use: ${esc(use.join(", "))}</span>` : ""}${presenceBadgeHtml(s, style, use.length > 0)}`;
+      }
+      // Colab takes back runtimes it considers unattended, whatever runs on them.
+      function presenceBadgeHtml(s, style, usedElsewhere) {
+        if (!s.presence || (!s.startedHere && !s.origin)) return "";
+        if (s.presence.connected) {
+          return `<span class="badge ok"${style} title="An orca-colab client on this computer is connected to the runtime, so Colab sees it as attended. It stays connected while a command, job or forward runs, for 20 minutes after the last one, and for as long as Keep is on.">client connected</span>`;
+        }
+        return `<span class="badge ${usedElsewhere ? "neutral" : "warn"}"${style} title="No orca-colab client on this computer is connected to this runtime. Colab takes back runtimes it considers unattended, whatever is running on them. The next command or job reconnects; Keep holds the connection for as long as Orca runs here.">${usedElsewhere ? "not connected from here" : "no client connected"}</span>`;
       }
 
       function renderTaskOutputBox(payload) {
@@ -2218,7 +2226,7 @@
           lastAnnouncedSessionEnd = lastEnd.endedAt;
           if (!firstSnapshot && lastEnd.cause !== "user") {
             showNotice(
-              `${lastEnd.session} ended at ${new Date(lastEnd.endedAt).toLocaleTimeString()}: ${lastEnd.reason}`,
+              `${lastEnd.session}: ${lastEnd.summary || "ended"} at ${new Date(lastEnd.endedAt).toLocaleTimeString()}. ${lastEnd.reason}`,
               "error",
             );
           }

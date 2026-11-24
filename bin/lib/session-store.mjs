@@ -93,6 +93,11 @@ export function normalizeSession(input) {
     normalized.guardrails = guardrails;
   }
 
+  // When a client of this machine was last connected to the runtime (bin/lib/runtime-presence.mjs).
+  if (typeof input.lastPresenceAt === "string" && input.lastPresenceAt) {
+    normalized.lastPresenceAt = input.lastPresenceAt;
+  }
+
   if (Array.isArray(input.forwards) && input.forwards.length > 0) {
     normalized.forwards = input.forwards
       .filter((f) => Number.isInteger(f?.pid) && Number.isInteger(f?.remotePort) && typeof f?.listen === "string")
@@ -185,6 +190,20 @@ export function listSessions(homeDir = os.homedir()) {
   }
   sessions.sort(compareSessionsNewestFirst);
   return sessions;
+}
+
+// One session per Colab runtime: a runtime found in the account's list while `up` was still writing
+// its own session can have a second, adopted record until the next discovery removes it.
+export function distinctRuntimeSessions(sessions) {
+  const byRuntime = new Map();
+  const out = [];
+  for (const s of [...sessions].sort((a, b) => Number(Boolean(a.adopted)) - Number(Boolean(b.adopted)))) {
+    const id = s.colabRuntime?.id;
+    if (id && byRuntime.has(id)) continue;
+    if (id) byRuntime.set(id, s);
+    out.push(s);
+  }
+  return out;
 }
 
 export function selectDefaultSession(sessions, requestedName = null) {

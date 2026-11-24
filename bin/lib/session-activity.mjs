@@ -1,5 +1,6 @@
 import os from "node:os";
 import { createRuntimeChannel } from "./runtime-channel.mjs";
+import { holdRuntimePresence } from "./runtime-presence.mjs";
 import { describeOrigin, stampRuntimeActivity } from "./runtime-records.mjs";
 import { readSession, writeSession } from "./session-store.mjs";
 
@@ -60,6 +61,8 @@ export async function withSessionActivity(
     command = null,
     fetchImpl = fetch,
     stampRuntime = stampOnRuntime,
+    holdPresence = holdRuntimePresence,
+    presenceAfterMs = 10_000,
   } = {},
 ) {
   stampSessionActivity(sessionName, homeDir, {
@@ -67,6 +70,15 @@ export async function withSessionActivity(
     addPid: true,
     nowIso,
   });
+  // Colab takes back runtimes it considers unattended, so a command that takes a while (a job being
+  // followed, a forward, a long run) stays connected; one that ends within seconds never connects.
+  let presence = null;
+  const presenceTimer = holdPresence
+    ? setTimeout(() => {
+        presence = holdPresence({ sessionName, homeDir, fetchImpl });
+      }, presenceAfterMs)
+    : null;
+  presenceTimer?.unref?.();
   const remote = { origin: describeOrigin({ env: env || process.env }), command, fetchImpl };
   let remoteStamp = stampRuntime ? stampRuntime(sessionName, homeDir, { ...remote, running: true }) : null;
 
@@ -88,6 +100,10 @@ export async function withSessionActivity(
     return await fn();
   } finally {
     clearInterval(timer);
+    clearTimeout(presenceTimer);
+    if (presence) {
+      await Promise.race([presence.close(), new Promise((resolve) => setTimeout(resolve, 5000).unref?.())]);
+    }
     stampSessionActivity(sessionName, homeDir, {
       pid,
       removePid: true,

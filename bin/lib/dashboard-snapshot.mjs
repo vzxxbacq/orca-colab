@@ -18,6 +18,7 @@ import { evaluateSessionIdleState } from "./idle-watchdog.mjs";
 import { readRateTable } from "./rate-table.mjs";
 import { liveForwards } from "./port-forward.mjs";
 import { createRuntimeChannel } from "./runtime-channel.mjs";
+import { presenceOf } from "./runtime-presence.mjs";
 import { failJobsOfReleasedRuntimes, mirrorRuntimeTasks, mirrorTaskLog } from "./runtime-jobs.mjs";
 import { machineName, readRuntimeUsage } from "./runtime-records.mjs";
 import { listSessions } from "./session-store.mjs";
@@ -346,6 +347,7 @@ export class DashboardSnapshotBuilder {
       ...s,
       colabRuntime: safeRuntime,
       forwards: liveForwards(s),
+      presence: presenceOf(s),
       origin: s.origin ?? null,
       startedHere: !s.adopted,
       inUseBy: usage?.busyBy ?? [],

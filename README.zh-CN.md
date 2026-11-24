@@ -139,6 +139,15 @@ skill 使用它：`npx skills add vzxxbacq/orca-colab`，或把它当作 MCP 服
 Colab 运行时是一次性的，并且有时长限制。结果一产生就及时拉回；运行时没了，`status --json` 会显示出来，Agent 可以重新
 `down`、`up`、`sync`。
 
+### 为什么 Colab 在 20 到 40 分钟后收回了我的运行时？
+Colab 会收回它认为无人值守的运行时，不管上面在跑什么，也不给出原因。Colab 自己的客户端把“某个 notebook kernel 上有
+客户端连接”视为运行时在使用中。从 v0.4.3 起，只要运行时在使用，orca-colab 就保持这样一个连接：每个运行超过十秒的命令
+（被跟随的任务、`forward`、较长的 `run`），以及 Orca 面板和 MCP 服务器（针对有任务在运行的会话、最后一次命令后的 20 分钟内、
+以及始终针对保留的会话 `up --keep`）。这个 kernel 上不会执行任何代码；会话空闲后连接就断开，所以空闲自动停止和 Colab
+自己的限制仍然会释放不用的运行时。**必须有一台机器保持开机并联网**：任务不再能在所有客户端都消失后继续存活。`status` 为每个
+会话显示 `client-connected=yes|no`（`--json` 中为 `presence`），被 Colab 结束的会话会显示为 *ended by Colab after about N min*，
+并说明结束前是否有客户端连接。
+
 ### 登录最后显示 "Google Colab sign-in failed" 或 "fetch failed" 怎么办？
 浏览器能访问 Google，但 orca-colab 自己访问不了：登录的最后一步是由这台电脑向登录中转和 Google 发请求，浏览器会走
 系统代理，Node 不会。从 v0.4.2 起，失败页面和面板会写明是哪个主机、什么原因（`ENOTFOUND`、`ECONNREFUSED`、
@@ -182,7 +191,7 @@ orca-colab forward --port 8000 [--session <name>] [--listen 127.0.0.1:8000] [--t
 
 命令运行期间，本机的 `http://127.0.0.1:8000` 返回的就是运行时上 8000 端口的响应：方法、路径、查询串、请求头、请求体、
 状态码和响应头原样透传，所以 JSON API、multipart 上传和 CORS 预检都能直接用。Ctrl-C 停止。`status` 和面板会显示正在
-运行的转发，有转发的 session 不会被当作空闲自动停掉。
+运行的转发，有转发的 session 不会被当作空闲自动停掉，并且会保持与 Colab 的连接（见常见问题）。
 
 - **怎么传输**：Colab 的代理只能到达运行时上的 Jupyter 服务，所以每个请求先通过 Jupyter contents API 写成一个文件，
   由运行时上的一个小辅助进程对 `127.0.0.1:<端口>` 重放，再把响应读回来。运行时上没有隧道、SSH 或开放端口。
@@ -244,7 +253,7 @@ Colab 运行时属于 Google 账号，而不是某一台电脑。登录了同一
   HTTPS 代理（Jupyter）读写：`session.json`（名称、账号、启动它的机器和 Agent、GPU、启动时间、keep 标记），每个 `run` 和
   `job` 的 `tasks/<id>.json` 与 `tasks/<id>.log`，以及 `activity/<机器>.json`（谁最后使用过）。
 - **任务在运行时上脱离客户端运行**，输出直接写入上述日志文件，所以无论谁来读日志都是完整的，提交任务的客户端退出后任务照常
-  运行。`job ls`、`job logs [--follow]`、`job stop`、`run`、`sync`、`pull`、`forward`、`down` 在任何一台机器上都能按会话名使用。
+  运行，前提是仍有某台机器（面板、MCP 服务器或某个命令）保持与运行时的连接（见常见问题）。`job ls`、`job logs [--follow]`、`job stop`、`run`、`sync`、`pull`、`forward`、`down` 在任何一台机器上都能按会话名使用。
 - **正在使用的运行时不会被别处停掉**：空闲自动停止和 `down` 读取运行时上的记录（任何机器上仍在运行的任务和命令）。对另一台
   机器正在使用的运行时执行 `down` 会返回 `reason: "in-use-elsewhere"`，需要加 `--force`；面板则要求连按两次 Stop。读不到
   这些记录时同样处理（`reason: "use-unknown"`）：不知道不等于没人在用。来源未知的运行时永远不会被自动停止。

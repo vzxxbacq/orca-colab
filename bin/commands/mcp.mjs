@@ -3,6 +3,8 @@ import { parseArgs } from "node:util";
 import { CliError, EXIT_OK, log } from "../lib/cli-output.mjs";
 import { serveMcpOverStdio } from "../lib/mcp-stdio-server.mjs";
 import { createColabMcpTools, MCP_INSTRUCTIONS } from "../lib/mcp-tools.mjs";
+import { RuntimePresenceKeeper, sessionNeedsPresence } from "../lib/runtime-presence.mjs";
+import { listTasks } from "../lib/task-store.mjs";
 
 const PACKAGE = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8"));
 
@@ -10,7 +12,17 @@ const PACKAGE = JSON.parse(readFileSync(new URL("../../package.json", import.met
 // same ~/.orca-colab, so the Orca panel shows what an agent does here exactly as it shows CLI runs.
 export async function run(
   argv,
-  { stdout, stderr, env, homeDir, cliMain, stdin = process.stdin, toolOptions = {} },
+  {
+    stdout,
+    stderr,
+    env,
+    homeDir,
+    cliMain,
+    stdin = process.stdin,
+    toolOptions = {},
+    presenceKeeper = new RuntimePresenceKeeper({ homeDir }),
+    presenceEveryMs = 30_000,
+  },
 ) {
   try {
     parseArgs({ args: argv, options: {}, strict: true, allowPositionals: false });
@@ -42,7 +54,26 @@ export async function run(
       }
     },
   });
+  // Between an agent's tool calls this server is the client Colab sees on the runtime
+  // (bin/lib/runtime-presence.mjs).
+  const keepPresence = () => {
+    try {
+      const tasks = listTasks(homeDir);
+      presenceKeeper.reconcile((session) =>
+        sessionNeedsPresence({
+          session,
+          runningTasksCount: tasks.filter((t) => t.sessionName === session.name && t.status === "running").length,
+        }),
+      );
+    } catch {
+      // Transient read error; the next round retries.
+    }
+  };
+  const presenceTimer = presenceKeeper ? setInterval(keepPresence, presenceEveryMs) : null;
+  presenceTimer?.unref?.();
   await server.closed;
+  clearInterval(presenceTimer);
+  await presenceKeeper?.stop();
   await tools.settle();
   return EXIT_OK;
 }
