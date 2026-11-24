@@ -92,6 +92,17 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
       aborting `up` cleans up `assign.lock` and leaves no partial session file; add unit test.
 - [x] **CI/CD.** — Done 2026-11-12 (#9): `node --test` on Ubuntu/macOS/Windows × Node 20/22, manifest schema
       check, backward-compatibility diff on PRs (`breaking-change` label), Release and tag-verify workflows.
+- [x] **A job start survives one unanswered request.** — Done 2026-11-24 (`v0.4.1`): Colab's proxy now and then
+      holds a request for seconds (a quiet CPU runtime: 3–4.6 s about once a minute, longer at times). Job start made
+      each request under one 8 s `AbortSignal` that the channel's three attempts shared, so the attempts after a
+      timeout were aborted before they were sent and the job failed 9 s after `job_submit`. Each attempt now has its
+      own limit (20 s for a job start, sent again after a timeout); a start that still fails records `error` in the
+      task file and the log: the step, the request and the limit.
+- [ ] **A runtime adopted while `up` is still writing its session.** Seen 2026-11-24: the panel's discovery listed
+      the runtime between Colab assigning it and `up` writing the session file and the record on the runtime, and
+      created a second session (`orca-colab-<suffix>`, origin unknown, wrong rate) for the same runtime; it counts
+      toward the concurrent-session limit and starts a second ledger entry. Discovery cannot tell this from a
+      runtime started elsewhere without a record; `up` could leave a marker before it asks Colab.
 - [ ] **Cross-platform verification**: Linux (`xdg-open`, `orca-ide` binary lookup) and Windows (`bsdtar` path handling for `sync`/`pull`).
 
 ## M3 — Drive automation

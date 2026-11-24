@@ -4,6 +4,7 @@ import { createRuntimeChannel, SessionGoneError } from "./runtime-channel.mjs";
 import {
   FINAL_TASK_STATUSES,
   HEARTBEAT_STALE_MS,
+  jobStartStep,
   listRuntimeTasks,
   readRuntimeFileFrom,
   readRuntimeFileTail,
@@ -80,16 +81,18 @@ export async function runTaskOnRuntime({
     homeDir,
   );
   const current = channel.session();
-  const launched = await execTty({
-    baseUrl: current.colabRuntime.baseUrl,
-    proxyToken: current.colabRuntime.token,
-    command: launchLine,
-    timeoutMs: 60_000,
-    fetchImpl,
+  await jobStartStep("starting the job runner in a terminal on the runtime, 60s limit", async () => {
+    const launched = await execTty({
+      baseUrl: current.colabRuntime.baseUrl,
+      proxyToken: current.colabRuntime.token,
+      command: launchLine,
+      timeoutMs: 60_000,
+      fetchImpl,
+    });
+    if (launched.exitCode !== 0) {
+      throw new Error(`the launch command exited with ${launched.exitCode}: ${String(launched.stdout || "").trim().slice(-200)}`);
+    }
   });
-  if (launched.exitCode !== 0) {
-    throw new Error(`could not start the job on the runtime: ${String(launched.stdout || "").trim().slice(-200)}`);
-  }
 
   const decoder = new TextDecoder("utf-8");
   const startedMs = Date.now();

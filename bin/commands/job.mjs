@@ -135,6 +135,7 @@ export async function executeTaskInline(
 
     let followed = null;
     let leftRunning = false;
+    let failure = null;
     if (session.colabRuntime?.baseUrl && session.colabRuntime?.token) {
       try {
         followed = await runTaskOnRuntime({
@@ -152,18 +153,13 @@ export async function executeTaskInline(
         const started = readTask(task.id, homeDir, { reconcile: false })?.runtimeBacked;
         // Without contact the job may well be running still; the runtime's record settles it later.
         leftRunning = Boolean(started) && Boolean(err?.followLost) && !(err instanceof SessionGoneError);
-        appendTaskLog(
-          task.id,
-          `\n[task ${task.id}] ${leftRunning ? "stopped following" : "error"}: ${err instanceof Error ? err.message : String(err)}\n`,
-          homeDir,
-        );
+        const message = err instanceof Error ? err.message : String(err);
+        failure = leftRunning ? null : message;
+        appendTaskLog(task.id, `\n[task ${task.id}] ${leftRunning ? "stopped following" : "error"}: ${message}\n`, homeDir);
       }
     } else {
-      appendTaskLog(
-        task.id,
-        `${logHead}\n[task ${task.id}] session ${session.name} has no Colab runtime proxy; run 'orca-colab down' and 'orca-colab up' again\n`,
-        homeDir,
-      );
+      failure = `session ${session.name} has no Colab runtime proxy; run 'orca-colab down' and 'orca-colab up' again`;
+      appendTaskLog(task.id, `${logHead}\n[task ${task.id}] ${failure}\n`, homeDir);
     }
 
     const latest = readTask(task.id, homeDir, { reconcile: false }) || task;
@@ -184,6 +180,7 @@ export async function executeTaskInline(
         exitCode: record?.exitCode ?? 1,
         finishedAt: record?.finishedAt || new Date().toISOString(),
         ...(followed ? { runtimeLogOffset: followed.logOffset, logComplete: true } : {}),
+        ...(failure ? { error: failure } : {}),
       },
       homeDir,
     );
@@ -418,6 +415,7 @@ export async function run(
       cwd,
       env,
       streamToStdout: false,
+      execTty,
       fetchImpl,
     });
   }

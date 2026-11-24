@@ -14,6 +14,16 @@ export class SessionGoneError extends Error {
   }
 }
 
+// Names the request, never the host or a token: the message ends up in task logs and tool results.
+function requestError(url, method = "GET", { err, timedOut, timeoutMs, attempts }) {
+  const what = `${method} ${decodeURIComponent(new URL(url).pathname)}`;
+  const tries = attempts > 1 ? ` (${attempts} attempts)` : "";
+  const message = timedOut
+    ? `${what} got no answer from the runtime within ${Math.round(timeoutMs / 1000)}s${tries}`
+    : `${what} did not reach the runtime${tries}: ${err?.cause?.message || err?.message || err}`;
+  return Object.assign(new Error(message, { cause: err }), { timedOut });
+}
+
 // Authenticated requests to the runtime's Jupyter server. The proxy token lives about an hour, so each
 // call reads the session file (the panel refreshes it) and refreshes the token itself when refused.
 export function createRuntimeChannel({ sessionName, homeDir = os.homedir(), fetchImpl = fetch }) {
@@ -63,7 +73,10 @@ export function createRuntimeChannel({ sessionName, homeDir = os.homedir(), fetc
     return refreshing;
   }
 
-  async function send(url, init = {}) {
+  // `timeoutMs` bounds each attempt with a signal of its own: one signal for the whole call would leave
+  // the attempts after a timeout already aborted. A request that timed out is sent again only when the
+  // caller asks (`retryTimeouts`), because a reader would rather skip a stalled runtime than wait.
+  async function send(url, { timeoutMs = null, retryTimeouts = false, ...init } = {}) {
     for (let attempt = 0; ; attempt += 1) {
       const session = current();
       const expiresMs = Date.parse(session.colabRuntime.tokenExpiry || "");
@@ -73,16 +86,23 @@ export function createRuntimeChannel({ sessionName, homeDir = os.homedir(), fetc
         });
       }
       const token = current().colabRuntime.token;
+      const limit = timeoutMs && !init.signal ? AbortSignal.timeout(timeoutMs) : null;
       let res;
       try {
         res = await fetchImpl(url, {
           ...init,
+          ...(limit ? { signal: limit } : {}),
           headers: { ...COLAB_HEADERS, ...init.headers, [COLAB_PROXY_TOKEN_HEADER]: token },
         });
       } catch (err) {
-        if (attempt >= 2) throw err;
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        continue;
+        const timedOut = Boolean(limit) && (limit.aborted || err?.name === "TimeoutError");
+        const last = attempt >= 2 || init.signal?.aborted || (timedOut && !retryTimeouts);
+        if (!last) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          continue;
+        }
+        if (init.signal?.aborted) throw err;
+        throw requestError(url, init.method, { err, timedOut, timeoutMs, attempts: attempt + 1 });
       }
       if ((res.status === 401 || res.status === 403) && attempt === 0) {
         await res.arrayBuffer().catch(() => {});

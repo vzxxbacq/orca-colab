@@ -16,6 +16,7 @@ import { createPanelActions } from "../bin/lib/panel-actions.mjs";
 import { listSessions, readSession, writeSession } from "../bin/lib/session-store.mjs";
 import { appendTaskLog, readTask, writeTask } from "../bin/lib/task-store.mjs";
 import { extractParseArgsOptions } from "../scripts/compat-contract.mjs";
+import { createFakeRuntime, STATE_DIR } from "./fake-colab-runtime.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RUNTIME = { id: "r-1", endpoint: "r-1", baseUrl: "https://8080-m.colab.dev", token: "proxy-tok", tokenExpiry: null };
@@ -369,6 +370,97 @@ test("job_submit returns at once; job_logs follows by byte offset; job_wait sees
   const list = await client.call("job_list", { status: "succeeded" });
   assert.deepEqual(list.structuredContent.tasks.map((x) => x.id), [task.id]);
   assert.equal((await client.call("job_logs", { id: "../x" })).structuredContent.error, "invalid task id: ../x");
+});
+
+// The MCP server with a runtime behind it: what the server starts as child CLI processes (the follower
+// of a submitted job, and `run`) runs the same command code in this process against the fake.
+function connectToRuntime(t, runtime) {
+  const sink = { write() {} };
+  const client = connect(t, {
+    taskPollMs: 5,
+    commandContext: {
+      fetchImpl: runtime.fetchImpl,
+      execTty: runtime.execTty,
+      spawnChild: (_command, args) => {
+        void main(args.slice(1), {
+          stdout: sink,
+          stderr: sink,
+          homeDir: client.homeDir,
+          env: {},
+          commandContext: { fetchImpl: runtime.fetchImpl, execTty: runtime.execTty },
+        });
+        // Another live process, as the follower is to the server.
+        return { pid: process.ppid, unref() {} };
+      },
+    },
+    runCliChild: async (argv) => {
+      let stdout = "";
+      const exitCode = await main(argv, {
+        stdout: { write: (chunk) => { stdout += chunk; } },
+        stderr: sink,
+        homeDir: client.homeDir,
+        env: {},
+        commandContext: { fetchImpl: runtime.fetchImpl, execTty: runtime.execTty, onInterrupt: () => () => {} },
+      });
+      return { pid: null, stdout, stderr: "", exitCode, timedOut: false, aborted: false };
+    },
+  });
+  writeSession({ name: "orca-colab-s", createdAt: "2026-11-09T10:00:00.000Z", gpu: { name: "Colab CPU" }, colabRuntime: RUNTIME }, client.homeDir);
+  return client;
+}
+
+test("job_submit and run start their job although the runtime leaves one request unanswered", async (t) => {
+  const stalled = [];
+  const runtime = createFakeRuntime({
+    runJob: async ({ write }) => {
+      write("tick 1\n");
+      return 0;
+    },
+    stall: ({ method, path: p }) => {
+      const first = method === "PUT" && p.endsWith(".sh") && !stalled.includes(p);
+      if (first) stalled.push(p);
+      return first;
+    },
+  });
+  const client = connectToRuntime(t, runtime);
+
+  const submit = await client.call("job_submit", { session: "orca-colab-s", cwd: "/content", command: "echo tick 1" });
+  const id = submit.structuredContent.task.id;
+  assert.equal(submit.structuredContent.task.status, "running");
+  const waited = await client.call("job_wait", { id, timeout_seconds: 20 });
+  assert.equal(waited.structuredContent.finished, true);
+  assert.equal(waited.structuredContent.task.status, "succeeded");
+  assert.equal(waited.structuredContent.task.error, undefined);
+  assert.equal(waited.structuredContent.output.split("\n").slice(1, 3).join("\n"), "$ echo tick 1\ntick 1");
+  assert.deepEqual(stalled, [`/api/contents${STATE_DIR}/tasks/${id}.sh`]);
+  assert.equal(runtime.json(`${STATE_DIR}/tasks/${id}.json`).status, "succeeded");
+
+  const run = await client.call("run", { session: "orca-colab-s", command: "echo tick 1", timeout_seconds: 20 });
+  assert.deepEqual(run.structuredContent, { ok: true, session: "orca-colab-s", exitCode: 0, stdout: "tick 1", stderr: "" });
+  assert.equal(stalled.length, 2);
+});
+
+test("a job whose start gets no answer fails with the step, the request and the time limit in its record and log", async (t) => {
+  const runtime = createFakeRuntime({
+    stall: ({ method, path: p }) => method === "PUT" && /\/tasks\/task-[^/]+\.json$/.test(p),
+  });
+  const client = connectToRuntime(t, runtime);
+
+  const submit = await client.call("job_submit", { session: "orca-colab-s", command: "echo never" });
+  const id = submit.structuredContent.task.id;
+  const waited = await client.call("job_wait", { id, timeout_seconds: 20 });
+  const error = `could not start the job (uploading the job's record): PUT /api/contents${STATE_DIR}/tasks/${id}.json got no answer from the runtime within 20s (3 attempts)`;
+  assert.equal(waited.structuredContent.finished, true);
+  assert.equal(waited.structuredContent.task.status, "failed");
+  assert.equal(waited.structuredContent.task.exitCode, 1);
+  assert.equal(waited.structuredContent.task.error, error);
+  assert.equal(readTask(id, client.homeDir).error, error);
+  assert.equal(waited.structuredContent.output.split("\n")[1], `[task ${id}] error: ${error}`);
+  assert.deepEqual(runtime.launches, []);
+
+  const run = await client.call("run", { session: "orca-colab-s", command: "echo never" });
+  assert.equal(run.isError, true);
+  assert.match(run.structuredContent.error, /^could not start the job \(uploading the job's record\): PUT \/api\/contents\/content\/orca\/\.orca-colab\/tasks\/task-[a-z0-9-]+\.json got no answer from the runtime within 20s \(3 attempts\)$/);
 });
 
 const REMOTE_BROWSER_NOTE =

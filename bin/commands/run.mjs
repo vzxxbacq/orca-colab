@@ -225,7 +225,10 @@ export async function run(
       if (err?.followLost && current.runtimeBacked) {
         writeTask({ ...current, localPid: null }, homeDir);
       } else {
-        writeTask({ ...current, status: "failed", exitCode: 1, finishedAt: new Date().toISOString(), localPid: null }, homeDir);
+        writeTask(
+          { ...current, status: "failed", exitCode: 1, finishedAt: new Date().toISOString(), localPid: null, error: String(err?.message || err) },
+          homeDir,
+        );
       }
       throw err;
     } finally {
