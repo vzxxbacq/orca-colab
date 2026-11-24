@@ -24,8 +24,8 @@ Colab 账号和计算单元，不需要 VPN、SSH，也不用守着 notebook。
   `orca-colab credits budget <cu>` 调高预算。
 - **多运行时、多 Session**：多块 GPU 并行，可命名、可用 `--session` 逐条指定，并支持多个 Google 账号切换。
 - **只用公网接口**：全部通过 HTTPS 访问 Google 的 Colab API 和运行时自带的代理，不需要 VPN、tailnet、SSH 或开放端口；`pull` 可把结果（含二进制文件）下载回本机。
-- **远程 Orca 服务器（Beta）**：项目位于 Orca 服务器上时，面板通过 Bridge Terminal 跟随显示该服务器的运行时、任务和算力。
-  详见[下文](#远程-orca-服务器beta)。
+- **每台机器看到同一批运行时**：面板和 CLI 列出当前登录的 Google 账号下的全部运行时，包括 Agent 在另一台电脑或远程 Orca
+  服务器上启动的，连同任务和实时输出。不需要 bridge，也不打开任何终端。详见[下文](#多台机器一个账号)。
 
 ## 快速开始
 
@@ -205,29 +205,32 @@ codex mcp add colab -- npx -y https://codeload.github.com/vzxxbacq/orca-colab/ta
   较慢的 `up` 可能超过：运行时仍会创建（`status` 能看到），或在 `~/.codex/config.toml` 的 `[mcp_servers.colab]` 下设置
   `tool_timeout_sec = 300`。
 
-## 远程 Orca 服务器（Beta）
+## 多台机器，一个账号
 
-如果项目位于远程 Orca 服务器上，桌面端的 **Colab GPU** 面板显示的是该服务器上的 Colab 状态，而不是本机的：
-它的运行时、Agent 任务和实时输出、算力估算和 Google 账号。本地项目的行为保持不变；顶栏的标识会告诉你当前看的是哪一边
-（`Local · <主机>` 或 `Server · <主机>`）。
+Colab 运行时属于 Google 账号，而不是某一台电脑。登录了同一账号的每台机器（你的笔记本、Agent 所在的远程 Orca 服务器、
+另一台台式机）看到的是同一批运行时：
 
-**实现方式：Bridge Terminal。** Orca 没有给插件在远程服务器上执行代码的接口，终端是唯一通道，所以插件为每台服务器
-维护一个名为 `Colab Bridge · <服务器>` 的终端，里面运行 `orca-colab watch`。这个进程把服务器状态编码成紧凑的帧流回传，
-并接收面板动作作为输入命令；插件通过本机 `orca` CLI、复用你已有的服务器连接，在第一个需要它的项目里打开该终端，
-同一服务器上的其他项目共用它。请让它一直运行；关掉后面板会重新打开。不安装任何额外东西，不开端口，不需要 SSH 或 VPN。
+- **面板和 `orca-colab status` 每次都向 Colab 查询**该账号的运行时并全部显示，同时标明来源：*started here*（本机启动）、
+  *from Claude Code · build-server*（某台机器上的某个 Agent 启动），或 *unknown origin*（运行时上没有 orca-colab 记录：
+  旧版本启动的，或你在 Colab 网页里打开的 notebook）。
+- **过去只存在于执行 `up` 的那台机器上的信息，现在同时写在运行时上**，位于 `/content/orca/.orca-colab/`，通过运行时自己的
+  HTTPS 代理（Jupyter）读写：`session.json`（名称、账号、启动它的机器和 Agent、GPU、启动时间、keep 标记），每个 `run` 和
+  `job` 的 `tasks/<id>.json` 与 `tasks/<id>.log`，以及 `activity/<机器>.json`（谁最后使用过）。
+- **任务在运行时上脱离客户端运行**，输出直接写入上述日志文件，所以无论谁来读日志都是完整的，提交任务的客户端退出后任务照常
+  运行。`job ls`、`job logs [--follow]`、`job stop`、`run`、`sync`、`pull`、`forward`、`down` 在任何一台机器上都能按会话名使用。
+- **正在使用的运行时不会被别处停掉**：空闲自动停止和 `down` 读取运行时上的记录（任何机器上仍在运行的任务和命令）。对另一台
+  机器正在使用的运行时执行 `down` 会返回 `reason: "in-use-elsewhere"`，需要加 `--force`；面板则要求连按两次 Stop。来源未知的
+  运行时永远不会被自动停止。
+- **项目在远程 Orca 服务器上**时不需要任何额外设置：在桌面端打开面板，无论聚焦哪个项目，显示的都是该账号的运行时。面板不再
+  打开任何 Orca 终端；**Terminal** 按钮是直接显示在面板里的运行时 shell。（需要全屏终端时，在自己的终端里运行
+  `orca-colab run -- bash -l`。）
 
-设置项：
+仍然保存在各台机器上的内容：Google 登录（`~/.orca-colab/google-oauth.json`）、算力账本及月度预算、护栏（允许的 GPU、
+会话上限、空闲自动停止分钟数）。**面板修改的是它所在这台电脑的护栏**；远程服务器上的 Agent 遵循该服务器自己的
+`~/.orca-colab/config.json`（在那里用 `orca-colab credits budget <cu>` 和配置文件设置）。余额属于账号，直接从 Colab 读取。
 
-- **orca-colab command on remote Orca servers**：在服务器上启动 `watch` 的命令。默认用 `npx` 拉取本仓库；
-  服务器上有源码时填 `node /path/to/orca-colab/bin/orca-colab.mjs`。
-- **Open the bridge terminal on remote servers automatically**：关闭后由你自己启动终端，面板会给出准确的命令。
-
-面板上的 Google 登录在你本机浏览器完成；token 先用服务器端 `watch` 进程的密钥加密（X25519 + AES-256-GCM）再经终端传输，
-本机不保存任何凭据。护栏、预算、Keep 等修改在面板上即时生效，服务器在一两秒内确认，失败会弹出提示。
-
-Beta 阶段的已知限制：桥接终端是可见的（Orca 没有隐藏终端）；面板跟随聚焦项目约有 1 秒延迟；实时输出只显示所选任务的
-最后 120 行；本机和服务器上同名同分支的项目，只有在其中一方开了终端时才能可靠区分；浏览器客户端不运行插件 worker，
-该功能仅限桌面应用。
+限制：面板里的"同步此工作区"只对文件在本机的项目有效；项目在远程服务器上时，让那里的 Agent 执行 `sync`。两台主机名相同的
+机器应设置 `ORCA_COLAB_MACHINE` 加以区分。旧版 orca-colab 启动的任务在运行时上没有记录，只在启动它的机器上显示。
 
 ## 开源协议
 

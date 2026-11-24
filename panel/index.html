@@ -1751,7 +1751,7 @@
       function originBadgeHtml(s, small) {
         const o = originLabel(s);
         const use = (s.inUseBy || []).map((u) => `${u.agent && u.agent !== "cli" ? `${u.agent} on ` : ""}${u.machine}`);
-        const style = small ? ' style="font-size:9px;padding:1px 5px"' : "";
+        const style = small ? ' style="font-size:9px;padding:1px 5px;white-space:nowrap"' : ' style="white-space:nowrap"';
         return `<span class="badge ${o.tone}"${style} title="${esc(o.title)}">${esc(o.text)}</span>${use.length ? `<span class="badge info"${style} title="A command from that machine is running right now">in use: ${esc(use.join(", "))}</span>` : ""}`;
       }
 
@@ -2101,7 +2101,6 @@
                 <span class="badge neutral mono" style="font-size:10px">${esc(s.name.replace(/^orca-colab-/, ""))}</span>
                 ${vramTotal ? `<span class="badge neutral">${vramTotal} GB</span>` : ""}
                 ${s.keep ? `<span class="badge info">KEEP</span>` : ""}
-                ${originBadgeHtml(s, false)}
               </div>
               <div class="row">
                 <button onclick="window.__openShell('${esc(s.name)}')" title="Open interactive Colab shell">
@@ -2117,7 +2116,7 @@
             </div>
             <div class="runtime-meta">
               ${oauthAccounts.length > 1 && sessAccEmail ? `<span>Account: <strong>${esc(sessAccEmail)}</strong></span>` : ""}
-              <span class="mono">Direct API</span>
+              ${originBadgeHtml(s, true)}
               <span>Uptime: ${formatDuration(s.ageSeconds)}</span>
               <span>Burn: ≈ ${s.costSoFarCu ?? 0} CU (${s.cuPerHour ?? 0} CU/h)</span>${(s.forwards || [])
                 .map((f) => `<span title="orca-colab forward, pid ${esc(String(f.pid))}">⇄ ${esc(f.listen)} → :${esc(String(f.remotePort))}</span>`)
@@ -2605,6 +2604,9 @@
               keep,
               async: true,
             });
+            if (res?.ok === false) {
+              showNotice(res.message || "Could not start the runtime.", "warn");
+            }
             if (res?.dashboard) {
               userForcedView = null;
               renderAll(res.dashboard);

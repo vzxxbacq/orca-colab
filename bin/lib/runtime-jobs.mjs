@@ -1,3 +1,4 @@
+import { closeSync, existsSync, openSync, rmSync, statSync, truncateSync } from "node:fs";
 import os from "node:os";
 import { createRuntimeChannel, SessionGoneError } from "./runtime-channel.mjs";
 import {
@@ -12,7 +13,7 @@ import {
   stageRuntimeTask,
 } from "./runtime-records.mjs";
 import { listSessions } from "./session-store.mjs";
-import { appendTaskLog, isProcessAlive, listTasks, readTask, writeTask } from "./task-store.mjs";
+import { appendTaskLog, isProcessAlive, listTasks, readTask, taskLogPath, writeTask } from "./task-store.mjs";
 
 const FIRST_MIRROR_BYTES = 1024 * 1024;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -21,6 +22,11 @@ export function taskLogFooter(task) {
   return task.status === "stopped"
     ? `\n[task ${task.id}] stopped by user at ${task.finishedAt}\n`
     : `\n[task ${task.id}] ${task.status} at ${task.finishedAt} (exit code ${task.exitCode})\n`;
+}
+
+function localLogBytes(id, homeDir) {
+  const file = taskLogPath(id, homeDir);
+  return existsSync(file) ? statSync(file).size : 0;
 }
 
 function hasLiveFollower(task, checkPid) {
@@ -62,8 +68,15 @@ export async function runTaskOnRuntime({
   });
   appendTaskLog(task.id, localLogHead, homeDir);
   const headBytes = Buffer.byteLength(logHead);
-  let local = writeTask(
-    { ...task, status: "running", localPid: process.pid, runtimeBacked: true, runtimeLogOffset: headBytes },
+  writeTask(
+    {
+      ...task,
+      status: "running",
+      localPid: process.pid,
+      runtimeBacked: true,
+      runtimeLogOffset: headBytes,
+      localLogBytes: localLogBytes(task.id, homeDir),
+    },
     homeDir,
   );
   const current = channel.session();
@@ -93,6 +106,12 @@ export async function runTaskOnRuntime({
       if (bytes?.length) {
         offset += bytes.length;
         appendTaskLog(task.id, bytes, homeDir);
+        // Offset and local size are recorded together, so a copy that was cut off between the append
+        // and this write is recognised and undone by the next reader instead of appended twice.
+        const mine = readTask(task.id, homeDir, { reconcile: false });
+        if (mine && mine.status === "running") {
+          writeTask({ ...mine, runtimeLogOffset: offset, localLogBytes: localLogBytes(task.id, homeDir) }, homeDir);
+        }
         lastProgressMs = Date.now();
         onOutput?.(decoder.decode(bytes, { stream: true }));
       }
@@ -115,9 +134,6 @@ export async function runTaskOnRuntime({
     const mine = readTask(task.id, homeDir, { reconcile: false });
     if (!mine || mine.status === "stopped") {
       return { record: null, logOffset: offset, stoppedLocally: true };
-    }
-    if (mine.runtimeLogOffset !== offset) {
-      local = writeTask({ ...mine, runtimeLogOffset: offset }, homeDir);
     }
     if (Date.now() - lastProgressMs > HEARTBEAT_STALE_MS + 30_000) {
       // The proxy answers an expired token like a missing file; a refresh tells the two apart.
@@ -201,9 +217,36 @@ export async function mirrorTaskLog({
   if (!task?.runtimeBacked || task.logComplete || hasLiveFollower(task, checkPid)) {
     return task;
   }
+  // The panel, a CLI call and another panel poll may all copy the same log; two copies of one range
+  // would append it twice, so one copier at a time holds a lock file and the others skip this round.
+  const lockPath = `${taskLogPath(task.id, homeDir)}.lock`;
+  try {
+    if (existsSync(lockPath) && Date.now() - statSync(lockPath).mtimeMs > 60_000) {
+      rmSync(lockPath, { force: true });
+    }
+    closeSync(openSync(lockPath, "wx"));
+  } catch {
+    return task;
+  }
+  try {
+    const fresh = readTask(task.id, homeDir, { reconcile: false });
+    return fresh ? await copyRuntimeLog({ task: fresh, homeDir, channel }) : task;
+  } finally {
+    rmSync(lockPath, { force: true });
+  }
+}
+
+async function copyRuntimeLog({ task, homeDir, channel }) {
+  if (task.logComplete) {
+    return task;
+  }
   const logFile = runtimeTaskFile(task.id, "log");
   let offset = task.runtimeLogOffset || 0;
   let copied = 0;
+  const recorded = task.localLogBytes ?? (offset === 0 ? 0 : null);
+  if (recorded !== null && localLogBytes(task.id, homeDir) > recorded) {
+    truncateSync(taskLogPath(task.id, homeDir), recorded);
+  }
   if (offset === 0) {
     const tail = await readRuntimeFileTail(channel, logFile, FIRST_MIRROR_BYTES);
     if (!tail) return task;
@@ -233,7 +276,10 @@ export async function mirrorTaskLog({
   if (!copied && !done) {
     return latest;
   }
-  return writeTask({ ...latest, runtimeLogOffset: offset, logComplete: done }, homeDir);
+  return writeTask(
+    { ...latest, runtimeLogOffset: offset, localLogBytes: localLogBytes(task.id, homeDir), logComplete: done },
+    homeDir,
+  );
 }
 
 export async function stopRuntimeTask({ task, homeDir = os.homedir(), fetchImpl = fetch }) {

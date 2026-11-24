@@ -164,7 +164,7 @@ test("status says when and why a session ended, newest first, for the last 24 ho
         endedAt: "2026-11-09T09:58:00.744Z",
         cause: "colab-died",
         reason:
-          "Colab no longer had this runtime assigned, so the local session was dropped. orca-colab did not release it: it ended on Colab's side (its web UI, an idle or lifetime limit, or Colab reclaiming it).",
+          "Colab no longer had this runtime assigned, so the local session was dropped. This machine did not release it: it was released from another machine or ended on Colab's side (its web UI, an idle or lifetime limit, or Colab reclaiming it).",
       },
       {
         session: "orca-colab-b",

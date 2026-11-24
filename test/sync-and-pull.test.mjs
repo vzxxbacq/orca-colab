@@ -34,6 +34,7 @@ test("sync unpacks the workspace over /colab/tty and records remoteRoot in the s
   const ttyCalls = [];
   const io = makeBuffers();
   const code = await runSync(["."], {
+    withActivity: (_name, _home, fn) => fn(),
     json: true,
     stdout: io.stdout,
     stderr: io.stderr,

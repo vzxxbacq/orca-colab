@@ -149,7 +149,7 @@ class AccountDashboard {
     // The first snapshot waits for the account's runtimes; later ones refresh them in the background.
     const sync = this.builder.syncFromRuntimes({ maxAgeMs: this.isPanelActive() ? 5_000 : 60_000 });
     if (!this.builder.lastRuntimeSyncAt) {
-      await sync;
+      await Promise.race([sync, new Promise((resolve) => setTimeout(resolve, 5000))]);
     }
     return this.builder.build({
       includeLiveMetrics,
@@ -167,6 +167,7 @@ class AccountDashboard {
     if (action === "authLogin" || action === "authSwitch" || action === "authLogout") {
       this.builder.invalidateDoctor();
       this.builder.lastRuntimeSyncAt = 0;
+      this.builder.lastDiscoveryAt = 0;
     }
     if (action === "submitTask" && result?.task?.id) {
       this.selectedTaskId = result.task.id;
@@ -221,7 +222,7 @@ class AccountDashboard {
       const target = pickActiveTask(tasks, this.selectedTaskId);
       // The live output of a job no process here follows is copied from the runtime while it is watched.
       if (target?.runtimeBacked && !target.logComplete && this.isPanelActive()) {
-        await this.actions.getTaskLogs({ taskId: target.id, tailLines: 1 }).catch(() => {});
+        this.builder.copyTaskLog(target);
       }
       const logSnap = target ? readTaskLog(target.id, this.homeDir, { tailLines: 250 }) : null;
       const streamFp = target ? `${target.id}:${target.status}:${target.exitCode}:${logSnap.totalBytes}` : "";

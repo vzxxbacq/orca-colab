@@ -3,7 +3,7 @@ import { listRuntimes, stripResourcePrefix } from "./colab-api-client.mjs";
 import { getValidAccessToken, listOAuthAccounts } from "./colab-oauth.mjs";
 import { recordSessionEndEvent, recordSessionStartEvent, resolveDeadSessionEndIso } from "./credit-ledger.mjs";
 import { resolveGpuRate } from "./rate-table.mjs";
-import { directRuntimeChannel, readRuntimeSessionRecord } from "./runtime-records.mjs";
+import { directRuntimeChannel, machineName, readRuntimeSessionRecord, sameMachine } from "./runtime-records.mjs";
 import { deleteSession, listSessions, readSession, resolveSession, writeSession } from "./session-store.mjs";
 import { listTasks, writeTask } from "./task-store.mjs";
 
@@ -28,6 +28,7 @@ function freeSessionName(wanted, runtimeId, taken) {
 // sessions whose runtime Colab no longer lists are dropped. Returns what changed.
 export async function discoverAccountRuntimes({
   homeDir = os.homedir(),
+  env = process.env,
   fetchImpl = fetch,
   listRuntimesFn = listRuntimes,
   nowMs = () => Date.now(),
@@ -65,12 +66,25 @@ export async function discoverAccountRuntimes({
         const current = readSession(known.name, homeDir);
         if (!current) continue;
         const keep = record ? record.keep : current.keep;
-        if (current.colabRuntime.token !== info.token || current.colabRuntime.baseUrl !== info.url || current.keep !== keep || current.state === "zombie") {
+        // An older orca-colab on this machine rewrites session files without these two fields; the
+        // runtime's record puts them back.
+        const origin = current.origin || record?.origin || null;
+        const adopted = record?.origin ? !sameMachine(record.origin, machineName(env)) : Boolean(current.adopted);
+        if (
+          current.colabRuntime.token !== info.token ||
+          current.colabRuntime.baseUrl !== info.url ||
+          current.keep !== keep ||
+          current.state === "zombie" ||
+          Boolean(current.adopted) !== adopted ||
+          Boolean(current.origin) !== Boolean(origin)
+        ) {
           writeSession(
             {
               ...current,
               keep,
               state: "active",
+              origin,
+              adopted,
               colabRuntime: {
                 ...current.colabRuntime,
                 baseUrl: info.url,
@@ -141,11 +155,11 @@ export async function discoverAccountRuntimes({
 
 // A session name this machine does not know may be a runtime another machine started; Colab is asked
 // once before giving up.
-export async function resolveSessionAcrossMachines({ sessionName = null, homeDir = os.homedir(), fetchImpl = fetch } = {}) {
+export async function resolveSessionAcrossMachines({ sessionName = null, homeDir = os.homedir(), env = process.env, fetchImpl = fetch } = {}) {
   try {
     return resolveSession({ sessionName, homeDir });
   } catch (err) {
-    const changes = await discoverAccountRuntimes({ homeDir, fetchImpl }).catch(() => null);
+    const changes = await discoverAccountRuntimes({ homeDir, env, fetchImpl }).catch(() => null);
     if (!changes?.adopted.length) throw err;
     return resolveSession({ sessionName, homeDir });
   }

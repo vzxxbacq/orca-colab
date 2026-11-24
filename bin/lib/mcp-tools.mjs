@@ -25,12 +25,12 @@ export const MCP_INSTRUCTIONS = `Colab GPU: use a Google Colab runtime (T4, L4, 
 
 Order of work
 1. doctor: needs ok true. Read policy.allowedGpus and policy.maxConcurrentSessions: the owner's guardrails, set in the Colab GPU panel in Orca together with the monthly budget; they are not yours to change. If checks.oauth.ok is false, sign in (below).
-2. status: reuse a runtime that is already reachable instead of starting another.
+2. status: reuse a runtime that is already reachable instead of starting another. It lists every runtime of the signed-in Google account, also ones started from another machine (startedHere false, origin names the machine and agent; origin null is a runtime of unknown origin, for example a notebook the owner has open in Colab). All tools work on any of them by session name, and jobs submitted elsewhere appear in job_list.
 3. credits: approximate balance (estimatedBalanceCu), burn rate and monthly budget. Every figure is an estimate. The monthly budget is a hard limit: once estimatedMonthlyUsedCu reaches budgetCu, up refuses to start a new runtime (reusing a running one still works). If the balance is close to zero, ask the owner before up.
 4. up with an allowed GPU: T4 for inference and debugging, L4 or A100 for training, CPU for checks that need no GPU. It returns when the runtime is ready, and the runtime bills compute units until down. Tell the owner the rate (estimatedCuPerHour) before long work.
 5. sync the workspace (pass workspace_path), then job_submit for anything longer than a minute (it returns a job id at once; follow with job_wait or job_logs) or run for short commands.
 6. pull results as soon as they exist: runtimes die (about 90 minutes idle on the free tier, 12 hours at most) and nothing on them persists.
-7. down as soon as the GPU work is finished.
+7. down as soon as the GPU work is finished, for the runtimes you started. A runtime another machine is using is left alone (reason "in-use-elsewhere"); tell the owner who is using it and pass force only when they say so.
 
 Sign-in
 Call auth_login. It opens Google's consent page in the owner's browser on this machine and returns the URL; show the owner the URL in case the browser did not open. Tell them to tick the Colab permission ("Read, write and delete your Colab resources", or Select all): it starts unticked and sign-in fails without it. Then call auth_wait until state is "signed_in". Always tell the owner this too, because you cannot know where their browser runs: ${REMOTE_BROWSER_NOTE}
@@ -248,7 +248,7 @@ const TOOL_SPECS = [
     name: "job_submit",
     title: "Submit a long-running job",
     description:
-      "Starts a command on the runtime as a managed job and returns at once with task.id. Output streams to a log the owner watches live in the panel; read it with job_logs, wait for the end with job_wait, stop it with job_stop. The job keeps running if this server or your session ends. With sync true the workspace is pushed first, inside the job.",
+      "Starts a command on the runtime as a managed job and returns at once with task.id. It runs detached on the runtime with its record and complete output there, which the owner watches live in the panel (on any machine signed in to the account); read it with job_logs, wait for the end with job_wait, stop it with job_stop. The job keeps running if this server, your session or this machine goes away. With sync true the workspace is pushed first, inside the job.",
     inputSchema: schema({
       ...COMMAND_PROPS,
       name: { type: "string", description: "Short title shown in the panel." },

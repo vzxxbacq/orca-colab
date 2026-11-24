@@ -17,6 +17,7 @@ export async function run(
     json,
     stdout,
     stderr,
+    env = process.env,
     homeDir,
     fetchImpl = fetch,
     discover = discoverAccountRuntimes,
@@ -25,13 +26,20 @@ export async function run(
 ) {
   let opts;
   try {
-    opts = parseArgs({ args: argv, options: { local: { type: "boolean", default: false } }, strict: true, allowPositionals: false }).values;
+    opts = parseArgs({
+      args: argv,
+      options: {
+        local: { type: "boolean", default: false },
+      },
+      strict: true,
+      allowPositionals: false,
+    }).values;
   } catch (err) {
     throw new CliError(err instanceof Error ? err.message : String(err));
   }
   // The account's runtimes at Colab, including ones started from other machines; --local skips the call.
   if (!opts.local) {
-    await discover({ homeDir, fetchImpl }).catch(() => {});
+    await discover({ homeDir, env, fetchImpl }).catch(() => {});
   }
   const sessions = listSessions(homeDir);
   const now = nowMs();

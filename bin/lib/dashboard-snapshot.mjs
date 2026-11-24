@@ -21,7 +21,7 @@ import { createRuntimeChannel } from "./runtime-channel.mjs";
 import { mirrorRuntimeTasks, mirrorTaskLog } from "./runtime-jobs.mjs";
 import { machineName, readRuntimeUsage } from "./runtime-records.mjs";
 import { listSessions } from "./session-store.mjs";
-import { listTasks, readTask, readTaskLog } from "./task-store.mjs";
+import { listTasks, readTaskLog } from "./task-store.mjs";
 
 export function pickActiveTask(tasks, selectedTaskId = null) {
   return (
@@ -63,7 +63,9 @@ export class DashboardSnapshotBuilder {
     this.origin = origin;
     this.fetchImpl = fetchImpl;
     this.usageBySession = new Map();
+    this.logCopyInFlight = new Set();
     this.lastRuntimeSyncAt = 0;
+    this.lastDiscoveryAt = 0;
     this.runtimeSyncInFlight = null;
     this.lastRuntimeSyncError = null;
     this.gpuUtilSamplesBySession = new Map();
@@ -117,7 +119,11 @@ export class DashboardSnapshotBuilder {
     const { homeDir, fetchImpl } = this;
     this.runtimeSyncInFlight = (async () => {
       try {
-        await discoverAccountRuntimes({ homeDir, fetchImpl });
+        // Colab's list changes rarely; the runtimes themselves are asked on every sync.
+        if (Date.now() - this.lastDiscoveryAt >= Math.min(maxAgeMs * 3, 60_000)) {
+          await discoverAccountRuntimes({ homeDir, env: this.env, fetchImpl });
+          this.lastDiscoveryAt = Date.now();
+        }
         const live = listSessions(homeDir).filter(
           (s) => s.state !== "zombie" && s.colabRuntime?.baseUrl && s.colabRuntime?.token,
         );
@@ -141,6 +147,14 @@ export class DashboardSnapshotBuilder {
       }
     })();
     return this.runtimeSyncInFlight;
+  }
+
+  copyTaskLog(task) {
+    if (this.logCopyInFlight.has(task.id)) return;
+    this.logCopyInFlight.add(task.id);
+    void mirrorTaskLog({ task, homeDir: this.homeDir, fetchImpl: this.fetchImpl })
+      .catch(() => {})
+      .finally(() => this.logCopyInFlight.delete(task.id));
   }
 
   // What the runtime's records say now, minus this machine's own command (the reader is not a user).
@@ -222,13 +236,13 @@ export class DashboardSnapshotBuilder {
       });
     }
 
-    let activeTask = pickActiveTask(tasks, selectedTaskId);
+    const activeTask = pickActiveTask(tasks, selectedTaskId);
     let activeTaskOutput = null;
     if (activeTask) {
-      // A job followed by no process on this machine has its output on the runtime only.
+      // A job followed by no process on this machine has its output on the runtime only. The copy runs
+      // beside the snapshot, never inside it: a runtime that answers slowly must not hold the panel up.
       if (activeTask.runtimeBacked && !activeTask.logComplete) {
-        await mirrorTaskLog({ task: activeTask, homeDir, fetchImpl: this.fetchImpl }).catch(() => {});
-        activeTask = readTask(activeTask.id, homeDir, { reconcile: false }) || activeTask;
+        this.copyTaskLog(activeTask);
       }
       const logSnap = readTaskLog(activeTask.id, homeDir, { tailLines, maxBytes: logMaxBytes });
       activeTaskOutput = {

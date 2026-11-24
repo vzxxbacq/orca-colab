@@ -151,6 +151,28 @@ The runtime's Jupyter Server (2.x, rooted at `/`) answers its standard API on th
 archive) as `/tmp/orca-colab-stdin-<id>` instead of typing it, and falls back to `/colab/tty` with inline
 stdin when the runtime refuses `POST /api/terminals` or the upload.
 
+## 4c. Records on the runtime (verified 2026-11-24 on a CPU runtime)
+
+The same Jupyter Server answers these with the `X-Colab-Runtime-Proxy-Token` header, about 0.25 s each:
+
+- `PUT /api/contents/<dir>` with `{ "type": "directory" }` creates one level (201, also when it exists);
+  a file in a directory that does not exist is refused (500), so parents are created first.
+- Hidden paths are accepted by the contents API and by `/files` (`/content/orca/.orca-colab/…`).
+- `GET /api/contents/<dir>?content=1` lists entries with `name`, `type`, `size` and `last_modified`: one
+  request shows every job's record age and log size. `GET /api/contents/<file>?content=1&format=text`
+  returns the text; a missing path answers 404.
+- `GET /files/<path>` honours `Range`: `bytes=N-` answers 206 with `Content-Range: bytes N-M/TOTAL`, 416
+  when `N` is at or past the end, and `bytes=-N` returns the last `N` bytes. That is how a log is followed
+  and how a first read of a large log takes only its end.
+- A process started from a per-command terminal with `nohup setsid … &` survives `DELETE /api/terminals/<name>`,
+  which is what lets a job outlive the client that submitted it.
+- `GET https://colaboratory.googleapis.com/v1beta/runtimes` returns every runtime of the account with
+  `connectionInfo.url` and a fresh `connectionInfo.token`, whichever machine assigned it.
+
+Layout under `/content/orca/.orca-colab/` (DESIGN D25): `session.json`, `tasks/<id>.json`, `tasks/<id>.log`,
+`tasks/<id>.sh` (read and deleted by the runner), `tasks/<id>.stop` (stop request), `tasks/_job-runner-v1.py`,
+`activity/<machine>.json`.
+
 ## 5. CCU Balance, Burn Rate & Live Hardware Resources
 
 ### Compute Units (CCU) & Tier Info

@@ -25,7 +25,7 @@ If this session already has the Colab GPU MCP tools (`doctor`, `auth_login`, `up
    - Inspect `ok`, `mode` (`"direct-api"` or `"unconfigured"`), `checks.oauth`, and `policy` (`allowedGpus`, `maxConcurrentSessions`).
    - If `ok === false`, ask the user to sign in once via `orca-colab auth login` (or click **Sign in with Google** in the Orca Colab panel), ticking the Colab permission on Google's consent page (it starts unticked).
    - **Signing in from another machine**: sign-in ends on `http://127.0.0.1:PORT/...` on the machine that runs `orca-colab`. If the user's browser is on a different machine (a remote server, SSH), that last page will not load, which is expected: ask them to copy its full address from the address bar and run `orca-colab auth redirect <address>` where `orca-colab` runs (or give it to you for it; with the MCP tools, `auth_redirect`). The address is a one-time key to their Colab: it must go nowhere else. On a machine with no browser start with `auth login --no-browser`, which prints the URL to open.
-2. Run `status --json` (or `ls --json`) to discover any already-active GPU sessions (`name`, `gpu`, `rateKey`, `cuPerHour`, `reachable`, `ageSeconds`).
+2. Run `status --json` (or `ls --json`) to discover any already-active GPU sessions (`name`, `gpu`, `rateKey`, `cuPerHour`, `reachable`, `ageSeconds`). It lists every runtime of the signed-in Google account, also ones started from another machine: `startedHere: false` with `origin` (machine and agent), or `origin: null` for a runtime of unknown origin (no orca-colab record: an older version, or a notebook the user has open in Colab). You may use any of them by name with `--session`; do not release one you did not start unless the user asks.
 3. Run `credits --json` (or `credits calibrate --json`) to check the user's approximate Compute Units balance (`estimatedBalanceCu`) and monthly budget (`budgetCu`, `estimatedMonthlyUsedCu`, `estimatedBudgetUsedPercent`). The budget is a hard limit: at 100 % `up` refuses to start a new runtime.
 
 ## 3. Resource Management (Provisioning & Scaling Sessions)
@@ -51,6 +51,8 @@ If this session already has the Colab GPU MCP tools (`doctor`, `auth_login`, `up
 ## 5. Hygiene
 
 - Run `down [--session N | --all] --json` as soon as GPU work is finished so the runtime is unassigned (`DELETE /v1beta/runtimes/<id>`) and stops burning compute units.
+- Release the runtimes you started, by name (`down --session <name>`). A runtime another machine is using right now is not released (`reason: "in-use-elsewhere"`, with `inUseBy`): tell the user who is using it and pass `--force` only when they say so.
+- Jobs run detached on the runtime with their record and full output under `/content/orca/.orca-colab/tasks/`, so a job keeps running when this machine or session ends and `job ls` / `job logs` / `job stop` work from any machine signed in to the account.
 
 ## 6. Failure table
 
@@ -63,4 +65,5 @@ If this session already has the Colab GPU MCP tools (`doctor`, `auth_login`, `up
 | `run` / `sync` / `pull` fails with a WebSocket or HTTP error | Colab runtime died or was recycled | Run `status --json`; offer `down` + `up` and re-`sync`. |
 | A session is missing from `status` | It ended: released with `down`, stopped by the idle auto-stop, or ended on Colab's side | Read `recentlyEnded` in `status --json` (`endedAt`, `cause`, `reason`) and tell the user which; `up` again and re-`sync` if work remains. |
 | A forwarded request answers `502` with `error: "session_gone"` / `"port_unreachable"`, or `504` `"forward_timeout"` | The runtime was released / nothing listens on that port on the runtime / the service took longer than `--timeout` | `up` again, start the service and restart `forward` / start the service on the runtime / raise `--timeout`. |
+| `down` exits `1` with `reason: "in-use-elsewhere"` | Another machine has a job or command running on that runtime (`inUseBy`) | Leave it, or ask the user before `down --session <name> --force`. |
 | `down` exits `4` (`reason: "api-delete-failed"`) | The Colab API refused to delete the runtime (sign-in expired, network) | Ask the user to `auth login` and retry `down`, or delete the runtime at colab.research.google.com (`Runtime → Disconnect and delete runtime`). |

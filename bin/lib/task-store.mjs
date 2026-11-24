@@ -140,6 +140,7 @@ export function normalizeTask(input, homeDir = os.homedir()) {
           runtimeLogOffset:
             Number.isInteger(input.runtimeLogOffset) && input.runtimeLogOffset > 0 ? input.runtimeLogOffset : 0,
           logComplete: Boolean(input.logComplete),
+          ...(Number.isInteger(input.localLogBytes) && input.localLogBytes >= 0 ? { localLogBytes: input.localLogBytes } : {}),
         }
       : {}),
     ...(normalizeSessionOrigin(input.origin) ? { origin: normalizeSessionOrigin(input.origin) } : {}),

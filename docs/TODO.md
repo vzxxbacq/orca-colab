@@ -62,9 +62,16 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
 - [x] **M2.2 Task Manager (`job` CLI).** `bin/lib/task-store.mjs` and `bin/commands/job.mjs` (`job submit`, `job ls`, `job logs`, `job stop`) storing task state in `~/.orca-colab/tasks/<id>.json` and streaming live output to `~/.orca-colab/tasks/<id>.log`. — Done: implemented foreground/detached task submission, live log streaming, and remote process termination (`test/task-manager.test.mjs`).
 - [x] **M2.3 Orca Plugin + Enhanced Task & Output Panel.** `orca-plugin.json` per DESIGN, `worker/main.mjs` (sessions + tasks + live task output streaming + ledger watch, status bar text and tone, `colab.up`/`colab.down`, idle watchdog), `panel/index.html` with GPU runtime control, Task Manager, Live Task Output Console, and Credit stewardship. `orca plugin validate .` → 0. — Done: implemented `orca-plugin.json`, `worker/main.mjs`, and `panel/index.html`; verified `orca plugin validate .` exits 0.
 - [x] **M2.4 Idle watchdog (D14) & Budget alerts.** Worker reads `lastActivityAt`/`activePids` and running tasks, samples GPU utilisation over SSH every 5 min, requires three consecutive <5 % samples **and** no activity/live pid for `autoStopIdleMinutes`, then notify → 5-min grace → `down`; `up --keep` exemption; budget alerts at 80 % / 100 %. Test the decision function with hardcoded sample sequences. — Done: implemented `bin/lib/idle-watchdog.mjs` and verified 40-min single-low-sample exemption and budget alerts (`test/idle-watchdog-and-plugin.test.mjs`).
-- [x] **M2.5 Remote-host bridge (D18).** Worker drives `orca-colab watch` inside one background `Colab Bridge`
-      terminal on remote Orca servers (`bin/lib/bridge-frames.mjs`, `bin/commands/watch.mjs`,
-      `bin/lib/credential-envelope.mjs` X25519+AES-256-GCM sealed OAuth import, `test/watch-bridge.test.mjs`). — Done (`v0.2.0`–`v0.2.5`).
+- [x] ~~**M2.5 Remote-host bridge (D18).**~~ — Removed 2026-11-24 (D25): `watch`, the frame protocol, the sealed
+      OAuth import and the `Colab Bridge` terminal are gone.
+- [x] **M2.7 Account-wide runtimes without a bridge (D25).** — Done 2026-11-24: records on the runtime
+      (`bin/lib/runtime-records.mjs`), detached jobs with their log there (`bin/lib/runtime-jobs.mjs`),
+      discovery of the account's runtimes (`bin/lib/account-runtimes.mjs`), idle rule and `down` guard from
+      those records, panel shell over the runtime proxy (`bin/lib/runtime-shell.mjs`),
+      `test/runtime-records.test.mjs`; verified on a CPU runtime with two homes on one account.
+- [ ] **Account-level guardrails and budget.** Today per machine (the panel says so). Candidate storage:
+      Google Drive `appDataFolder` (scope `drive.appdata`, non-sensitive; every existing user must sign in
+      again, and may leave the box unticked). Needs the owner's decision before any scope change.
 - [x] **M2.6 Community catalog review fixes (`v0.3.0`, issue #2).** Own Desktop OAuth client (`orca-colab-community`)
       with non-spoofed `User-Agent`, public Colab + `/tun/m/ccu-info` endpoints (`docs/colab-internal-endpoints.md`),
       Tailscale/SSH/notebook paths dropped (D19, D20), opt-in skill install & removal in the panel, personal Headscale preset removed, `npx` commands pinned to full commit SHA, and

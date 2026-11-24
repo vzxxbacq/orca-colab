@@ -486,7 +486,7 @@ export async function run(
 
   // Jobs submitted from other machines live on the runtimes; bring this machine's copy up to date first.
   const refreshFromRuntimes = async (sessionName = null) => {
-    await discoverAccountRuntimes({ homeDir: effectiveHomeDir, fetchImpl }).catch(() => {});
+    await discoverAccountRuntimes({ homeDir: effectiveHomeDir, env, fetchImpl }).catch(() => {});
     await mirrorAllRuntimeTasks({ homeDir: effectiveHomeDir, fetchImpl, sessionName });
   };
 
