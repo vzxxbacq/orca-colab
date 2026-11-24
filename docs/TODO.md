@@ -109,6 +109,14 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
       in use (commands over 10 s, the worker and the MCP server), `status` / the panel show it, and a session Colab
       ended says after how long and whether a client was connected. The forwarding helper is restarted only after two
       failed checks and never doubled. Cause not proven on CPU: see `docs/colab-internal-endpoints.md` § 6.
+- [x] **`forward` under heavy runtime I/O.** — Done 2026-11-24 (`v0.4.4`): during a 130 GB download (16 workers) on a
+      G4 runtime a forward logged seven helper restarts and answered `forward_failed` with a missing file under its
+      directory. Cause: keep-alives did not get through Jupyter for over 3 minutes, so the helper took the listener
+      for gone, removed its directory and exited (hence 404, not a timeout, for its heartbeat); the keep-alive
+      checks that had piled up meanwhile then each started a helper at the same moment, and helpers sharing one
+      directory removed each other's response files. Now a helper is started only when the runtime says the old
+      process is gone, one check at a time, the helper locks its directory and keeps it while a request runs, and
+      requests in flight over a restart are run again once (DESIGN D24).
 - [x] **A runtime adopted while `up` is still writing its session.** — Done 2026-11-24 (`v0.4.3`): discovery skips a
       recordless runtime while an `up` here holds `assign.lock`, removes an adopted record whose runtime has a
       session of its own (ledger end at its start), and `up` counts each runtime once. Was: seen 2026-11-24: the panel's discovery listed

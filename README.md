@@ -239,6 +239,11 @@ FAQ on runtimes ended by Colab).
 - **Errors from the forward itself** are JSON with status 502 or 504: `session_gone` (the runtime was
   released: `up` again, start the service, restart the forward), `port_unreachable` (nothing listens on that
   port on the runtime), `forward_timeout`.
+- **A busy runtime**: while the runtime downloads or writes a lot (a large model download, for example), its
+  Jupyter server answers slowly, so forwarded requests take longer. The forward waits: it starts its helper
+  again only when the runtime says the helper's process is gone, and a request that was under way then is
+  run once more instead of failing. A request your service must not receive twice should carry its own
+  idempotency key.
 - It binds to `127.0.0.1` unless `--listen` says otherwise. To publish the service, run your tunnel or
   reverse proxy on your own machine in front of the forward, not on the Colab runtime.
 

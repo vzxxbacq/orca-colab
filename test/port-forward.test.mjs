@@ -67,7 +67,9 @@ async function startService(t) {
 function fakeRuntime(t, { homeDir, sessionName = "orca-colab-fwd" }) {
   const disk = tmpDir(t);
   const local = (remote) => path.join(disk, ...decodeURIComponent(remote).split("/").filter(Boolean));
-  const state = { validToken: "proxy-1", runtimeExists: true, uploadsRefused: 0, helpers: [] };
+  // `beat`: what a read of the helper's heartbeat file answers instead of the truth ("missing", "stale").
+  const state = { validToken: "proxy-1", runtimeExists: true, uploadsRefused: 0, helpers: [], probes: 0, beat: null, root: null };
+  const running = (helper) => Boolean(helper) && helper.exitCode === null && helper.signalCode === null;
   writeSession(
     { name: sessionName, createdAt: "2026-11-23T10:00:00.000Z", colabRuntime: { id: "r-1", endpoint: "r-1", baseUrl: BASE, token: "proxy-1" } },
     homeDir,
@@ -90,28 +92,46 @@ function fakeRuntime(t, { homeDir, sessionName = "orca-colab-fwd" }) {
       if (init.method === "PUT") state.uploadsRefused += 1;
       return answer(404);
     }
+    if (pathname.endsWith("/beat") && state.beat === "missing") return answer(404);
     if (pathname.startsWith("/api/contents/")) {
       const file = local(pathname.slice("/api/contents".length));
       if (init.method === "PUT") {
         const model = JSON.parse(init.body);
         const data = Buffer.from(model.content, model.format === "base64" ? "base64" : "utf8");
-        mkdirSync(path.dirname(file), { recursive: true });
+        // Jupyter does not create directories for a file it saves.
+        if (!existsSync(path.dirname(file))) return answer(500, '{"message":"Unexpected error while saving file"}');
         if (model.chunk && model.chunk !== 1) appendFileSync(file, data);
         else writeFileSync(file, data);
         return answer(201, "{}");
       }
-      return existsSync(file) ? answer(200, JSON.stringify({ last_modified: statSync(file).mtime.toISOString() })) : answer(404);
+      if (!existsSync(file)) return answer(404);
+      const date = new Date(Date.now() + (state.beat === "stale" && pathname.endsWith("/beat") ? 120_000 : 0)).toUTCString();
+      return new Response(JSON.stringify({ last_modified: statSync(file).mtime.toISOString() }), { status: 200, headers: { date } });
     }
     const file = local(pathname.slice("/files".length));
     return existsSync(file) ? answer(200, readFileSync(file)) : answer(404);
   };
   const execTty = async ({ command, stdinBase64 }) => {
+    const previous = state.helpers.at(-1);
+    if (command.includes("orca-helper:")) {
+      state.probes += 1;
+      mkdirSync(state.root, { recursive: true });
+      return { ok: true, exitCode: 0, stdout: `orca-helper:${running(previous) ? "alive" : "dead"}\n` };
+    }
     const [, root, port, timeout] = command.match(/helper\.py (\S+) (\d+) (\d+)/);
-    mkdirSync(local(root), { recursive: true });
+    state.root = local(root);
+    mkdirSync(state.root, { recursive: true });
     writeFileSync(local(`${root}/helper.py`), Buffer.from(stdinBase64, "base64"));
-    const helper = spawn(python, [local(`${root}/helper.py`), local(root), port, timeout], { stdio: "ignore" });
+    if (running(previous)) {
+      await new Promise((resolve) => previous.once("exit", resolve).kill("SIGKILL"));
+    }
+    rmSync(local(`${root}/beat`), { force: true });
+    const helper = spawn(python, [local(`${root}/helper.py`), state.root, port, timeout], { stdio: "ignore" });
     state.helpers.push(helper);
     t.after(() => helper.kill());
+    while (!existsSync(local(`${root}/beat`))) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     return { ok: true, exitCode: 0, stdout: "" };
   };
   return { state, fetchImpl, execTty, sessionName };
@@ -257,16 +277,19 @@ test("a running forward is recorded in the session for status and the idle watch
   await assert.rejects(runForward([], { json: true, ...io, homeDir }), /usage: orca-colab forward --port/);
 });
 
-test("the forwarding helper is restarted only after two bad heartbeat checks in a row, and the old one is ended first", async (t) => {
+test("a heartbeat that is missing, late or refused starts a new helper only once the runtime says the old one's process is gone", async (t) => {
   const homeDir = tmpDir(t);
   writeSession(
     { name: "orca-colab-fwd", createdAt: "2026-11-23T10:00:00.000Z", colabRuntime: { id: "r-1", endpoint: "r-1", baseUrl: BASE, token: "proxy-1" } },
     homeDir,
   );
-  // What the runtime answers for the helper's heartbeat file, one entry per check.
-  const beats = ["fresh", "refused", "fresh", "stale", "missing", "fresh"];
+  // What the runtime answers for the helper's heartbeat file, one entry per check, and what it says
+  // about the helper's process, one entry per question.
+  const beats = ["fresh", "missing", "timeout", "missing", "fresh", "stale", "missing", "fresh"];
+  const processes = ["alive", "alive", "dead"];
   const checked = [];
-  const commands = [];
+  const starts = [];
+  const asked = [];
   const logs = [];
   const fetchImpl = async (url, init = {}) => {
     const u = new URL(url);
@@ -277,7 +300,7 @@ test("the forwarding helper is restarted only after two bad heartbeat checks in 
       const answer = beats.shift() ?? "fresh";
       checked.push(answer);
       const date = "Mon, 23 Nov 2026 10:10:00 GMT";
-      if (answer === "refused") return new Response("{}", { status: 404, headers: { date } });
+      if (answer === "timeout") throw Object.assign(new Error("timed out"), { name: "TimeoutError" });
       if (answer === "missing") return new Response("{}", { status: 404, headers: { date } });
       return new Response(JSON.stringify({ last_modified: answer === "fresh" ? "2026-11-23T10:09:55.000Z" : "2026-11-23T10:08:00.000Z" }), { status: 200, headers: { date } });
     }
@@ -295,18 +318,83 @@ test("the forwarding helper is restarted only after two bad heartbeat checks in 
     homeDir,
     fetchImpl,
     execTty: async ({ command }) => {
-      commands.push(command);
+      if (command.includes("orca-helper:")) {
+        asked.push(checked.length);
+        return { ok: true, exitCode: 0, stdout: `orca-helper:${processes.shift()}\n` };
+      }
+      starts.push(checked.length);
       return { ok: true, exitCode: 0, stdout: "" };
     },
     onLog: (line) => logs.push(line),
     keepAliveMs: 5,
   });
   t.after(() => forward.close());
-  while (checked.length < 6) {
+  while (checked.length < 8) {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 
-  assert.equal(commands.length, 2);
-  assert.equal(commands[1].includes(`test -e ${forward.root}/pid && kill "$(cat ${forward.root}/pid)"`), true);
-  assert.deepEqual(logs, ["forwarding helper on the runtime is not running (HTTP 404 for its heartbeat file); starting it again"]);
+  // Asked after the 3rd, 4th and 7th check; started before the 1st and after the 7th.
+  assert.deepEqual([asked, starts], [[3, 4, 7], [0, 7]]);
+  assert.deepEqual(logs, [
+    "the runtime answers slowly (no answer for its heartbeat file); the forwarding helper is still running there and is left alone",
+    "forwarding helper on the runtime is not running (HTTP 404 for its heartbeat file); starting it again",
+  ]);
+});
+
+test("requests in flight outlive unreadable heartbeats, and are run again when the helper or its directory is lost", { skip: !python }, async (t) => {
+  const hits = {};
+  const held = {};
+  const service = http.createServer((req, res) => {
+    const key = req.url.slice(1);
+    hits[key] = (hits[key] ?? 0) + 1;
+    (held[key] ??= []).push(res);
+  });
+  await new Promise((resolve) => service.listen(0, "127.0.0.1", resolve));
+  t.after(() => service.close());
+  const release = (key) => held[key].forEach((res) => res.end(`answer to ${key}`));
+  const until = async (condition) => {
+    while (!condition()) await new Promise((resolve) => setTimeout(resolve, 10));
+  };
+  const { url, runtime } = await forwardTo(t, service.address().port, { keepAliveMs: 20 });
+  const { state } = runtime;
+  const killHelper = () => new Promise((resolve) => state.helpers.at(-1).once("exit", resolve).kill("SIGKILL"));
+  const answerTo = async (pending) => {
+    const res = await pending;
+    return [res.status, await res.text()];
+  };
+
+  const first = fetch(`${url}/a`);
+  await until(() => hits.a === 1);
+  state.beat = "missing";
+  await until(() => state.probes >= 2);
+  assert.equal(state.helpers.length, 1);
+  state.beat = null;
+  release("a");
+  assert.deepEqual(await answerTo(first), [200, "answer to a"]);
+
+  const second = fetch(`${url}/b`);
+  await until(() => hits.b === 1);
+  await killHelper();
+  state.beat = "stale";
+  await until(() => state.helpers.length === 2);
+  state.beat = null;
+  await until(() => hits.b === 2);
+  release("b");
+  assert.deepEqual(await answerTo(second), [200, "answer to b"]);
+
+  const third = fetch(`${url}/c`);
+  await until(() => hits.c === 1);
+  await killHelper();
+  rmSync(state.root, { recursive: true, force: true });
+  await until(() => hits.c === 2);
+  release("c");
+  assert.deepEqual(await answerTo(third), [200, "answer to c"]);
+
+  await killHelper();
+  rmSync(state.root, { recursive: true, force: true });
+  const fourth = fetch(`${url}/d`);
+  await until(() => hits.d === 1);
+  release("d");
+  assert.deepEqual(await answerTo(fourth), [200, "answer to d"]);
+  assert.deepEqual([hits, state.helpers.length], [{ a: 1, b: 2, c: 2, d: 1 }, 4]);
 });
