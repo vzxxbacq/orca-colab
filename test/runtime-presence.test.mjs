@@ -7,7 +7,7 @@ import { resolveOAuthClientConfig, saveOAuthCredentials } from "../bin/lib/colab
 import { holdRuntimePresence, presenceOf, RuntimePresenceKeeper, sessionNeedsPresence } from "../bin/lib/runtime-presence.mjs";
 import { withSessionActivity } from "../bin/lib/session-activity.mjs";
 import { readSession, writeSession } from "../bin/lib/session-store.mjs";
-import { createFakeRuntime } from "./fake-colab-runtime.mjs";
+import { createFakeRuntime, STATE_DIR } from "./fake-colab-runtime.mjs";
 
 const BASE = "https://8080-m.colab.dev";
 
@@ -42,17 +42,20 @@ async function until(check, what) {
 }
 
 const hold = (runtime, homeDir, extra = {}) =>
-  holdRuntimePresence({ sessionName: "orca-colab-train", homeDir, fetchImpl: runtime.fetchImpl, WebSocketImpl: runtime.FakeWebSocket, retryMs: [5], ...extra });
+  holdRuntimePresence({ sessionName: "orca-colab-train", homeDir, fetchImpl: runtime.fetchImpl, WebSocketImpl: runtime.FakeWebSocket, retryMs: [5], beatMs: 10, ...extra });
 
 test("a held presence is a websocket on one kernel that every machine shares, removed with the last machine", async (t) => {
   const runtime = createFakeRuntime({ colabRuntimeId: "r-7" });
   const homeA = machine(t);
   const homeB = machine(t);
 
-  const a = hold(runtime, homeA, { nowMs: () => Date.parse("2026-11-24T08:30:00.000Z") });
-  await until(() => a.state().connected, "machine A to connect");
-  const b = hold(runtime, homeB);
-  await until(() => b.state().connected, "machine B to connect");
+  const a = hold(runtime, homeA, { nowMs: () => Date.parse("2026-11-24T08:30:00.000Z"), env: { ORCA_COLAB_MACHINE: "machine-A" } });
+  await until(() => readSession("orca-colab-train", homeA).lastPresenceAt, "machine A to connect");
+  const b = hold(runtime, homeB, { env: { ORCA_COLAB_MACHINE: "machine-B" } });
+  await until(() => readSession("orca-colab-train", homeB).lastPresenceAt, "machine B to connect");
+  const leases = [...runtime.files.keys()].filter((f) => f.startsWith(`${STATE_DIR}/presence/`)).map((f) => f.slice(`${STATE_DIR}/presence/`.length).replace(/-\d+-[0-9a-f]{8}\.json$/, ""));
+  assert.deepEqual(leases.sort(), ["machine-A", "machine-B"]);
+  assert.equal(runtime.sockets[0].sent[0].header.msg_type, "kernel_info_request");
 
   assert.deepEqual([...runtime.kernels.values()], [{ id: "kernel-1", sessionId: "session-1", path: "orca-colab-presence", connections: 2 }]);
   assert.equal(runtime.sockets[0].url.split("?")[0], "wss://8080-m.colab.dev/api/kernels/kernel-1/channels");
@@ -67,8 +70,9 @@ test("a held presence is a websocket on one kernel that every machine shares, re
     lastAt: "2026-11-24T08:30:00.000Z",
   });
 
+  // Colab's proxy does not tell Jupyter that a client left, so the count is no guide: the leases are.
   await a.close();
-  assert.equal(runtime.kernels.get("kernel-1").connections, 1);
+  assert.equal(runtime.kernels.size, 1);
   await b.close();
   assert.equal(runtime.kernels.size, 0);
 });
@@ -87,12 +91,17 @@ test("a dropped presence reconnects with a fresh proxy token, and stops for good
   assert.equal(runtime.sockets[1].headers["X-Colab-Runtime-Proxy-Token"], "proxy-tok-2");
   assert.equal(readSession("orca-colab-train", home).colabRuntime.token, "proxy-tok-2");
 
+  // Another holder removed the kernel on leaving; the proxy leaves this websocket looking open.
+  runtime.kernels.clear();
+  await until(() => runtime.kernels.size === 1 && runtime.sockets.length === 3 && holder.state().connected, "a new kernel");
+  assert.deepEqual([...runtime.kernels.keys()], ["kernel-2"]);
+
   runtime.reclaim();
   await until(() => holder.state().gone, "the holder to give up");
   const attempts = runtime.sockets.length;
   await new Promise((resolve) => setTimeout(resolve, 40));
   assert.equal(runtime.sockets.length, attempts);
-  assert.deepEqual(states, ["connected", "lost", "connected", "lost", "gone"]);
+  assert.deepEqual(states, ["connected", "lost", "connected", "lost", "connected", "lost", "gone"]);
 });
 
 test("a machine stays connected for kept, busy and recently used sessions only, and never for a runtime without a record", () => {

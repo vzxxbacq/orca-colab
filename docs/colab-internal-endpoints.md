@@ -254,8 +254,30 @@ machine using it holds the connection a notebook front end holds.
 - `wss://<runtime>/api/kernels/<kernel id>/channels?session_id=<uuid>` with the proxy token header, held
   open; `/api/status` then shows `connections: 1, kernels: 1`. A `kernel_info_request` on the shell channel
   every 4 minutes keeps the kernel's `last_activity` recent. Nothing is executed on the kernel.
-- On leaving: the websocket is closed, and when `GET /api/kernels/<id>` then shows `connections: 0` the
-  session is deleted (`DELETE /api/sessions/<id>`), so a runtime nobody uses looks as it did before.
+- **The proxy passes on neither side's close of a websocket** (verified on a CPU runtime): after a client
+  closed (close code 1006 on its side) or its process ended, Jupyter went on reporting `connections: 1`
+  for minutes, and a client whose kernel was deleted stayed in `readyState` 1. So `connections` cannot
+  tell who is there. Each holder writes a lease file `presence/<machine>-<pid>-<id>.json` under
+  `/content/orca/.orca-colab/` every minute and asks `GET /api/kernels/<id>` in the same round (404 =
+  reconnect on a new kernel).
+- On leaving: the holder deletes its lease and, when no other lease is younger than 150 s on the
+  runtime's clock, the session (`DELETE /api/sessions/<id>`, which ends the kernel and with it every
+  connection Jupyter still counts), so a runtime nobody uses looks as it did before. A holder that was
+  killed leaves the kernel behind until the next holder leaves.
+
+**Reproduction on CPU, same day** (account and client as in the incidents, one runtime each, both
+`up --keep`, each with a detached job burning CPU):
+
+| Runtime | Setup | Result |
+|---|---|---|
+| control | no kernel; a job, and `forward` with one request every 20 s (the third incident's setup) | still assigned after 55 min, then released by hand; the forward never logged a helper restart |
+| candidate | one idle kernel with an open websocket, nothing executed, no nudge | still assigned after 59 min, then released by hand (its websocket had dropped at 59 min in a network outage on the client's side) |
+
+So the 20 to 40 minute reclaim did **not** reproduce on CPU runtimes within an hour, with or without a
+kernel: it is either specific to GPU runtimes (all three incidents were G4) or needs more than an hour on
+CPU. Whether the connected kernel prevents it on a GPU is not verified here; the shipped code was checked
+live only for its mechanics (one shared kernel, `connections` 2 with a job follower and a forward, leases
+written, kernel deleted when both ended).
 
 **No reason is given.** After a runtime is gone, `GET /v1beta/runtimes/<id>` answers 404 and the list simply
 omits it; orca-colab records what it knows itself (how long the runtime lived and whether one of its

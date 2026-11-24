@@ -326,7 +326,7 @@ export async function run(
   }
 
   try {
-    const currentActiveSessions = listSessions(homeDir).filter(
+    const currentActiveSessions = distinctRuntimeSessions(listSessions(homeDir)).filter(
       (s) => s?.state !== "zombie" && (s?.account || "default") === account.label,
     );
     if (

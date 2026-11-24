@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import os from "node:os";
 import { COLAB_HEADERS, COLAB_PROXY_TOKEN_HEADER } from "./colab-api-client.mjs";
 import { SessionGoneError, createRuntimeChannel } from "./runtime-channel.mjs";
+import { deleteRuntimeFile, listRuntimeDir, machineName, PRESENCE_DIR, writeRuntimeFile } from "./runtime-records.mjs";
 import { listSessions, readSession, writeSession } from "./session-store.mjs";
 import { isProcessAlive } from "./task-store.mjs";
 
@@ -11,9 +12,15 @@ import { isProcessAlive } from "./task-store.mjs";
 // (docs/colab-internal-endpoints.md § 6). So while a runtime is in use, the machine using it holds the
 // connection a notebook front end holds: a websocket on the channels of a kernel, kept for that purpose
 // and shared by every machine (the Jupyter session with this path); nothing is ever executed on it.
+//
+// Colab's proxy passes on neither side's close of a websocket (verified 2026-11-24: Jupyter went on
+// counting a client that had left, and a client stayed "open" after its kernel was deleted). So a
+// holder asks every minute whether its kernel still exists, and who is still there is told by lease
+// files under presence/ on the runtime, one per holder, rewritten every minute: the last holder to
+// leave deletes the kernel.
 export const PRESENCE_SESSION_PATH = "orca-colab-presence";
 export const PRESENCE_FRESH_MS = 150_000;
-const STAMP_EVERY_MS = 60_000;
+const BEAT_EVERY_MS = 60_000;
 // Colab's VS Code client counted a kernel as in use for an hour after its last message; this keeps
 // the kernel's last activity recent without running anything.
 const NUDGE_EVERY_MS = 4 * 60_000;
@@ -44,9 +51,13 @@ export function holdRuntimePresence({
   nowMs = () => Date.now(),
   onState = () => {},
   retryMs = RETRY_MS,
+  beatMs = BEAT_EVERY_MS,
+  env = process.env,
 } = {}) {
   const channel = createRuntimeChannel({ sessionName, homeDir, fetchImpl });
   const clientId = randomUUID();
+  const lease = `${PRESENCE_DIR}/${machineName(env).replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 60)}-${process.pid}-${clientId.slice(0, 8)}.json`;
+  const base = () => String(channel.baseUrl()).replace(/\/+$/, "");
   const state = { connected: false, gone: false, error: null };
   let closed = false;
   let attempt = 0;
@@ -71,28 +82,43 @@ export function holdRuntimePresence({
     retryTimer.unref?.();
   }
 
-  function beat() {
-    if (closed || !state.connected) return;
+  function nudge() {
+    lastNudgeMs = nowMs();
     try {
-      stampPresence(sessionName, homeDir, nowMs());
+      ws.send(
+        JSON.stringify({
+          header: { msg_id: randomUUID(), username: "orca-colab", session: clientId, msg_type: "kernel_info_request", version: "5.3", date: new Date(nowMs()).toISOString() },
+          parent_header: {},
+          metadata: {},
+          content: {},
+          channel: "shell",
+        }),
+      );
     } catch {
-      // The session file is being replaced; the next beat writes it.
+      // The next beat finds the connection gone and reconnects.
     }
-    if (nowMs() - lastNudgeMs >= NUDGE_EVERY_MS) {
-      lastNudgeMs = nowMs();
-      try {
-        ws.send(
-          JSON.stringify({
-            header: { msg_id: randomUUID(), username: "orca-colab", session: clientId, msg_type: "kernel_info_request", version: "5.3", date: new Date(nowMs()).toISOString() },
-            parent_header: {},
-            metadata: {},
-            content: {},
-            channel: "shell",
-          }),
-        );
-      } catch {
-        // The close event that follows reconnects.
+  }
+
+  // Once a minute: the lease other holders read, the stamp `status` reads, and whether the kernel is
+  // still there (another holder may have removed it on leaving, and the proxy would not say).
+  async function beat(socket) {
+    if (closed || ws !== socket || !state.connected) return;
+    try {
+      await writeRuntimeFile(channel, lease, `${JSON.stringify({ machine: machineName(env), pid: process.pid, at: new Date(nowMs()).toISOString() })}\n`);
+      const res = await channel.fetch(`${base()}/api/kernels/${encodeURIComponent(kernel.id)}`, { timeoutMs: 8_000 });
+      await res.arrayBuffer().catch(() => {});
+      if (closed || ws !== socket) return;
+      if (res.status === 404) {
+        socket.lost("the kernel of the keep-alive connection is gone");
+        return;
       }
+      stampPresence(sessionName, homeDir, nowMs());
+      if (nowMs() - lastNudgeMs >= NUDGE_EVERY_MS) nudge();
+    } catch (err) {
+      if (err instanceof SessionGoneError) {
+        socket.lost(err.message);
+      }
+      // Anything else is a request that did not get through; the next beat asks again.
     }
   }
 
@@ -101,10 +127,9 @@ export function holdRuntimePresence({
     try {
       // The proxy answers an expired token with 404, like a missing page; only a refresh tells them apart.
       if (refresh) await channel.refreshToken();
-      const base = String(channel.baseUrl()).replace(/\/+$/, "");
       // Jupyter answers with the existing session when one has this path, so every machine shares it.
       const res = await channel.fetch(
-        `${base}/api/sessions`,
+        `${base()}/api/sessions`,
         json({ method: "POST", body: JSON.stringify({ path: PRESENCE_SESSION_PATH, name: "orca-colab", type: "console", kernel: { name: "python3" } }) }),
       );
       const body = res.ok ? await res.json() : await res.arrayBuffer().then(() => null);
@@ -113,7 +138,7 @@ export function holdRuntimePresence({
       }
       if (closed) return;
       kernel = { id: body.kernel.id, sessionId: body.id };
-      const url = new URL(`${base}/api/kernels/${encodeURIComponent(kernel.id)}/channels`);
+      const url = new URL(`${base()}/api/kernels/${encodeURIComponent(kernel.id)}/channels`);
       url.searchParams.set("session_id", clientId);
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
       const socket = new WebSocketImpl(url.toString(), {
@@ -126,20 +151,26 @@ export function holdRuntimePresence({
         ended = true;
         clearInterval(beatTimer);
         if (ws === socket) ws = null;
+        try {
+          socket.close();
+        } catch {
+          // Already closed.
+        }
         if (closed) return;
         report({ connected: false, error });
         retryLater();
       };
+      socket.lost = end;
       socket.addEventListener("open", () => {
         if (closed) {
           socket.close();
           return;
         }
         attempt = 0;
-        lastNudgeMs = nowMs();
         report({ connected: true, error: null });
-        beat();
-        beatTimer = setInterval(beat, STAMP_EVERY_MS);
+        nudge();
+        void beat(socket);
+        beatTimer = setInterval(() => void beat(socket), beatMs);
         beatTimer.unref?.();
       });
       socket.addEventListener("message", () => {});
@@ -159,32 +190,26 @@ export function holdRuntimePresence({
 
   return {
     state: () => ({ ...state }),
-    // Leaves the kernel to the machines still connected to it and removes it with the last one, so a
+    // Leaves the kernel to the holders whose lease is fresh and removes it with the last one, so a
     // runtime nobody uses looks to Colab exactly as it did before.
     async close() {
       if (closed) return;
       closed = true;
       clearTimeout(retryTimer);
       clearInterval(beatTimer);
-      const wasConnected = state.connected;
       try {
         ws?.close();
       } catch {
         // Already closed.
       }
-      if (!kernel || !wasConnected) return;
+      if (!kernel) return;
       try {
-        const base = String(channel.baseUrl()).replace(/\/+$/, "");
-        for (let i = 0; i < 3; i += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 200));
-          const res = await channel.fetch(`${base}/api/kernels/${encodeURIComponent(kernel.id)}`, { timeoutMs: 4_000 });
-          const info = res.ok ? await res.json() : await res.arrayBuffer().then(() => null);
-          if (!info) return;
-          if (info.connections === 0) {
-            const gone = await channel.fetch(`${base}/api/sessions/${encodeURIComponent(kernel.sessionId)}`, { method: "DELETE", timeoutMs: 4_000 });
-            await gone.arrayBuffer().catch(() => {});
-            return;
-          }
+        await deleteRuntimeFile(channel, lease);
+        const listing = await listRuntimeDir(channel, PRESENCE_DIR);
+        const others = (listing?.entries || []).filter((e) => e.type === "file" && listing.serverNowMs - e.lastModifiedMs < PRESENCE_FRESH_MS);
+        if (others.length === 0) {
+          const gone = await channel.fetch(`${base()}/api/sessions/${encodeURIComponent(kernel.sessionId)}`, { method: "DELETE", timeoutMs: 4_000 });
+          await gone.arrayBuffer().catch(() => {});
         }
       } catch {
         // The runtime is gone or unreachable; there is nothing left to tidy up.
