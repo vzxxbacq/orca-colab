@@ -253,13 +253,18 @@ class AccountDashboard {
     const runningCount = listTasks(this.homeDir).filter(
       (t) => t.sessionName === session.name && t.status === "running",
     ).length;
+    // Without a fresh read of the runtime's records nobody knows whether another machine is on it.
+    const usage = this.builder.runtimeUsage(session.name);
+    if (session.colabRuntime?.baseUrl && (!usage || Date.now() - usage.readAt > 3 * 60_000)) {
+      return { isIdle: false, reason: "runtime-records-unread", consecutiveLowSamples: 0, idleMinutes: 0 };
+    }
     return evaluateSessionIdleState({
       session,
       gpuSamples: this.builder.gpuUtilSamplesBySession.get(session.name) || [],
       runningTasksCount: runningCount,
       autoStopIdleMinutes,
       nowMs: Date.now(),
-      runtimeUsage: this.builder.runtimeUsage(session.name),
+      runtimeUsage: usage,
     });
   }
 
@@ -511,10 +516,10 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
       const res = await dashboard.call("stopSession", {});
       await finish();
       await notifyUser(
-        res?.code === "IN_USE_ELSEWHERE"
-          ? `Colab session ${res.session} is in use from another machine; stop it from the panel if you mean to.`
+        res?.ok === false
+          ? `Colab session ${res.session} was not released: it is in use from another machine, or that could not be checked. Stop it from the panel if you mean to.`
           : "Colab runtime released.",
-        res?.code === "IN_USE_ELSEWHERE" ? "warning" : "info",
+        res?.ok === false ? "warning" : "info",
       );
     } catch (err) {
       await notifyUser(`Colab runtime was not released: ${err?.message || err}`, "error");

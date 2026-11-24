@@ -325,7 +325,7 @@ const TOOL_SPECS = [
     name: "down",
     title: "Release a Colab runtime",
     description:
-      "Deletes the runtime at Colab so it stops billing, and removes the session. Call it as soon as the GPU work is finished and the results are pulled. Succeeds when the runtime is already gone. reason \"api-delete-failed\" means it may still be running: sign in with auth_login and call down again, or have the owner delete it at colab.research.google.com. reason \"in-use-elsewhere\" means another machine has a command or job running on it right now (inUseBy lists who): it was not released; wait, or ask the owner before passing force. Release only runtimes you started unless the owner asks.",
+      "Deletes the runtime at Colab so it stops billing, and removes the session. Call it as soon as the GPU work is finished and the results are pulled. Succeeds when the runtime is already gone. reason \"api-delete-failed\" means it may still be running: sign in with auth_login and call down again, or have the owner delete it at colab.research.google.com. reason \"in-use-elsewhere\" means another machine has a command or job running on it right now (inUseBy lists who): it was not released; wait, or ask the owner before passing force. reason \"use-unknown\" means the runtime did not answer, so that could not be checked: try again, and pass force only when the owner says so. Release only runtimes you started unless the owner asks.",
     inputSchema: schema({
       session: SESSION_PROP,
       all: { type: "boolean", description: "Release every session." },

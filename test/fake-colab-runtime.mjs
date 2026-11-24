@@ -1,12 +1,13 @@
 // An in-memory stand-in for a Colab runtime's Jupyter server: the contents API, /files with ranges, and
 // an `execTty` that plays the job runner. `runJob({ id, script, record, write })` returns the exit code.
-export function createFakeRuntime({ baseUrl = "https://8080-m.colab.dev", runJob = async () => 0, exec = null } = {}) {
+export function createFakeRuntime({ baseUrl = "https://8080-m.colab.dev", runJob = async () => 0, exec = null, colabRuntimeId = null } = {}) {
   const files = new Map();
   const dirs = new Set(["/content"]);
   const requests = [];
   const launches = [];
   const jobs = [];
   let nowMs = Date.parse("2026-11-24T00:00:00.000Z");
+  const state = { unreachable: false };
 
   const json = (status, body, headers = {}) =>
     new Response(JSON.stringify(body), { status, headers: { date: new Date(nowMs).toUTCString(), ...headers } });
@@ -25,6 +26,15 @@ export function createFakeRuntime({ baseUrl = "https://8080-m.colab.dev", runJob
     const method = init.method || "GET";
     requests.push({ method, path: u.pathname, headers: init.headers || {} });
     const decoded = decodeURIComponent(u.pathname);
+    // Colab's own API: the runtime still exists and hands out its proxy token.
+    if (u.hostname === "colaboratory.googleapis.com") {
+      return colabRuntimeId && decoded === `/v1beta/runtimes/${colabRuntimeId}`
+        ? json(200, { name: `runtimes/${colabRuntimeId}`, connectionInfo: { url: baseUrl, token: "proxy-tok" } })
+        : json(404, {});
+    }
+    if (state.unreachable) {
+      throw new TypeError("fetch failed");
+    }
     if (decoded.startsWith("/api/contents/")) {
       const p = decoded.slice("/api/contents".length);
       if (method === "PUT") {
@@ -103,6 +113,7 @@ export function createFakeRuntime({ baseUrl = "https://8080-m.colab.dev", runJob
     launches,
     settle: () => Promise.all(jobs),
     advance: (ms) => (nowMs += ms),
+    setUnreachable: (value) => (state.unreachable = value),
     text: (p) => files.get(p)?.bytes.toString("utf8") ?? null,
     json: (p) => (files.has(p) ? JSON.parse(files.get(p).bytes.toString("utf8")) : null),
     write: put,

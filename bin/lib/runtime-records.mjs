@@ -28,8 +28,9 @@ export function directRuntimeChannel({ baseUrl, proxyToken, fetchImpl = fetch })
   };
 }
 
+// A runtime that stalls must cost a reader seconds, not minutes; the next poll asks again.
 function send(channel, url, init = {}) {
-  return channel.fetch(url, { ...init, signal: init.signal ?? AbortSignal.timeout(15_000) });
+  return channel.fetch(url, { ...init, signal: init.signal ?? AbortSignal.timeout(8_000) });
 }
 
 function statePath(rel) {

@@ -4,11 +4,13 @@ import { getValidAccessToken } from "./colab-oauth.mjs";
 import { readSession, writeSession } from "./session-store.mjs";
 
 export class SessionGoneError extends Error {
-  constructor(sessionName, detail) {
+  constructor(sessionName, detail, { runtimeGone = false } = {}) {
     super(
       `Colab session '${sessionName}' is gone${detail ? ` (${detail})` : ""}. Start it again with 'orca-colab up', start the service on it, and restart 'orca-colab forward'.`,
     );
     this.code = "SESSION_GONE";
+    // True only when Colab itself said the runtime no longer exists.
+    this.runtimeGone = runtimeGone;
   }
 }
 
@@ -37,12 +39,12 @@ export function createRuntimeChannel({ sessionName, homeDir = os.homedir(), fetc
         runtime = await getRuntime({ runtimeId: session.colabRuntime.id, accessToken, fetchImpl });
       } catch (err) {
         if (err?.status === 404) {
-          throw new SessionGoneError(sessionName, "Colab no longer has this runtime");
+          throw new SessionGoneError(sessionName, "Colab no longer has this runtime", { runtimeGone: true });
         }
         throw err;
       }
       if (!runtime?.connectionInfo?.token) {
-        throw new SessionGoneError(sessionName, "Colab no longer has this runtime");
+        throw new SessionGoneError(sessionName, "Colab no longer has this runtime", { runtimeGone: true });
       }
       writeSession(
         {

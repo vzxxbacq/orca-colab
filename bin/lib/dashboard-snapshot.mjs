@@ -18,7 +18,7 @@ import { evaluateSessionIdleState } from "./idle-watchdog.mjs";
 import { readRateTable } from "./rate-table.mjs";
 import { liveForwards } from "./port-forward.mjs";
 import { createRuntimeChannel } from "./runtime-channel.mjs";
-import { mirrorRuntimeTasks, mirrorTaskLog } from "./runtime-jobs.mjs";
+import { failJobsOfReleasedRuntimes, mirrorRuntimeTasks, mirrorTaskLog } from "./runtime-jobs.mjs";
 import { machineName, readRuntimeUsage } from "./runtime-records.mjs";
 import { listSessions } from "./session-store.mjs";
 import { listTasks, readTaskLog } from "./task-store.mjs";
@@ -138,6 +138,7 @@ export class DashboardSnapshotBuilder {
         for (const name of this.usageBySession.keys()) {
           if (!live.some((s) => s.name === name)) this.usageBySession.delete(name);
         }
+        failJobsOfReleasedRuntimes(homeDir);
         this.lastRuntimeSyncError = null;
       } catch (err) {
         this.lastRuntimeSyncError = err?.message || String(err);

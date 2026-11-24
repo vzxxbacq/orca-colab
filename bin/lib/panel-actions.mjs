@@ -159,8 +159,14 @@ export function createPanelActions({
       let out = "";
       await runDownCommand(args, { json: true, stdout: { write: (c) => (out += c) }, stderr: NULL_STREAM, homeDir });
       const result = JSON.parse(out || "{}");
-      if (result.reason === "in-use-elsewhere") {
-        return { ok: false, code: "IN_USE_ELSEWHERE", session: result.session, inUseBy: result.inUseBy };
+      if (result.reason === "in-use-elsewhere" || result.reason === "use-unknown") {
+        return {
+          ok: false,
+          code: result.reason === "use-unknown" ? "USE_UNKNOWN" : "IN_USE_ELSEWHERE",
+          session: result.session,
+          inUseBy: result.inUseBy,
+          error: result.error ?? null,
+        };
       }
       return {};
     },

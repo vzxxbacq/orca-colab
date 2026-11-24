@@ -2766,12 +2766,17 @@
           session: sessionName,
           ...(force ? { force: true } : {}),
         });
-        if (res?.code === "IN_USE_ELSEWHERE") {
+        if (res?.code === "IN_USE_ELSEWHERE" || res?.code === "USE_UNKNOWN") {
           const who = (res.inUseBy || [])
             .map((u) => `${u.agent && u.agent !== "cli" ? `${u.agent} on ` : ""}${u.machine} (${u.doing})`)
             .join("; ");
           pendingForceStop = { name: sessionName, until: Date.now() + 20000 };
-          showNotice(`${sessionName} is in use from another machine right now: ${who}. Press Stop again within 20 seconds to stop it anyway.`, "warn");
+          showNotice(
+            res.code === "USE_UNKNOWN"
+              ? `Could not read from ${sessionName} whether another machine is using it (${res.error || "no answer"}). Press Stop again within 20 seconds to stop it anyway.`
+              : `${sessionName} is in use from another machine right now: ${who}. Press Stop again within 20 seconds to stop it anyway.`,
+            "warn",
+          );
           renderAll(res.dashboard);
           return;
         }

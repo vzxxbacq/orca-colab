@@ -264,7 +264,8 @@ A Colab runtime belongs to a Google account, not to a computer. Every machine si
 - **A runtime in use is not stopped from elsewhere**: the idle auto-stop and `down` read the records on the
   runtime (jobs still running, commands still going, from any machine). `down` on a runtime another machine
   is using right now answers `reason: "in-use-elsewhere"` and needs `--force`; the panel asks you to press
-  Stop twice. Runtimes of unknown origin are never auto-stopped.
+  Stop twice. The same holds when the records cannot be read (`reason: "use-unknown"`): not knowing is not
+  treated as nobody. Runtimes of unknown origin are never auto-stopped.
 - **A project on a remote Orca server** needs nothing special: open the panel in the desktop app and it
   shows the account's runtimes, whichever project is focused. The panel never opens an Orca terminal; its
   **Terminal** button is a shell on the runtime, shown in the panel. (For a full-screen terminal run

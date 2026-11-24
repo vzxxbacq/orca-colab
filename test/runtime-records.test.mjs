@@ -60,8 +60,14 @@ async function upOnMachineA(homeDir, runtime, argv = ["--gpu", "T4", "--name", "
   return io.read();
 }
 
-const discoverFrom = (homeDir, runtime, runtimes) =>
-  discoverAccountRuntimes({ homeDir, fetchImpl: runtime.fetchImpl, listRuntimesFn: async () => runtimes });
+const discoverFrom = (homeDir, runtime, runtimes, at = "2026-11-24T09:00:00.000Z") =>
+  discoverAccountRuntimes({
+    homeDir,
+    env: MACHINE_B,
+    fetchImpl: runtime.fetchImpl,
+    listRuntimesFn: async () => runtimes,
+    nowMs: () => Date.parse(at),
+  });
 
 test("up writes the session record on the runtime, and another machine lists that runtime with its name and origin", async (t) => {
   const runtime = createFakeRuntime();
@@ -119,7 +125,7 @@ test("a runtime without a record shows as unknown origin, is never idle-stopped,
     "unknown-origin",
   );
 
-  const second = await discoverFrom(homeB, runtime, []);
+  const second = await discoverFrom(homeB, runtime, [], "2026-11-24T09:05:00.000Z");
   assert.deepEqual(second.dropped, [{ name: "orca-colab-r7", account: "default" }]);
   assert.deepEqual(listSessions(homeB), []);
   assert.deepEqual(
@@ -181,8 +187,8 @@ test("a job submitted on one machine is listed, read live and stopped from anoth
   assert.match(readTaskLog(id, homeB).text, /epoch 1\n\n\[task [\w-]+\] stopped by user at /);
 });
 
-test("down leaves a runtime that another machine is using and releases it with --force", async (t) => {
-  const runtime = createFakeRuntime();
+test("down leaves a runtime that another machine is using, or whose records it cannot read, and releases it with --force", async (t) => {
+  const runtime = createFakeRuntime({ colabRuntimeId: "r-7" });
   const homeA = machine(t);
   const homeB = machine(t);
   await upOnMachineA(homeA, runtime);
@@ -210,6 +216,14 @@ test("down leaves a runtime that another machine is using and releases it with -
   );
   assert.deepEqual(deleted, []);
   assert.deepEqual(await readUseByOtherMachines(channel, "machine-A"), []);
+
+  runtime.setUnreachable(true);
+  const unknown = await down(["--session", "orca-colab-train"]);
+  assert.deepEqual(
+    { code: unknown.code, released: unknown.released, reason: unknown.reason, inUseBy: unknown.inUseBy },
+    { code: 1, released: false, reason: "use-unknown", inUseBy: [] },
+  );
+  assert.deepEqual(deleted, []);
 
   const forced = await down(["--session", "orca-colab-train", "--force"]);
   assert.deepEqual({ code: forced.code, released: forced.released }, { code: 0, released: true });

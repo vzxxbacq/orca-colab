@@ -300,4 +300,16 @@ export async function mirrorAllRuntimeTasks({ homeDir = os.homedir(), fetchImpl 
       ]),
     ),
   );
+  failJobsOfReleasedRuntimes(homeDir);
+}
+
+// A job cannot outlive its runtime: once this machine has no session for it, a job still marked running
+// that no local process follows has ended with the runtime.
+export function failJobsOfReleasedRuntimes(homeDir = os.homedir(), { checkPid = isProcessAlive } = {}) {
+  const known = new Set(listSessions(homeDir).map((s) => s.name));
+  for (const task of listTasks(homeDir, { reconcile: false })) {
+    if (task.status === "running" && task.runtimeBacked && !known.has(task.sessionName) && !hasLiveFollower(task, checkPid)) {
+      writeTask({ ...task, status: "failed", exitCode: 1, finishedAt: new Date().toISOString(), localPid: null }, homeDir);
+    }
+  }
 }
