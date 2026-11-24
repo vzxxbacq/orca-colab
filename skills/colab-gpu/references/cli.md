@@ -1,6 +1,6 @@
 # `orca-colab` CLI Reference
 
-Invoke via `orca-colab <cmd> --json` or `npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/97ce739e87722b7cfd7d84838c3461501dd43f78 <cmd> --json`.
+Invoke via `orca-colab <cmd> --json` or `npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/621b5c5e58328fa5e3aa67482f8985290c8f4c3b <cmd> --json`.
 With `--json`, stdout carries exactly one JSON object and all progress/errors go to stderr with the `[colab]` prefix.
 
 Global option `--proxy <auto|off|url>` (before `--`; same as `ORCA_COLAB_PROXY`) sets the proxy for every
