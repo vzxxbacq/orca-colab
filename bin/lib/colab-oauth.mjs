@@ -545,8 +545,16 @@ export async function runLoopbackOAuthFlow({
         fetchImpl,
       });
     } catch (err) {
+      // Google's consent went through; what failed is this machine's own request for the tokens.
+      const reason = String(err?.message || err).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
       res.writeHead(500, { "Content-Type": "text/html; charset=utf-8" });
-      res.end(callbackPage("Google Colab sign-in failed", "Return to Orca for details.", "#f87171"));
+      res.end(
+        callbackPage(
+          "Google Colab sign-in failed",
+          `${reason}<br><br>Nothing was saved. Fix the cause, then press Sign in again in Orca (or run 'orca-colab auth login'); no restart is needed.`,
+          "#f87171",
+        ),
+      );
       throw err;
     }
     if (!grantedColabScope(tokens.scope)) {

@@ -9,6 +9,7 @@ import {
   logError,
   writeJson,
 } from "./lib/cli-output.mjs";
+import { installNetworkProxy, parseProxySetting } from "./lib/network-proxy.mjs";
 
 const COMMANDS = new Set([
   "doctor",
@@ -31,7 +32,7 @@ const COMMANDS = new Set([
 const HELP_TEXT = `Usage: orca-colab <command> [options]
 
 Commands:
-  doctor     Check local prerequisites (node, git, tar, Google sign-in)
+  doctor     Check local prerequisites (node, git, tar, Google sign-in, proxy); --network reaches every endpoint
   auth       Sign in with Google OAuth (Passkey supported)
   up         Start or connect to a Colab GPU runtime through the Colab API
   status     List sessions and check reachability (alias: ls)
@@ -48,36 +49,60 @@ Commands:
   mcp        Serve every command as MCP tools on stdio (connector for Orca bots, Claude Code, Codex)
 
 Global options:
-  --json     Emit a single JSON object on stdout (logs go to stderr)
+  --json          Emit a single JSON object on stdout (logs go to stderr)
+  --proxy <p>     Proxy for every request: auto (default: HTTPS_PROXY / ALL_PROXY / NO_PROXY, then the
+                  macOS or Windows system proxy), off, or a URL (http://host:port, socks5://host:port).
+                  Same as ORCA_COLAB_PROXY; overrides the panel's Network proxy setting.
   -h, --help Show this help message
 `;
 
-function splitJsonFlag(argv) {
+function splitGlobalFlags(argv) {
   const dashDash = argv.indexOf("--");
   const head = dashDash === -1 ? argv : argv.slice(0, dashDash);
   const tail = dashDash === -1 ? [] : argv.slice(dashDash);
   let json = false;
+  let proxy = null;
   const filteredHead = [];
-  for (const arg of head) {
+  for (let i = 0; i < head.length; i += 1) {
+    const arg = head[i];
     if (arg === "--json") {
       json = true;
+    } else if (arg === "--proxy") {
+      proxy = head[i + 1] ?? "";
+      i += 1;
+    } else if (arg.startsWith("--proxy=")) {
+      proxy = arg.slice("--proxy=".length);
     } else {
       filteredHead.push(arg);
     }
   }
-  return { json, args: [...filteredHead, ...tail] };
+  return { json, proxy, args: [...filteredHead, ...tail] };
 }
 
 export async function main(argv = process.argv.slice(2), overrides = {}) {
   const stdout = overrides.stdout ?? process.stdout;
   const stderr = overrides.stderr ?? process.stderr;
-  const env = overrides.env ?? process.env;
+  let env = overrides.env ?? process.env;
   const cwd = overrides.cwd ?? process.cwd();
   const homeDir = overrides.homeDir ?? os.homedir();
   const signal = overrides.signal;
 
-  const { json, args } = splitJsonFlag(argv);
+  const { json, proxy, args } = splitGlobalFlags(argv);
   const [command, ...rest] = args;
+
+  if (proxy !== null) {
+    try {
+      parseProxySetting(proxy);
+    } catch (err) {
+      logError(err.message, stderr);
+      if (json) {
+        writeJson({ ok: false, error: err.message }, stdout);
+      }
+      return EXIT_ERROR;
+    }
+    env = { ...env, ORCA_COLAB_PROXY: proxy || "auto" };
+  }
+  installNetworkProxy({ env, homeDir });
 
   if (!command || command === "-h" || command === "--help" || command === "help") {
     if (json) {

@@ -49,6 +49,7 @@ Failures
 - up with step "budget" (code "BUDGET_REACHED"): the owner's monthly budget is used up (budgetCu, estimatedMonthlyUsedCu; estimates). Do not retry and do not change the budget yourself. Tell the owner the figures; they can raise it under Guardrails & CU in the Colab GPU panel, or tell you a new number for credits_budget. A runtime that is already running stays usable.
 - up with code "PROVISIONING_IN_PROGRESS": another agent is creating a runtime. Wait retryAfterSeconds and call up again.
 - up failing at another step: Colab refused (quota, GPU not available). Read error; try another allowed GPU or wait. "no <GPU> runtime available right now" and "still allocating ... withdrawn" mean Colab has no free machine of that type: nothing was started; offer to retry in a few minutes or to use another allowed GPU.
+- Any tool failing with "Could not reach <host>": this machine's network, not Colab. The message names the cause code and the proxy in use. Call doctor with network true and relay its action; the owner sets the proxy (panel: Setup → Network proxy, or ORCA_COLAB_PROXY in the connector's environment).
 - run, sync or pull failing with a WebSocket or HTTP error: the runtime died or was recycled. Call status, then offer down, up and sync again.
 - "no Colab runtime proxy": the session comes from an old version. Call down for that session, then up.
 - down with reason "api-delete-failed": the runtime may still be running and billing. Call auth_login and down again, or ask the owner to delete it at colab.research.google.com (Runtime > Disconnect and delete runtime).`;
@@ -116,8 +117,11 @@ const TOOL_SPECS = [
     name: "doctor",
     title: "Check prerequisites and guardrails",
     description:
-      "Checks Node, git, tar and the Google sign-in, and returns the owner's guardrails in policy (allowedGpus, maxConcurrentSessions, and monthlyBudgetCu and autoStopIdleMinutes when the project sets them). policy.source says where they come from: \"project\" (policy.file, the project's .orca/colab.json) or \"machine\" (this machine's defaults). They are the owner's to change, not yours. Call it first, with workspace_path. mode is \"direct-api\" once signed in; when checks.oauth.ok is false, call auth_login. checks.guardrails.ok false means the project's guardrails file is broken: tell the owner, nothing can start until it is fixed.",
-    inputSchema: schema({ workspace_path: PROJECT_PROP }),
+      "Checks Node, git, tar and the Google sign-in, and returns the owner's guardrails in policy (allowedGpus, maxConcurrentSessions, and monthlyBudgetCu and autoStopIdleMinutes when the project sets them). policy.source says where they come from: \"project\" (policy.file, the project's .orca/colab.json) or \"machine\" (this machine's defaults). They are the owner's to change, not yours. Call it first, with workspace_path. mode is \"direct-api\" once signed in; when checks.oauth.ok is false, call auth_login. checks.guardrails.ok false means the project's guardrails file is broken: tell the owner, nothing can start until it is fixed. checks.proxy says which proxy requests go through (url, source) or that none is in use. With network true it also reaches every endpoint (token relay, Google, Colab, each runtime) and reports per endpoint ok, status or causeCode, latencyMs and the proxy used in checks.network: use it when a tool fails with \"Could not reach <host>\", and relay its action to the owner (the proxy is theirs to set, in the panel under Setup → Network proxy).",
+    inputSchema: schema({
+      workspace_path: PROJECT_PROP,
+      network: { type: "boolean", description: "Also reach every endpoint and report reachability, latency and the proxy used. Takes up to 10 seconds." },
+    }),
     annotations: READ_ONLY,
   },
   {
@@ -428,7 +432,7 @@ const TOOL_SPECS = [
 // Which tools stand for each CLI command and flag. test/mcp-server.test.mjs compares this with
 // bin/commands/, so a new command or flag cannot ship without a decision here.
 export const CLI_COVERAGE = {
-  doctor: { tools: ["doctor"], flags: [] },
+  doctor: { tools: ["doctor"], flags: ["network"] },
   auth: {
     tools: ["auth_status", "auth_login", "auth_wait", "auth_redirect", "auth_list", "auth_switch", "auth_logout"],
     flags: ["account", "add", "all", "no-browser"],
@@ -884,7 +888,7 @@ export function createColabMcpTools({
   }
 
   const handlers = {
-    doctor: async (args, ctx) => toResult(await runCli(["doctor"], { ...ctx, ...(await projectContext(args, ctx)) })),
+    doctor: async (args, ctx) => toResult(await runCli(["doctor", ...(args.network ? ["--network"] : [])], { ...ctx, ...(await projectContext(args, ctx)) })),
 
     auth_status: async (args, ctx) => {
       const result = toResult(await runCli(["auth", "status", ...accountFlags(args)], ctx));

@@ -1043,6 +1043,43 @@
           Continue to GPU Launch Helper →
         </button>
 
+        <details id="proxyDetails" class="helper-details" style="padding: 10px 12px">
+          <summary style="display: flex; align-items: center; justify-content: space-between">
+            <span class="row" style="gap: 5px">
+              <span class="fold-chevron"></span>
+              <span>Network proxy</span>
+            </span>
+            <span id="proxyBadge" class="badge neutral">Auto</span>
+          </summary>
+
+          <div style="margin-top: 10px; display: flex; flex-direction: column; gap: 8px">
+            <div class="muted" style="font-size: 11px">
+              How this computer reaches Google and Colab. Auto uses <span class="mono">HTTPS_PROXY</span> /
+              <span class="mono">ALL_PROXY</span> when set, otherwise the system proxy of macOS or Windows.
+              Sign-in ending with &ldquo;Could not reach &hellip;&rdquo; usually means a proxy is needed here.
+            </div>
+            <div class="row" style="gap: 6px">
+              <select id="proxyModeSelect" style="flex: 0 0 auto">
+                <option value="auto">Auto</option>
+                <option value="off">Off (direct)</option>
+                <option value="url">Proxy URL</option>
+              </select>
+              <input
+                id="proxyUrlInput"
+                type="text"
+                class="mono hidden"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="http://127.0.0.1:7890 or socks5://127.0.0.1:1080"
+              />
+              <button id="proxySaveBtn" style="flex-shrink: 0">Save</button>
+            </div>
+            <div id="proxyInUseText" class="muted" style="font-size: 11px"></div>
+            <button id="proxyTestBtn" class="ghost">Test connection</button>
+            <div id="proxyTestResults" class="mono hidden" style="font-size: 10.5px; white-space: pre-wrap"></div>
+          </div>
+        </details>
+
         <details id="agentSkillDetails" class="helper-details" style="padding: 10px 12px">
           <summary style="display: flex; align-items: center; justify-content: space-between">
             <span class="row" style="gap: 5px">
@@ -1462,6 +1499,7 @@
       (() => {
       const orcaApi = window.orca;
       let dashboardState = null;
+      let lastNetworkNotice = null;
       let lastAnnouncedSessionEnd;
       let selectedGpu = "T4";
       let selectedTaskId = null;
@@ -1835,6 +1873,78 @@
         badge.className = `badge ${installed.length ? "ok" : "neutral"}`;
       }
 
+      // Network proxy: the setting lives in ~/.orca-colab/config.json; what is in force comes from doctor.
+      let proxyFormTouched = false;
+      function renderProxy(proxy) {
+        if (!proxy) return;
+        const badge = document.getElementById("proxyBadge");
+        badge.className = `badge ${proxy.ok === false ? "warn" : proxy.url ? "info" : "neutral"}`;
+        badge.textContent = proxy.url ? "In use" : proxy.mode === "off" ? "Off" : "Auto · none found";
+        document.getElementById("proxyInUseText").textContent = proxy.url
+          ? `In use: ${proxy.url} (from ${proxy.source})`
+          : proxy.mode === "off"
+            ? "Requests go out directly; proxy variables and the system proxy are ignored."
+            : "No proxy found in the environment or the system settings; requests go out directly.";
+        if (!proxyFormTouched) {
+          const mode = proxy.mode === "url" && proxy.source !== "orca-colab proxy setting" ? "auto" : proxy.mode;
+          document.getElementById("proxyModeSelect").value = mode;
+          const input = document.getElementById("proxyUrlInput");
+          input.classList.toggle("hidden", mode !== "url");
+          if (mode === "url") input.value = proxy.url || "";
+        }
+      }
+
+      document.getElementById("proxyModeSelect").addEventListener("change", (e) => {
+        proxyFormTouched = true;
+        document.getElementById("proxyUrlInput").classList.toggle("hidden", e.target.value !== "url");
+      });
+      document.getElementById("proxyUrlInput").addEventListener("input", () => {
+        proxyFormTouched = true;
+      });
+
+      document.getElementById("proxySaveBtn").addEventListener("click", async () => {
+        const mode = document.getElementById("proxyModeSelect").value;
+        const proxy = mode === "url" ? document.getElementById("proxyUrlInput").value.trim() : mode;
+        if (mode === "url" && !proxy) {
+          showNotice("Enter the proxy URL, for example http://127.0.0.1:7890.", "warn");
+          return;
+        }
+        try {
+          const res = await callWorker("colab.setProxy", { proxy });
+          proxyFormTouched = false;
+          renderAll(res.dashboard);
+          showNotice(
+            res.proxy?.url ? `Proxy saved: requests now go through ${res.proxy.url}.` : "Proxy setting saved.",
+            "ok",
+          );
+        } catch (err) {
+          showNotice(err?.message || String(err), "error");
+        }
+      });
+
+      document.getElementById("proxyTestBtn").addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        const out = document.getElementById("proxyTestResults");
+        btn.disabled = true;
+        btn.textContent = "Testing…";
+        try {
+          const res = await callWorker("colab.networkCheck", {}, { timeoutMs: 30000 });
+          out.classList.remove("hidden");
+          out.textContent = (res.endpoints || [])
+            .map(
+              (r) =>
+                `${r.ok ? "✓" : "✗"} ${r.host}  ${r.ok ? `HTTP ${r.status}` : `${r.causeCode} (${r.error})`}  ${r.latencyMs} ms  ${r.proxy ? `via ${r.proxy}` : "direct"}`,
+            )
+            .join("\n");
+          showNotice(res.ok ? "Every endpoint answered." : res.action, res.ok ? "ok" : "error");
+        } catch (err) {
+          showNotice(err?.message || String(err), "error");
+        } finally {
+          btn.disabled = false;
+          btn.textContent = "Test connection";
+        }
+      });
+
       async function refreshAgentSkills() {
         try {
           renderAgentSkills(await callWorker("colab.agentSkills", {}));
@@ -1953,6 +2063,16 @@
         if (snap.runtimeSync?.error) {
           statusTxt.textContent += " · could not refresh from Colab";
         }
+        statusTxt.title = snap.runtimeSync?.error || "";
+        renderProxy(checks.proxy);
+        // An unreachable network is the one failure Setup can fix, so its proxy section opens by itself.
+        if (/Could not reach /.test(snap.runtimeSync?.error || "")) {
+          document.getElementById("proxyDetails").open = true;
+          if (snap.runtimeSync.error !== lastNetworkNotice) {
+            showNotice(snap.runtimeSync.error, "error");
+          }
+        }
+        lastNetworkNotice = snap.runtimeSync?.error || null;
 
         // Decide which view to show if not explicitly overridden by user navigation
         if (!userForcedView) {
@@ -2675,7 +2795,12 @@
           );
           renderAll(res.dashboard);
         } catch (err) {
-          showNotice(err?.message || String(err), "error");
+          const message = err?.message || String(err);
+          showNotice(message, "error");
+          if (/Could not reach /.test(message)) {
+            switchView("wizard", { force: true });
+            document.getElementById("proxyDetails").open = true;
+          }
         } finally {
           btnEl.disabled = false;
           btnEl.textContent = origText;

@@ -78,6 +78,28 @@ To bypass it, create your own Desktop OAuth client in Google Cloud and set `ORCA
 `ORCA_COLAB_CLIENT_SECRET`; orca-colab then talks to Google directly. `orca-colab auth logout` revokes
 your token at Google before deleting it from `~/.orca-colab`.
 
+### Behind a proxy
+
+If this computer reaches Google only through an HTTP or SOCKS proxy, orca-colab uses it for everything it
+sends: sign-in (the relay and Google), the Colab API, and the runtime's HTTPS and WebSocket endpoints. Node
+ignores proxies by default, so orca-colab finds one itself, in this order:
+
+1. `--proxy <auto|off|url>` on any command, or `ORCA_COLAB_PROXY`.
+2. **Setup → Network proxy** in the panel (Auto / Off / Proxy URL), stored in `~/.orca-colab/config.json`
+   so the CLI and the MCP server on this computer follow it too.
+3. `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY` (upper or lower case).
+4. The system proxy of macOS (`scutil --proxy`) or Windows (Internet Settings), because the Orca app starts
+   the plugin without your shell's variables. On Linux, set the variable or the panel setting.
+
+`http://`, `https://` and `socks5://` proxies work, with `user:password@` in the URL when the proxy asks for
+one. Automatic configuration (PAC) scripts are not evaluated: enter the proxy URL instead. A proxy that
+inspects TLS needs its CA certificate in `NODE_EXTRA_CA_CERTS`. Addresses on this computer (`127.0.0.1`,
+`localhost`) always connect directly.
+
+`orca-colab doctor --network` (or **Test connection** in the panel) reaches every endpoint and prints, for
+each, whether it answered, how fast, and through which proxy. A request that cannot leave the machine fails
+with `Could not reach <host>: <cause code> …`, naming the proxy in use, instead of `fetch failed`.
+
 ## What an agent run looks like
 
 A smoke test on a T4, exactly as the `colab-gpu` skill drives it:
@@ -141,6 +163,14 @@ HTTPS and unpacks it locally. Binary files (checkpoints, weights) arrive byte fo
 Colab runtimes are disposable and time-limited. Pull results as soon as they exist; if a runtime is gone,
 `status --json` shows it and the agent can `down`, `up` and `sync` again.
 
+### Sign-in ends with "Google Colab sign-in failed" or "fetch failed". What now?
+Your browser reached Google, but orca-colab itself could not: the last step of sign-in is a request from
+this computer to the token relay and Google, and browsers use the system proxy while Node does not. From
+v0.4.2 the page and the panel name the host and the cause (`ENOTFOUND`, `ECONNREFUSED`, `ETIMEDOUT`, a
+certificate error) and the proxy in use. Open **Setup → Network proxy** in the panel, press **Test
+connection**, set the proxy if none was found, then press **Sign in** again; no restart is needed. See
+[Behind a proxy](#behind-a-proxy).
+
 ### How is it different from the Colab extension for VS Code?
 Google's extension connects notebooks open in VS Code to a Colab runtime for a person to work in. This
 project is built for agents: a JSON CLI, a job manager with live logs, file sync and pull, budget guardrails
@@ -157,7 +187,7 @@ Full reference: [`skills/colab-gpu/references/cli.md`](./skills/colab-gpu/refere
 
 ```sh
 orca-colab auth [login --add | list | switch <account>] --json
-orca-colab doctor --json
+orca-colab doctor [--network] --json
 orca-colab up --gpu T4 [--new] [--name <name>] [--account <account>] --json
 orca-colab job submit --name "Train" --wait --json -- <cmd>
 orca-colab run --json -- <cmd>
@@ -165,6 +195,7 @@ orca-colab sync [path] --json
 orca-colab pull <remote> <localDir> --json
 orca-colab forward --port <remote port> [--listen 127.0.0.1:<local port>]
 orca-colab down [--all] --json
+orca-colab --proxy <auto|off|url> <command>   # or ORCA_COLAB_PROXY; see "Behind a proxy"
 ```
 
 **Downloading results.** `orca-colab pull outputs ./results --json` packs `outputs` (relative to the synced

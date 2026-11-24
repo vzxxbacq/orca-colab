@@ -20,7 +20,9 @@ function requestError(url, method = "GET", { err, timedOut, timeoutMs, attempts 
   const tries = attempts > 1 ? ` (${attempts} attempts)` : "";
   const message = timedOut
     ? `${what} got no answer from the runtime within ${Math.round(timeoutMs / 1000)}s${tries}`
-    : `${what} did not reach the runtime${tries}: ${err?.cause?.message || err?.message || err}`;
+    : `${what} did not reach the runtime${tries}: ${
+        err?.code === "NETWORK_UNREACHABLE" ? `${err.detail}. ${err.hint}` : err?.cause?.message || err?.message || err
+      }`;
   return Object.assign(new Error(message, { cause: err }), { timedOut });
 }
 

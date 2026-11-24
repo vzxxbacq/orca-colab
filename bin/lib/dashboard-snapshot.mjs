@@ -68,6 +68,7 @@ export class DashboardSnapshotBuilder {
     this.lastDiscoveryAt = 0;
     this.runtimeSyncInFlight = null;
     this.lastRuntimeSyncError = null;
+    this.lastDiscoveryError = null;
     this.gpuUtilSamplesBySession = new Map();
     this.liveMetricsBySession = new Map();
     this.lastCcuSyncAtByAccount = new Map();
@@ -121,7 +122,8 @@ export class DashboardSnapshotBuilder {
       try {
         // Colab's list changes rarely; the runtimes themselves are asked on every sync.
         if (Date.now() - this.lastDiscoveryAt >= Math.min(maxAgeMs * 3, 60_000)) {
-          await discoverAccountRuntimes({ homeDir, env: this.env, fetchImpl });
+          const changes = await discoverAccountRuntimes({ homeDir, env: this.env, fetchImpl });
+          this.lastDiscoveryError = changes?.unreachable ?? null;
           this.lastDiscoveryAt = Date.now();
         }
         const live = listSessions(homeDir).filter(
@@ -139,7 +141,7 @@ export class DashboardSnapshotBuilder {
           if (!live.some((s) => s.name === name)) this.usageBySession.delete(name);
         }
         failJobsOfReleasedRuntimes(homeDir);
-        this.lastRuntimeSyncError = null;
+        this.lastRuntimeSyncError = this.lastDiscoveryError;
       } catch (err) {
         this.lastRuntimeSyncError = err?.message || String(err);
       } finally {

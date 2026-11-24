@@ -19,6 +19,7 @@ import {
   runLoopbackOAuthFlow,
 } from "./colab-oauth.mjs";
 import { recordBudgetSetEvent, recordCalibrateEvent } from "./credit-ledger.mjs";
+import { describeProxyPlan, parseProxySetting, ProxySettingError, refreshProxyPlan } from "./network-proxy.mjs";
 import { removeProjectGuardrails, updateProjectGuardrails } from "./project-guardrails.mjs";
 import { createRuntimeChannel } from "./runtime-channel.mjs";
 import { mirrorTaskLog } from "./runtime-jobs.mjs";
@@ -127,6 +128,19 @@ export function createPanelActions({
         homeDir,
       );
       return { policy: resolveAgentPolicy(readConfig(homeDir)) };
+    },
+
+    // "auto", "off" or a proxy URL, kept in this machine's config so the CLI and the MCP server follow it too.
+    async setProxy(input = {}) {
+      const { mode, url } = parseProxySetting(input?.proxy);
+      // The panel only ever shows the stored URL with its credentials hidden.
+      if (url?.includes("***@")) {
+        throw new ProxySettingError("Enter the proxy URL again with its user name and password; the stored one is shown hidden.");
+      }
+      const { proxy: _previous, ...rest } = readConfig(homeDir) || {};
+      writeConfig(mode === "auto" ? rest : { ...rest, proxy: mode === "off" ? "off" : url }, homeDir);
+      refreshProxyPlan();
+      return { proxy: describeProxyPlan() };
     },
 
     // The project's .orca/colab.json on this machine; `projectDir` is set by the worker from the focused
@@ -317,6 +331,7 @@ export const PANEL_ACTION_NAMES = Object.freeze([
   "authSwitch",
   "authLogout",
   "updatePolicy",
+  "setProxy",
   "updateProjectGuardrails",
   "removeProjectGuardrails",
   "startSession",

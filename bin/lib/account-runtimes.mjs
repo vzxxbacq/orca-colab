@@ -33,7 +33,7 @@ export async function discoverAccountRuntimes({
   listRuntimesFn = listRuntimes,
   nowMs = () => Date.now(),
 } = {}) {
-  const changes = { adopted: [], dropped: [], accountsListed: [] };
+  const changes = { adopted: [], dropped: [], accountsListed: [], unreachable: null };
   for (const { account, authenticated, email } of listOAuthAccounts(homeDir)) {
     if (!authenticated) continue;
     const listStartedMs = nowMs();
@@ -42,8 +42,9 @@ export async function discoverAccountRuntimes({
       const accessToken = await getValidAccessToken({ account, homeDir, fetchImpl });
       if (!accessToken) continue;
       runtimes = await listRuntimesFn({ accessToken, fetchImpl, signal: AbortSignal.timeout(15_000) });
-    } catch {
+    } catch (err) {
       // Offline or signed out: what this machine already knows stays as it is.
+      if (err?.code === "NETWORK_UNREACHABLE") changes.unreachable ??= err.message;
       continue;
     }
     changes.accountsListed.push(account);
