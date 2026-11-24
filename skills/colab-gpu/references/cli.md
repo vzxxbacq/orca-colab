@@ -1,6 +1,6 @@
 # `orca-colab` CLI Reference
 
-Invoke via `orca-colab <cmd> --json` or `npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/2a0a69ea98df5a273690886b3c7888becfeebdbb <cmd> --json`.
+Invoke via `orca-colab <cmd> --json` or `npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/1a5345295e390b47165aa8cd708d71c22df2ee6f <cmd> --json`.
 With `--json`, stdout carries exactly one JSON object and all progress/errors go to stderr with the `[colab]` prefix.
 
 | Command | Description | Exit codes |
