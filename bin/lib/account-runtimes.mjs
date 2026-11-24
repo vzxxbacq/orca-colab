@@ -76,7 +76,8 @@ export async function discoverAccountRuntimes({
           current.keep !== keep ||
           current.state === "zombie" ||
           Boolean(current.adopted) !== adopted ||
-          Boolean(current.origin) !== Boolean(origin)
+          Boolean(current.origin) !== Boolean(origin) ||
+          (!current.guardrails && Boolean(record?.guardrails))
         ) {
           writeSession(
             {
@@ -85,6 +86,8 @@ export async function discoverAccountRuntimes({
               state: "active",
               origin,
               adopted,
+              project: current.project || record?.project || null,
+              guardrails: current.guardrails || record?.guardrails || null,
               colabRuntime: {
                 ...current.colabRuntime,
                 baseUrl: info.url,
@@ -121,6 +124,8 @@ export async function discoverAccountRuntimes({
           state: "active",
           origin: record?.origin || null,
           adopted: true,
+          project: record?.project || null,
+          guardrails: record?.guardrails || null,
           colabRuntime: {
             id,
             endpoint: info.endpoint || id,

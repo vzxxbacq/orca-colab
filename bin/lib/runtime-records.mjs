@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { COLAB_HEADERS, COLAB_PROXY_TOKEN_HEADER } from "./colab-api-client.mjs";
+import { normalizeRecordedGuardrails } from "./project-guardrails.mjs";
 import { normalizeSessionOrigin as normalizeOrigin } from "./session-store.mjs";
 
 // What another machine needs to know about a runtime lives on the runtime itself, read and written
@@ -170,6 +171,9 @@ export function describeOrigin({ env = process.env, cwd = null, agent = null } =
     platform: process.platform,
     agent: named ? String(named).slice(0, 80) : "cli",
     workspace: cwd ? path.basename(cwd) : null,
+    ...(cwd ? { directory: path.resolve(cwd) } : {}),
+    // Orca sets this in the terminals of a workspace: an exact handle another machine can pass to `orca`.
+    ...(env.ORCA_WORKTREE_ID ? { orcaWorkspace: String(env.ORCA_WORKTREE_ID) } : {}),
   };
 }
 
@@ -193,6 +197,8 @@ export async function writeRuntimeSessionRecord(channel, session, { email = null
         createdAt: session.createdAt,
         keep: Boolean(session.keep),
         runtimeId: session.colabRuntime?.id || null,
+        project: session.project ?? null,
+        guardrails: session.guardrails ?? null,
       },
       null,
       2,
@@ -226,6 +232,8 @@ export async function readRuntimeSessionRecord(channel) {
     createdAt: typeof raw.createdAt === "string" ? raw.createdAt : null,
     keep: Boolean(raw.keep),
     runtimeId: typeof raw.runtimeId === "string" ? raw.runtimeId : null,
+    project: typeof raw.project === "string" && raw.project ? raw.project : null,
+    guardrails: normalizeRecordedGuardrails(raw.guardrails),
   };
 }
 

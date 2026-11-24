@@ -79,13 +79,23 @@ test("up writes the session record on the runtime, and another machine lists tha
     schema: 1,
     name: "orca-colab-train",
     account: "me@example.com",
-    origin: { machine: "machine-A", platform: process.platform, agent: "Claude Code", workspace: "my-repo" },
+    origin: { machine: "machine-A", platform: process.platform, agent: "Claude Code", workspace: "my-repo", directory: path.resolve("/work/my-repo") },
     gpu: { name: "Tesla T4", memoryTotalMiB: 15360, driverVersion: null },
     rateKey: "T4",
     cuPerHour: 1.96,
     createdAt: "2026-11-24T08:00:00.000Z",
     keep: true,
     runtimeId: "r-7",
+    project: null,
+    guardrails: {
+      source: "machine",
+      file: null,
+      allowedGpus: ["T4", "L4", "A100", "G4", "H100", "CPU"],
+      maxConcurrentSessions: 2,
+      monthlyBudgetCu: null,
+      budgetScope: "machine",
+      autoStopIdleMinutes: null,
+    },
   });
 
   const io = makeBuffers();
@@ -95,7 +105,7 @@ test("up writes the session record on the runtime, and another machine lists tha
     { name: seen.name, origin: seen.origin, startedHere: seen.startedHere, createdAt: seen.createdAt, keep: seen.keep, rateKey: seen.rateKey, runtime: seen.colabRuntime },
     {
       name: "orca-colab-train",
-      origin: { machine: "machine-A", platform: process.platform, agent: "Claude Code", workspace: "my-repo" },
+      origin: { machine: "machine-A", platform: process.platform, agent: "Claude Code", workspace: "my-repo", directory: path.resolve("/work/my-repo") },
       startedHere: false,
       createdAt: "2026-11-24T08:00:00.000Z",
       keep: true,
@@ -169,7 +179,7 @@ test("a job submitted on one machine is listed, read live and stopped from anoth
   await runJob(["ls"], { ...mirrored, ...ls });
   assert.deepEqual(
     ls.read().tasks.map((x) => ({ id: x.id, name: x.name, status: x.status, session: x.sessionName, origin: x.origin, localPid: x.localPid })),
-    [{ id, name: "train", status: "running", session: "orca-colab-train", origin: { machine: "machine-A", platform: process.platform, agent: "Claude Code", workspace: "my-repo" }, localPid: null }],
+    [{ id, name: "train", status: "running", session: "orca-colab-train", origin: { machine: "machine-A", platform: process.platform, agent: "Claude Code", workspace: "my-repo", directory: path.resolve("/work/my-repo") }, localPid: null }],
   );
   const live = makeBuffers();
   await runJob(["logs", id], { ...mirrored, ...live });

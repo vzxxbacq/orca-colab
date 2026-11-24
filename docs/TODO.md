@@ -69,9 +69,10 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
       discovery of the account's runtimes (`bin/lib/account-runtimes.mjs`), idle rule and `down` guard from
       those records, panel shell over the runtime proxy (`bin/lib/runtime-shell.mjs`),
       `test/runtime-records.test.mjs`; verified on a CPU runtime with two homes on one account.
-- [ ] **Account-level guardrails and budget.** Today per machine (the panel says so). Candidate storage:
-      Google Drive `appDataFolder` (scope `drive.appdata`, non-sensitive; every existing user must sign in
-      again, and may leave the box unticked). Needs the owner's decision before any scope change.
+- [x] **Guardrails per project (D26).** — Done 2026-11-24: `<project>/.orca/colab.json` over the machine config
+      (`bin/lib/project-guardrails.mjs`), project budget from tagged ledger events, guardrails and their source
+      in the runtime's record, panel edit for local projects and read-only view plus `orca file open` for
+      projects on a server, `test/project-guardrails.test.mjs`. The Drive `appDataFolder` idea was dropped.
 - [x] **M2.6 Community catalog review fixes (`v0.3.0`, issue #2).** Own Desktop OAuth client (`orca-colab-community`)
       with non-spoofed `User-Agent`, public Colab + `/tun/m/ccu-info` endpoints (`docs/colab-internal-endpoints.md`),
       Tailscale/SSH/notebook paths dropped (D19, D20), opt-in skill install & removal in the panel, personal Headscale preset removed, `npx` commands pinned to full commit SHA, and

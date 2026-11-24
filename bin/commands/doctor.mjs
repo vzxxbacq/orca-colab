@@ -6,8 +6,8 @@ function formatMark(ok, optional = false) {
   return optional ? "!" : "✗";
 }
 
-export async function run(_argv, { json, stdout, stderr, env, homeDir }) {
-  const report = runDoctor({ homeDir, env });
+export async function run(_argv, { json, stdout, stderr, env, homeDir, cwd = null, projectDir = cwd }) {
+  const report = runDoctor({ homeDir, env, cwd: projectDir });
   if (json) {
     writeJson(report, stdout);
     return report.ok ? EXIT_OK : EXIT_ERROR;
@@ -22,6 +22,13 @@ export async function run(_argv, { json, stdout, stderr, env, homeDir }) {
   log(`${formatMark(c.tar.ok)} tar: ${c.tar.binaryPath ?? "missing"}`, stderr);
   log(
     `${formatMark(c.oauth.ok)} google sign-in: ${c.oauth.ok ? c.oauth.email || c.oauth.account : "not signed in"}`,
+    stderr,
+  );
+
+  log(
+    report.policy.source === "project"
+      ? `guardrails: ${report.policy.file} (GPUs ${report.policy.allowedGpus.join(", ")}; max ${report.policy.maxConcurrentSessions} at once${report.policy.monthlyBudgetCu ? `; ${report.policy.monthlyBudgetCu} CU/month for this project` : ""})`
+      : `guardrails: this machine's config (GPUs ${report.policy.allowedGpus.join(", ")}; max ${report.policy.maxConcurrentSessions} at once)`,
     stderr,
   );
 

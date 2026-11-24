@@ -19,6 +19,7 @@ import {
   runLoopbackOAuthFlow,
 } from "./colab-oauth.mjs";
 import { recordBudgetSetEvent, recordCalibrateEvent } from "./credit-ledger.mjs";
+import { removeProjectGuardrails, updateProjectGuardrails } from "./project-guardrails.mjs";
 import { createRuntimeChannel } from "./runtime-channel.mjs";
 import { mirrorTaskLog } from "./runtime-jobs.mjs";
 import { setRuntimeKeep } from "./runtime-records.mjs";
@@ -128,6 +129,35 @@ export function createPanelActions({
       return { policy: resolveAgentPolicy(readConfig(homeDir)) };
     },
 
+    // The project's .orca/colab.json on this machine; `projectDir` is set by the worker from the focused
+    // workspace, never by the panel. A field set to null goes back to the machine's value.
+    async updateProjectGuardrails(input = {}) {
+      if (!input?.projectDir) {
+        throw new Error("No project on this computer is focused.");
+      }
+      const patch = {};
+      if (Array.isArray(input.allowedGpus)) {
+        patch.allowedGpus = input.allowedGpus.map((g) => String(g).trim().toUpperCase());
+      } else if (input.allowedGpus === null) {
+        patch.allowedGpus = null;
+      }
+      for (const key of ["maxConcurrentSessions", "monthlyBudgetCu", "autoStopIdleMinutes"]) {
+        if (input[key] === null) {
+          patch[key] = null;
+        } else if (typeof input[key] === "number" && Number.isFinite(input[key]) && input[key] >= 0) {
+          patch[key] = key === "monthlyBudgetCu" ? input[key] : Math.floor(input[key]);
+        }
+      }
+      return updateProjectGuardrails(input.projectDir, patch);
+    },
+
+    async removeProjectGuardrails(input = {}) {
+      if (!input?.projectDir) {
+        throw new Error("No project on this computer is focused.");
+      }
+      return { removed: removeProjectGuardrails(input.projectDir) };
+    },
+
     async startSession(input = {}, { onProgress } = {}) {
       const gpu = String(input?.gpu || "T4").toUpperCase();
       const args = ["--gpu", gpu];
@@ -142,10 +172,20 @@ export function createPanelActions({
         },
       };
       try {
-        await runUpCommand(args, { json: true, stdout: NULL_STREAM, stderr: logStream, env: panelEnv, homeDir });
+        // A runtime started from the panel belongs to the focused project when that is on this computer.
+        await runUpCommand(args, {
+          json: true,
+          stdout: NULL_STREAM,
+          stderr: logStream,
+          env: panelEnv,
+          homeDir,
+          cwd: input?.projectDir || null,
+        });
       } catch (err) {
         if (err?.payload?.step === "budget") {
-          throw new Error(`${err.message} Raise the monthly budget under Guardrails & CU to start one.`);
+          throw new Error(
+            `${err.message} Raise ${err.payload.scope === "project" ? "this project's" : "the"} monthly budget under Guardrails & CU to start one.`,
+          );
         }
         throw err;
       }
@@ -277,6 +317,8 @@ export const PANEL_ACTION_NAMES = Object.freeze([
   "authSwitch",
   "authLogout",
   "updatePolicy",
+  "updateProjectGuardrails",
+  "removeProjectGuardrails",
   "startSession",
   "stopSession",
   "toggleKeep",

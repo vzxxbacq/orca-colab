@@ -225,12 +225,49 @@ Colab 运行时属于 Google 账号，而不是某一台电脑。登录了同一
   打开任何 Orca 终端；**Terminal** 按钮是直接显示在面板里的运行时 shell。（需要全屏终端时，在自己的终端里运行
   `orca-colab run -- bash -l`。）
 
-仍然保存在各台机器上的内容：Google 登录（`~/.orca-colab/google-oauth.json`）、算力账本及月度预算、护栏（允许的 GPU、
-会话上限、空闲自动停止分钟数）。**面板修改的是它所在这台电脑的护栏**；远程服务器上的 Agent 遵循该服务器自己的
-`~/.orca-colab/config.json`（在那里用 `orca-colab credits budget <cu>` 和配置文件设置）。余额属于账号，直接从 Colab 读取。
+仍然保存在各台机器上的内容：Google 登录（`~/.orca-colab/google-oauth.json`）、算力账本，以及这台机器的默认护栏。需要跟着
+项目走的护栏放在项目里（见[按项目设置护栏](#按项目设置护栏)）。余额属于账号，直接从 Colab 读取。
 
 限制：面板里的"同步此工作区"只对文件在本机的项目有效；项目在远程服务器上时，让那里的 Agent 执行 `sync`。两台主机名相同的
 机器应设置 `ORCA_COLAB_MACHINE` 加以区分。旧版 orca-colab 启动的任务在运行时上没有记录，只在启动它的机器上显示。
+
+## 按项目设置护栏
+
+护栏按以下顺序查找，项目优先：
+
+1. **项目**：`<项目>/.orca/colab.json`，位于项目里 Orca 的隐藏目录。CLI 从当前目录向上逐级查找；MCP 服务从 `workspace_path`
+   （或客户端唯一的 root，或服务启动时所在的目录）向上查找。最近的文件生效，并且无论项目在哪台机器上（笔记本或 Orca 服务器）
+   都生效。
+2. **机器**：`~/.orca-colab/config.json`，以及用 `orca-colab credits budget` 或面板设置的月度预算。项目文件没写的字段都取自
+   这里；没有项目文件时全部取自这里，行为与旧版本完全一致。
+
+```jsonc
+// <项目>/.orca/colab.json —— 所有字段都可省略；以 // 开头的整行是注释
+{
+  // 允许 Agent 在这个项目里启动的 GPU 档位：T4、L4、A100、G4、H100、CPU
+  "allowedGpus": ["T4", "CPU"],
+  // 从这个项目启动、可同时运行的运行时数量
+  "maxConcurrentSessions": 1,
+  // 这个项目每月预估算力（CU）的硬上限；不写（或写 0）则使用机器的预算
+  "monthlyBudgetCu": 50,
+  // 空闲多少分钟后由面板停止这个项目的运行时；0 表示永不
+  "autoStopIdleMinutes": 20
+}
+```
+
+- **预算按项目或按机器计算，不按 Google 账号计算。** 项目的 `monthlyBudgetCu` 对比的是"从该项目启动的运行时"的预估用量，
+  数据来自启动它们的那台机器的账本；达到上限后 `up` 拒绝启动新的运行时（`code: "BUDGET_REACHED"`，`scope: "project"`）。
+  同一个项目在另一台机器上单独计数；项目有自己的预算时不再检查机器预算。账号在 Google 那边的余额是唯一的账号级数字，它不是上限。
+- **提交还是忽略？** 如果这些限制属于项目，就把 `.orca/colab.json` 提交到 git（所有检出它的人和机器都会生效）；如果只是你个人的
+  限制，就把 `.orca/colab.json` 加进 `.gitignore`。orca-colab 不会自行创建 `.orca/`：只有你手写文件或在面板的 Guardrails 视图里
+  设置了内容时才会出现，最后一个字段被清除后文件会被删除。
+- **文件有错就停止**：文件无法解析或取值越界时，`up` 和 `doctor` 会报出原因并失败，而不是退回机器默认值。
+- **`doctor --json`** 显示当前位置实际生效的护栏：`policy.source` 为 `"project"`（并给出 `policy.file`）或 `"machine"`。
+  项目有自己的预算时，`credits --json` 会多出 `projectBudget`。
+- **面板里**：项目在本机时，Guardrails 视图编辑的是该项目的文件（切换到 *This computer's default* 可改为编辑机器默认值）。
+  项目在 Orca 服务器上时，面板无法读写那里的文件，因此只读显示每个运行时启动时记录下来的护栏（以及它们来自项目文件还是那台机器的
+  默认值），并提供一个按钮在服务器上用 Orca 的编辑器打开该文件。如果 Orca 打不开（无界面的服务器会返回
+  `renderer_unavailable`），面板会给出准确路径，供你在 Orca 的文件树里打开。
 
 ## 开源协议
 

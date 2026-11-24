@@ -1,11 +1,13 @@
 import os from "node:os";
 import { readConfig, resolveAccount, resolveAgentPolicy } from "./colab-home.mjs";
+import { resolveGuardrails } from "./project-guardrails.mjs";
 import { listOAuthAccounts, readOAuthAccountStatus } from "./colab-oauth.mjs";
 import { findExecutableOnPath } from "./executable-lookup.mjs";
 
 export function runDoctor({
   homeDir = os.homedir(),
   env = process.env,
+  cwd = null,
   platform = process.platform,
   nodeVersion = process.versions.node,
   findBinary = findExecutableOnPath,
@@ -47,7 +49,21 @@ export function runDoctor({
   }
 
   const config = readConfig(homeDir);
-  const policy = resolveAgentPolicy(config);
+  // What `up` started from `cwd` would be held to: the project's .orca/colab.json over this machine's
+  // config. A project file that cannot be read fails the check, as it fails `up`.
+  let policy;
+  let guardrailsCheck = null;
+  try {
+    const { setByProject: _fields, ...guardrails } = resolveGuardrails({ cwd, homeDir });
+    policy = guardrails;
+    if (guardrails.source === "project") {
+      guardrailsCheck = { ok: true, file: guardrails.file };
+    }
+  } catch (err) {
+    policy = { ...resolveAgentPolicy(config), monthlyBudgetCu: null, autoStopIdleMinutes: null, source: "machine", project: null, file: null };
+    guardrailsCheck = { ok: false, file: err?.payload?.file ?? null, action: err instanceof Error ? err.message : String(err) };
+    actions.push(guardrailsCheck.action);
+  }
   const defaultAcc = config ? resolveAccount(config) : null;
   const allOAuthAccounts = listOAuthAccounts(homeDir);
   const primaryOAuthStatus = readOAuthAccountStatus(
@@ -75,7 +91,7 @@ export function runDoctor({
     actions.push(oauthCheck.action);
   }
 
-  const ok = nodeCheck.ok && gitCheck.ok && tarCheck.ok && oauthOk;
+  const ok = nodeCheck.ok && gitCheck.ok && tarCheck.ok && oauthOk && guardrailsCheck?.ok !== false;
 
   return {
     ok,
@@ -86,6 +102,7 @@ export function runDoctor({
       oauth: oauthCheck,
       git: gitCheck,
       tar: tarCheck,
+      ...(guardrailsCheck ? { guardrails: guardrailsCheck } : {}),
     },
     actions,
     warnings,

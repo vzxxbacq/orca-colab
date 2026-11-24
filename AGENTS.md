@@ -122,6 +122,7 @@ verifiable locally first (JSON contract, fake `execTty` / `fetchImpl` injections
 - **Breaking changes need advance warning**, in the same message that proposes the work, before any code
   is written: anything that renames or removes a CLI command, flag, `--json` field, exit code, plugin
   setting key or capability; renames or removes an MCP tool or argument; changes the session, task or ledger file formats under `~/.orca-colab`;
+  renames or removes a field of the project guardrails file `<project>/.orca/colab.json` (DESIGN D26);
   changes the records on the runtime under `/content/orca/.orca-colab` (DESIGN D25: session, task and activity
   files, the job runner's file names) that other machines on older versions read; or raises `engines.orca`.
   State what breaks, who is affected (skill, plugin, MCP clients, another machine on an older version) and

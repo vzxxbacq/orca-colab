@@ -8,6 +8,7 @@ import {
   readJsonFile,
   writeJsonAtomic,
 } from "./colab-home.mjs";
+import { normalizeRecordedGuardrails } from "./project-guardrails.mjs";
 
 export function normalizeSessionOrigin(input) {
   if (!input || typeof input !== "object" || typeof input.machine !== "string" || !input.machine) {
@@ -18,6 +19,9 @@ export function normalizeSessionOrigin(input) {
     platform: typeof input.platform === "string" ? input.platform : null,
     agent: typeof input.agent === "string" && input.agent ? input.agent : "cli",
     workspace: typeof input.workspace === "string" && input.workspace ? input.workspace : null,
+    // Where on that machine the work was started, and which Orca workspace that is when Orca said so.
+    ...(typeof input.directory === "string" && input.directory ? { directory: input.directory } : {}),
+    ...(typeof input.orcaWorkspace === "string" && input.orcaWorkspace ? { orcaWorkspace: input.orcaWorkspace } : {}),
   };
 }
 
@@ -78,6 +82,15 @@ export function normalizeSession(input) {
   }
   if (input.adopted) {
     normalized.adopted = true;
+  }
+
+  // The project whose `.orca/colab.json` governed this runtime, and the guardrails in force at `up`.
+  if (typeof input.project === "string" && input.project) {
+    normalized.project = input.project;
+  }
+  const guardrails = normalizeRecordedGuardrails(input.guardrails);
+  if (guardrails) {
+    normalized.guardrails = guardrails;
   }
 
   if (Array.isArray(input.forwards) && input.forwards.length > 0) {

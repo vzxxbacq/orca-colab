@@ -120,6 +120,42 @@ export function createOrcaRemoteHelper({
     orcaBin,
     recentTimings: () => timings.slice(),
 
+    // Saved paired servers; a project the client shows may live on one of them.
+    async listEnvironments() {
+      const res = await run(["environment", "list"]);
+      if (!res.ok) return res;
+      const rows = Array.isArray(res.data?.environments) ? res.data.environments : [];
+      return {
+        ok: true,
+        error: null,
+        data: rows
+          .map((e) => ({ id: e.id || e.environmentId || null, name: e.name || e.label || null }))
+          .filter((e) => e.id || e.name),
+      };
+    },
+
+    // Opens a file of a workspace on a paired server in Orca's own editor, where the user edits and
+    // saves it over Orca's connection. Which server holds the workspace is not known to a plugin, so
+    // each saved one is asked with each selector until one opens it; every refusal is kept for the
+    // panel (a headless server answers renderer_unavailable and cannot open tabs at all).
+    async openFileOnServer({ file, selectors }) {
+      const envs = await this.listEnvironments();
+      const attempts = [];
+      if (!envs.ok) {
+        return { ok: false, attempts: [{ environment: null, selector: null, error: envs.error }] };
+      }
+      for (const env of envs.data) {
+        for (const selector of selectors) {
+          const res = await run(["file", "open", file], { worktree: selector, environment: env.id || env.name, focus: true });
+          if (res.ok) {
+            return { ok: true, environment: env.name || env.id, selector, attempts };
+          }
+          attempts.push({ environment: env.name || env.id, selector, error: res.error });
+        }
+      }
+      return { ok: false, attempts };
+    },
+
     async listTerminals(selector) {
       const res = await run(["terminal", "list"], { worktree: selector, limit: selector ? 50 : 200 });
       if (!res.ok) return res;

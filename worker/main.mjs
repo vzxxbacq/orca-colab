@@ -12,7 +12,9 @@ import {
   evaluateSessionIdleState,
   GRACE_PERIOD_MINUTES,
 } from "../bin/lib/idle-watchdog.mjs";
+import { estimateProjectMonthlyUse, readLedgerEvents } from "../bin/lib/credit-ledger.mjs";
 import { createPanelActions, PANEL_ACTION_NAMES } from "../bin/lib/panel-actions.mjs";
+import { describeProjectGuardrails } from "../bin/lib/project-guardrails.mjs";
 import { createRuntimeChannel } from "../bin/lib/runtime-channel.mjs";
 import { describeOrigin, machineName, stampRuntimeActivity } from "../bin/lib/runtime-records.mjs";
 import { openRuntimeShell } from "../bin/lib/runtime-shell.mjs";
@@ -277,12 +279,17 @@ class AccountDashboard {
       await readSetting(this.orca, "autoStopIdleMinutes", DEFAULT_AUTO_STOP_IDLE_MINUTES),
     );
     await this.builder.syncFromRuntimes({ maxAgeMs: 0 });
+    // A runtime started under a project file that sets the idle minutes keeps them on every machine.
+    const idleMinutesFor = (session) =>
+      session.guardrails?.source === "project" && Number.isInteger(session.guardrails.autoStopIdleMinutes)
+        ? session.guardrails.autoStopIdleMinutes
+        : autoStopIdleMinutes;
     for (const s of listSessions(homeDir).filter((x) => x.state !== "zombie")) {
       const metrics = this.builder.liveMetricsBySession.get(s.name);
       if (metrics && typeof metrics.gpuUtilizationPercent === "number") {
         this.builder.recordGpuSample(s.name, metrics.gpuUtilizationPercent);
       }
-      const decision = this.idleDecision(s, autoStopIdleMinutes);
+      const decision = this.idleDecision(s, idleMinutesFor(s));
       if (decision.isIdle && !this.graceTimers.has(s.name)) {
         await this.notifyUser(
           `Colab session ${s.name} has been idle for ${Math.round(decision.idleMinutes)} min (<5% GPU). Stopping in ${GRACE_PERIOD_MINUTES} min unless used or marked Keep.`,
@@ -292,7 +299,7 @@ class AccountDashboard {
           this.graceTimers.delete(s.name);
           await this.builder.syncFromRuntimes({ maxAgeMs: 0 });
           const latest = readSession(s.name, homeDir);
-          if (latest && this.idleDecision(latest, autoStopIdleMinutes).isIdle) {
+          if (latest && this.idleDecision(latest, idleMinutesFor(latest)).isIdle) {
             const res = await this.actions.stopSession({ session: s.name, cause: "idle-watchdog" }).catch(() => null);
             if (res && res.ok !== false) {
               await this.notifyUser(`Auto-stopped idle Colab session ${s.name} to save compute units.`, "info");
@@ -382,14 +389,32 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
     return info;
   };
 
-  const withWorkspace = (snap) => ({
-    ...snap,
-    workspace: {
-      name: resolvedWorkspace?.workspaceName || null,
-      remote: Boolean(resolvedWorkspace?.hostId),
-      hasLocalPath: Boolean(resolvedWorkspace?.workspacePath) && !resolvedWorkspace?.hostId,
-    },
-  });
+  // The focused project's folder when its files are on this computer; only then can its
+  // .orca/colab.json be read and written from here.
+  const localProjectDir = () =>
+    resolvedWorkspace?.workspacePath && !resolvedWorkspace.hostId ? resolvedWorkspace.workspacePath : null;
+
+  const withWorkspace = (snap) => {
+    const projectDir = localProjectDir();
+    let projectGuardrails = null;
+    if (projectDir) {
+      projectGuardrails = describeProjectGuardrails(projectDir, homeDir);
+      projectGuardrails.estimatedMonthlyUsedCu = estimateProjectMonthlyUse({
+        events: readLedgerEvents(homeDir),
+        activeSessions: listSessions(homeDir),
+        project: projectGuardrails.project,
+      });
+    }
+    return {
+      ...snap,
+      workspace: {
+        name: resolvedWorkspace?.workspaceName || null,
+        remote: Boolean(resolvedWorkspace?.hostId),
+        hasLocalPath: Boolean(projectDir),
+      },
+      projectGuardrails,
+    };
+  };
 
   const refreshStatusBar = async (snapInput = null) => {
     try {
@@ -474,7 +499,7 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
       setProvisioning({ active: true, message: `${lastMessage} (${sec}s elapsed)`, error: null });
     }, 2000);
     try {
-      await dashboard.call("startSession", { gpu, account, keep }, {
+      await dashboard.call("startSession", { gpu, account, keep, projectDir: localProjectDir() }, {
         onProgress: (line) => {
           lastMessage = line;
           setProvisioning({ active: true, message: line, error: null });
@@ -570,7 +595,8 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
   orca.panels.handle("colab.removeAgentSkill", async (input = {}) => removeAgentSkill(input?.targets, homeDir));
 
   const simpleActions = PANEL_ACTION_NAMES.filter(
-    (n) => !["authLogin", "startSession", "submitTask", "getTaskLogs"].includes(n),
+    (n) =>
+      !["authLogin", "startSession", "submitTask", "getTaskLogs", "updateProjectGuardrails", "removeProjectGuardrails"].includes(n),
   );
   for (const name of simpleActions) {
     orca.panels.handle(`colab.${name}`, async (input = {}) => {
@@ -581,6 +607,49 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
       return finish(result);
     });
   }
+
+  // Project guardrails are a file in the project. The worker writes it only for a project on this
+  // computer; the folder comes from the focused workspace, not from the panel.
+  for (const name of ["updateProjectGuardrails", "removeProjectGuardrails"]) {
+    orca.panels.handle(`colab.${name}`, async (input = {}) => {
+      await resolveWorkspace();
+      const projectDir = localProjectDir();
+      if (!projectDir) {
+        return {
+          ok: false,
+          code: "PROJECT_NOT_LOCAL",
+          message: "This project's files are not on this computer, so its guardrails file cannot be changed from here. Open the file in Orca's editor instead.",
+          dashboard: withWorkspace(await dashboard.snapshot()),
+        };
+      }
+      return finish(await dashboard.call(name, { ...input, projectDir }));
+    });
+  }
+
+  // For a runtime started from a project on an Orca server: its guardrails file is opened in Orca's own
+  // editor, on that server. The path comes from the runtime's record; nothing is written from here.
+  orca.panels.handle("colab.openGuardrailsFile", async (input = {}) => {
+    const session = readSession(String(input?.session || ""), homeDir);
+    const file =
+      session?.guardrails?.file ||
+      (session?.origin?.directory ? `${session.origin.directory.replace(/[\\/]+$/, "")}/.orca/colab.json` : null);
+    if (!file) {
+      return { ok: false, code: "NO_PATH", message: "This runtime's record does not say which project it was started from." };
+    }
+    const workspace = await resolveWorkspace();
+    const recorded = session.origin?.orcaWorkspace;
+    const selectors = [
+      ...(recorded ? [recorded.startsWith("folder:") ? recorded : `id:${recorded}`] : []),
+      ...(workspace.hostId && workspace.workspaceName ? [`name:${workspace.workspaceName}`] : []),
+    ];
+    if (!orcaCli.available || selectors.length === 0) {
+      return { ok: false, code: "CANNOT_OPEN", file, exists: Boolean(session.guardrails?.file), attempts: [] };
+    }
+    const opened = await orcaCli.openFileOnServer({ file, selectors });
+    return opened.ok
+      ? { ok: true, file, environment: opened.environment }
+      : { ok: false, code: "CANNOT_OPEN", file, exists: Boolean(session.guardrails?.file), attempts: opened.attempts };
+  });
 
   // Sign-in happens on this machine, in the user's own browser, and stays on this machine.
   orca.panels.handle("colab.authLogin", async (input = {}) => {

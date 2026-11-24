@@ -1365,9 +1365,7 @@
                 <div class="card-subtitle" style="margin-bottom: 0; margin-top: 2px">
                   Click to enable or disable which GPU tiers the Agent is allowed to provision. The Agent selects the optimal GPU within your boundary.
                 </div>
-                <div id="guardrailsScopeNote" class="banner info" style="margin-top: 6px; font-size: 11px">
-                  You are editing this computer's guardrails. Allowed GPUs, the session cap, the monthly budget and idle auto-stop are stored on this computer and apply to agents and panels running here; another machine signed in to the same Google account keeps its own.
-                </div>
+<div id="guardrailsScopeBox" style="margin-top: 6px; font-size: 11px"></div>
               </div>
             </div>
             <div
@@ -1388,7 +1386,7 @@
                 font-size: 11px;
               "
             >
-              <span class="muted">Max Concurrent Runtimes (Per Account)</span>
+              <span id="maxConcurrentLabel" class="muted">Max Concurrent Runtimes (Per Account)</span>
               <div class="row" id="maxConcurrentRow" style="gap: 4px">
                 <button class="ghost" data-max-sess="1" style="padding: 3px 8px">1</button>
                 <button class="ghost" data-max-sess="2" style="padding: 3px 8px">2</button>
@@ -1625,8 +1623,151 @@
         { id: "H100", name: "NVIDIA H100", shortName: "H100", spec: "80 GB VRAM", rate: "≈ 21.20 CU/h" },
       ];
 
+      // Guardrails have two homes: the focused project's .orca/colab.json (only when the project's files
+      // are on this computer) and this computer's defaults. `guardrailScope` is which one is being edited.
+      let guardrailScope = null;
+      function guardrailView(snap = dashboardState) {
+        const pg = snap?.projectGuardrails || null;
+        const scope = pg ? guardrailScope || (pg.exists ? "project" : "machine") : "machine";
+        return { pg, scope, policy: scope === "project" ? pg.effective : snap?.policy };
+      }
+      async function saveGuardrails(patch) {
+        const { scope } = guardrailView();
+        const res = await callWorker(scope === "project" ? "colab.updateProjectGuardrails" : "colab.updatePolicy", patch);
+        if (res?.ok === false) {
+          showNotice(res.message || "Could not save the guardrails.", "warn");
+        }
+        if (res?.dashboard) renderAll(res.dashboard);
+      }
+      window.__setGuardrailScope = (scope) => {
+        guardrailScope = scope;
+        if (dashboardState) renderAll(dashboardState);
+      };
+      window.__setProjectGuardrail = async (key, inputId) => {
+        const input = document.getElementById(inputId);
+        const raw = input.value.trim();
+        const value = raw === "" ? null : Number(raw);
+        if (value !== null && (!Number.isFinite(value) || value < 0)) return;
+        input.value = "";
+        input.blur();
+        try {
+          await saveGuardrails({ [key]: value });
+        } catch (err) {
+          showNotice(err?.message || String(err), "error");
+        }
+      };
+      window.__removeProjectGuardrails = async () => {
+        try {
+          const res = await callWorker("colab.removeProjectGuardrails", {});
+          guardrailScope = null;
+          if (res?.dashboard) renderAll(res.dashboard);
+        } catch (err) {
+          showNotice(err?.message || String(err), "error");
+        }
+      };
+      // A project on an Orca server: its file is opened in Orca's editor there; when that is not
+      // possible the exact path is shown to open from Orca's file tree.
+      window.__openGuardrailsFile = async (sessionName) => {
+        const out = document.getElementById(`guardrailsOpenResult-${sessionName}`);
+        try {
+          const res = await callWorker("colab.openGuardrailsFile", { session: sessionName }, { timeoutMs: 120000 });
+          if (res?.ok) {
+            out.textContent = `Opened ${res.file} in Orca's editor on ${res.environment}.`;
+            return;
+          }
+          const why = (res?.attempts || []).map((a) => `${a.environment || "orca"}: ${a.error}`).join(" · ");
+          out.textContent = res?.file
+            ? `Could not open it from here${why ? ` (${why})` : ""}. Open this path from Orca's file tree in that project${res.exists ? "" : " (create the file if it is not there)"}: ${res.file}`
+            : res?.message || "Could not open the file.";
+        } catch (err) {
+          out.textContent = err?.message || String(err);
+        }
+      };
+
+      function describeRecordedGuardrails(g) {
+        const parts = [`GPUs ${g.allowedGpus.join(", ") || "?"}`];
+        if (g.maxConcurrentSessions) parts.push(`max ${g.maxConcurrentSessions} at once`);
+        parts.push(g.monthlyBudgetCu ? `${g.monthlyBudgetCu} CU/month (${g.budgetScope === "project" ? "project budget" : "that machine's budget"})` : "no monthly budget");
+        if (g.autoStopIdleMinutes !== null) parts.push(g.autoStopIdleMinutes === 0 ? "never auto-stopped" : `auto-stop after ${g.autoStopIdleMinutes} idle min`);
+        return parts.join(" · ");
+      }
+
+      function renderGuardrailScope(snap) {
+        const box = document.getElementById("guardrailsScopeBox");
+        if (!box) return;
+        const { pg, scope } = guardrailView(snap);
+        const ws = snap.workspace || {};
+        let html = "";
+        if (pg) {
+          html += `
+            <div class="row" style="gap:4px;margin-bottom:6px">
+              <button class="${scope === "project" ? "primary" : "ghost"}" style="padding:3px 8px" onclick="window.__setGuardrailScope('project')">This project${ws.name ? ` · ${esc(ws.name)}` : ""}</button>
+              <button class="${scope === "machine" ? "primary" : "ghost"}" style="padding:3px 8px" onclick="window.__setGuardrailScope('machine')">This computer's default</button>
+            </div>`;
+          if (scope === "project") {
+            const v = pg.values || {};
+            const budget = pg.effective.monthlyBudgetCu;
+            html += `
+              <div class="banner ${pg.error ? "error" : "info"}" style="font-size:11px"><div>
+                ${pg.error ? esc(pg.error) : pg.exists
+                  ? `Editing <span class="mono">${esc(pg.file)}</span>. It applies to runtimes started from this project, here or on any machine that has the project; what it does not set comes from that machine's default.`
+                  : `This project has no guardrails file, so this computer's default applies. Changing anything here creates <span class="mono">${esc(pg.file)}</span>.`}
+                Commit the file to share it with everyone working on the project, or add <span class="mono">.orca/colab.json</span> to <span class="mono">.gitignore</span> to keep it to yourself.
+              </div></div>
+              <div class="row" style="gap:6px;margin-top:6px">
+                <input id="projectBudgetInput" type="number" min="0" step="1" placeholder="${budget ? `Project budget: ${budget} CU/month` : "Project monthly budget (CU)"}" />
+                <button style="flex-shrink:0" onclick="window.__setProjectGuardrail('monthlyBudgetCu','projectBudgetInput')">Set</button>
+              </div>
+              <div class="row" style="gap:6px;margin-top:6px">
+                <input id="projectIdleInput" type="number" min="0" step="1" placeholder="${v.autoStopIdleMinutes !== undefined ? `Idle auto-stop: ${v.autoStopIdleMinutes} min` : "Idle auto-stop minutes (0 = never)"}" />
+                <button style="flex-shrink:0" onclick="window.__setProjectGuardrail('autoStopIdleMinutes','projectIdleInput')">Set</button>
+              </div>
+              <div class="muted" style="margin-top:6px">
+                ${budget ? `≈ ${pg.estimatedMonthlyUsedCu ?? 0} of ${budget} CU used this month by runtimes started from this project on this computer (estimate). At the budget, no new runtime starts.` : "No project budget: this computer's monthly budget below applies."}
+                Budgets are counted per project or per computer, not per Google account. Leave a field empty and press Set to go back to the computer's default.
+                ${pg.exists ? `<button class="ghost" style="padding:1px 6px;margin-left:4px" onclick="window.__removeProjectGuardrails()">Remove the project file</button>` : ""}
+              </div>`;
+          } else {
+            html += `<div class="banner info" style="font-size:11px"><div>Editing this computer's default (<span class="mono">~/.orca-colab</span>): it applies to work started on this computer from projects without a guardrails file${pg.exists ? "; this project has one, which takes precedence" : ""}. Another machine keeps its own default.</div></div>`;
+          }
+        } else if (ws.remote) {
+          html += `<div class="banner info" style="font-size:11px"><div>${esc(ws.name || "This project")} is on an Orca server, so its guardrails file (<span class="mono">.orca/colab.json</span> in the project there) cannot be read or changed from this computer. Below is what each runtime recorded when it was started; the controls further down edit this computer's default, which only applies to runtimes started here.</div></div>`;
+        } else {
+          html += `<div class="banner info" style="font-size:11px"><div>Editing this computer's default (<span class="mono">~/.orca-colab</span>). Focus a project on this computer to edit that project's own guardrails (<span class="mono">.orca/colab.json</span>).</div></div>`;
+        }
+        const recorded = (snap.sessions || []).filter((x) => x.state !== "zombie" && x.guardrails && !x.startedHere);
+        if (recorded.length) {
+          html += `<div style="margin-top:8px"><div class="muted" style="margin-bottom:4px">Guardrails recorded by runtimes started on other machines (read-only)</div>${recorded
+            .map((x) => {
+              const g = x.guardrails;
+              const where = g.source === "project" ? `project file ${g.file}` : `machine default of ${x.origin?.machine || "that machine"}`;
+              return `
+                <div class="runtime-mini-card" style="cursor:default">
+                  <div class="row-between" style="gap:6px">
+                    <strong style="font-size:11px">${esc(x.name.replace(/^orca-colab-/, ""))}</strong>
+                    <button class="ghost" style="padding:2px 6px;font-size:10px" onclick="window.__openGuardrailsFile('${esc(x.name)}')">Open colab.json in Orca's editor</button>
+                  </div>
+                  <div class="muted" style="font-size:10.5px">${esc(describeRecordedGuardrails(g))}</div>
+                  <div class="muted mono" style="font-size:10px;word-break:break-all">from ${esc(where)}</div>
+                  <div id="guardrailsOpenResult-${esc(x.name)}" class="muted" style="font-size:10.5px;word-break:break-all"></div>
+                </div>`;
+            })
+            .join("")}</div>`;
+        }
+        // Typing into the project inputs must survive the periodic re-render.
+        const typing = ["projectBudgetInput", "projectIdleInput"].some((id) => document.activeElement?.id === id || document.getElementById(id)?.value);
+        const opened = [...box.querySelectorAll('[id^="guardrailsOpenResult-"]')].some((el) => el.textContent);
+        if (!typing && !opened) {
+          box.innerHTML = html;
+        }
+        const label = document.getElementById("maxConcurrentLabel");
+        if (label) {
+          label.textContent = scope === "project" ? "Max Concurrent Runtimes (From This Project)" : "Max Concurrent Runtimes (Per Account)";
+        }
+      }
+
       window.__togglePolicyGpu = async (gpuId) => {
-        const currentAllowed = dashboardState?.policy?.allowedGpus || [
+        const currentAllowed = guardrailView().policy?.allowedGpus || [
           "T4",
           "L4",
           "A100",
@@ -1645,10 +1786,7 @@
           nextAllowed = [...currentAllowed, gpuId];
         }
         try {
-          const res = await callWorker("colab.updatePolicy", {
-            allowedGpus: nextAllowed,
-          });
-          renderAll(res.dashboard);
+          await saveGuardrails({ allowedGpus: nextAllowed });
         } catch (err) {
           showNotice(err?.message || String(err), "error");
         }
@@ -1659,10 +1797,7 @@
           const val = Number.parseInt(btn.dataset.maxSess, 10);
           if (!Number.isFinite(val) || val < 1) return;
           try {
-            const res = await callWorker("colab.updatePolicy", {
-              maxConcurrentSessions: val,
-            });
-            renderAll(res.dashboard);
+            await saveGuardrails({ maxConcurrentSessions: val });
           } catch (err) {
             showNotice(err?.message || String(err), "error");
           }
@@ -1979,7 +2114,8 @@
         // -------------------------------------------------------------------
         // Populate View 3: Active GPU Workspace
         // -------------------------------------------------------------------
-        const policy = snap.policy || {
+        renderGuardrailScope(snap);
+        const policy = guardrailView(snap).policy || {
           allowedGpus: ["T4", "L4", "A100", "G4", "H100", "CPU"],
           maxConcurrentSessions: 2,
         };

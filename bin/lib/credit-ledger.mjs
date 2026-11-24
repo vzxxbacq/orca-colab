@@ -77,6 +77,7 @@ export function recordSessionStartEvent(session, homeDir = os.homedir()) {
       gpuName: session.gpu?.name ?? "CPU",
       rateKey: session.rateKey,
       cuPerHour: session.cuPerHour,
+      ...(session.project && !session.adopted ? { project: session.project } : {}),
     },
     homeDir,
   );
@@ -95,6 +96,7 @@ export function recordSessionEndEvent(
       session: session.name,
       rateKey: session.rateKey,
       cuPerHour: session.cuPerHour,
+      ...(session.project && !session.adopted ? { project: session.project } : {}),
       cause,
     },
     homeDir,
@@ -180,6 +182,49 @@ export function recordBudgetSetEvent(
     },
     homeDir,
   );
+}
+
+// Estimated compute units this month for the sessions one project started from this machine: ended
+// ones from their `session.end` event, running ones from their session file, and a start that never got
+// an end (the runtime died unseen) capped like the account projection caps it. An estimate from hours
+// and rates only; Colab reports a balance per account, never per project.
+export function estimateProjectMonthlyUse({ events = [], activeSessions = [], project, nowMs = Date.now(), month = null }) {
+  const targetMonth = month ?? new Date(nowMs).toISOString().slice(0, 7);
+  const intervals = [];
+  const open = new Map();
+  for (const ev of events) {
+    if (ev?.project !== project || !ev.session) continue;
+    if (ev.type === "session.start") {
+      open.set(ev.session, ev);
+    } else if (ev.type === "session.end") {
+      const start = open.get(ev.session);
+      open.delete(ev.session);
+      intervals.push({ startIso: ev.startedAt ?? start?.at ?? ev.at, endIso: ev.at, cuPerHour: Number(ev.cuPerHour ?? start?.cuPerHour ?? 0) });
+    }
+  }
+  for (const s of activeSessions) {
+    if (s?.project !== project || s.adopted || s.state === "zombie") continue;
+    open.delete(s.name);
+    intervals.push({ startIso: s.createdAt, endIso: new Date(nowMs).toISOString(), cuPerHour: Number(s.cuPerHour ?? 0) });
+  }
+  for (const start of open.values()) {
+    const startMs = Date.parse(start.at);
+    if (Number.isFinite(startMs)) {
+      intervals.push({
+        startIso: start.at,
+        endIso: new Date(Math.min(nowMs, startMs + ORPHAN_SESSION_CAP_MS)).toISOString(),
+        cuPerHour: Number(start.cuPerHour ?? 0),
+      });
+    }
+  }
+  let used = 0;
+  for (const { startIso, endIso, cuPerHour } of intervals) {
+    const hours = (Date.parse(endIso) - Date.parse(startIso)) / MS_PER_HOUR;
+    if ((startIso.slice(0, 7) === targetMonth || endIso.slice(0, 7) === targetMonth) && hours > 0 && Number.isFinite(cuPerHour)) {
+      used += hours * cuPerHour;
+    }
+  }
+  return round2(used);
 }
 
 export function projectAccountCredits({

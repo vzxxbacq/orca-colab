@@ -18,7 +18,6 @@ import {
   getColabPaths,
   readConfig,
   resolveAccount,
-  resolveAgentPolicy,
 } from "../lib/colab-home.mjs";
 import {
   getValidAccessToken,
@@ -27,6 +26,7 @@ import {
   resolveOAuthAccountKey,
 } from "../lib/colab-oauth.mjs";
 import {
+  estimateProjectMonthlyUse,
   projectAccountCredits,
   readLedgerEvents,
   recordCalibrateEvent,
@@ -34,6 +34,7 @@ import {
   recordSessionStartEvent,
   resolveDeadSessionEndIso,
 } from "../lib/credit-ledger.mjs";
+import { guardrailsForRecord, resolveGuardrails } from "../lib/project-guardrails.mjs";
 import {
   resolveGpuRate as resolveRateFromTable,
   setRateOverride,
@@ -61,6 +62,7 @@ export async function run(
     stderr,
     env,
     cwd = null,
+    projectDir = cwd,
     homeDir,
     signal = null,
     openRuntimeChannel = null,
@@ -98,7 +100,10 @@ export async function run(
   const opts = parsed.values;
 
   const config = readConfig(homeDir);
-  const policy = resolveAgentPolicy(config);
+  // The project's .orca/colab.json, found from where the work is started, over this machine's config.
+  const policy = resolveGuardrails({ cwd: projectDir || null, homeDir });
+  const policyOrigin = policy.source === "project" ? `this project's guardrails (${policy.file})` : "user policy in Orca Colab settings";
+  const startedFromProject = (s) => policy.source !== "project" || !policy.setByProject.includes("maxConcurrentSessions") || s?.project === policy.project;
   const paths = getColabPaths(homeDir);
   const allNonZombieSessions = listSessions(homeDir).filter(
     (s) => s?.state !== "zombie",
@@ -146,13 +151,14 @@ export async function run(
       : requestedGpuRaw;
 
   if (!policy.allowedGpus.includes(selectedGpu)) {
-    const errMsg = `GPU '${selectedGpu}' is disabled by user policy in Orca Colab settings. Allowed GPUs: ${policy.allowedGpus.join(", ")}`;
+    const errMsg = `GPU '${selectedGpu}' is disabled by ${policyOrigin}. Allowed GPUs: ${policy.allowedGpus.join(", ")}`;
     throw new CliError(errMsg, {
       exitCode: EXIT_ERROR,
       payload: {
         ok: false,
         error: errMsg,
         allowedGpus: policy.allowedGpus,
+        ...(policy.source === "project" ? { source: "project", file: policy.file } : {}),
         step: "policy",
       },
     });
@@ -161,11 +167,12 @@ export async function run(
   const activeAccountSessions = listSessions(homeDir).filter(
     (s) => s?.state !== "zombie" && (s?.account || "default") === account.label,
   );
+  // A cap set by the project counts the runtimes started from that project; the machine's counts all.
   if (
     opts.new &&
-    activeAccountSessions.length >= policy.maxConcurrentSessions
+    activeAccountSessions.filter(startedFromProject).length >= policy.maxConcurrentSessions
   ) {
-    const errMsg = `Max concurrent sessions (${policy.maxConcurrentSessions}) reached by user policy.`;
+    const errMsg = `Max concurrent sessions (${policy.maxConcurrentSessions}) reached by ${policyOrigin}.`;
     throw new CliError(errMsg, {
       exitCode: EXIT_ERROR,
       payload: {
@@ -178,7 +185,35 @@ export async function run(
   }
 
   // The budget stops new spending only: attaching to a runtime that is already billing stays allowed.
-  if (opts.new || activeAccountSessions.length === 0) {
+  if (policy.monthlyBudgetCu && (opts.new || activeAccountSessions.length === 0)) {
+    // The project's own budget, counted from what this machine's ledger holds for this project.
+    const used = estimateProjectMonthlyUse({
+      events: readLedgerEvents(homeDir),
+      activeSessions: listSessions(homeDir),
+      project: policy.project,
+      nowMs: nowMs(),
+    });
+    if (used >= policy.monthlyBudgetCu) {
+      const errMsg = `Monthly compute-unit budget reached for this project (${policy.file}): about ${used} of ${policy.monthlyBudgetCu} CU used this month by runtimes started from it on this machine (estimate). No new runtime was started.`;
+      throw new CliError(errMsg, {
+        exitCode: EXIT_ERROR,
+        payload: {
+          ok: false,
+          code: "BUDGET_REACHED",
+          error: errMsg,
+          scope: "project",
+          project: policy.project,
+          file: policy.file,
+          approximate: true,
+          budgetCu: policy.monthlyBudgetCu,
+          estimatedMonthlyUsedCu: used,
+          estimatedBudgetUsedPercent: Math.round((used / policy.monthlyBudgetCu) * 100),
+          hint: `Only the owner can raise this project's budget: monthlyBudgetCu in ${policy.file} (or the Guardrails view of the Colab GPU panel on the machine that has the project).`,
+          step: "budget",
+        },
+      });
+    }
+  } else if (opts.new || activeAccountSessions.length === 0) {
     const credits = projectAccountCredits({
       events: readLedgerEvents(homeDir),
       activeSessions: listSessions(homeDir),
@@ -295,9 +330,9 @@ export async function run(
     );
     if (
       opts.new &&
-      currentActiveSessions.length >= policy.maxConcurrentSessions
+      currentActiveSessions.filter(startedFromProject).length >= policy.maxConcurrentSessions
     ) {
-      const errMsg = `Max concurrent sessions (${policy.maxConcurrentSessions}) reached by user policy.`;
+      const errMsg = `Max concurrent sessions (${policy.maxConcurrentSessions}) reached by ${policyOrigin}.`;
       throw new CliError(errMsg, {
         exitCode: EXIT_ERROR,
         payload: {
@@ -460,6 +495,18 @@ export async function run(
       state: "active",
       ...(origin ? { origin } : {}),
       ...(runtimeRecord && !sameMachine(runtimeRecord.origin, machineName(env)) ? { adopted: true } : {}),
+      // A reused runtime stays under the guardrails it was started with; a new one records these.
+      project: runtimeRecord ? runtimeRecord.project : policy.project,
+      guardrails: runtimeRecord
+        ? runtimeRecord.guardrails
+        : guardrailsForRecord(policy, {
+            machineBudgetCu: projectAccountCredits({
+              events: readLedgerEvents(homeDir),
+              activeSessions: [],
+              account: account.label,
+              nowMs: nowMs(),
+            }).budgetCu,
+          }),
       remoteRoot: isSameRuntime ? existingSameName.remoteRoot ?? null : null,
       ...(isSameRuntime && existingSameName.forwards ? { forwards: existingSameName.forwards } : {}),
       colabRuntime: {

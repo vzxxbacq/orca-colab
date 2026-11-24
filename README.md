@@ -26,7 +26,8 @@ CLI alone with `npx`. A community project, not affiliated with Google.
 - **Humans set guardrails**: sign in with Google, pick the allowed GPU tiers (T4, L4, A100, CPU), cap
   concurrent runtimes and the monthly Compute Unit budget. The agent cannot step outside them: once the
   estimated use this month reaches the budget, `up` refuses to start a new runtime (running ones keep going)
-  until you raise it in the panel or with `orca-colab credits budget <cu>`.
+  until you raise it in the panel or with `orca-colab credits budget <cu>`. A project can carry its own
+  guardrails in `.orca/colab.json` ([Guardrails per project](#guardrails-per-project)).
 - **Multiple runtimes and sessions**: run several GPUs side by side, name them, address them per command
   with `--session`, and switch between Google accounts.
 - **Public endpoints only**: everything goes over HTTPS to Google's Colab API and the runtime's own
@@ -271,16 +272,62 @@ A Colab runtime belongs to a Google account, not to a computer. Every machine si
   **Terminal** button is a shell on the runtime, shown in the panel. (For a full-screen terminal run
   `orca-colab run -- bash -l` in a terminal of your own.)
 
-What stays on each machine: the Google sign-in (`~/.orca-colab/google-oauth.json`), the credit ledger with
-its monthly budget, and the guardrails (allowed GPUs, session cap, idle auto-stop minutes). **The panel
-edits the guardrails of the computer it runs on**; a remote server's agents follow that server's own
-`~/.orca-colab/config.json` (`orca-colab credits budget <cu>` and the config file there). The balance itself
-is the account's and is read from Colab.
+What stays on each machine: the Google sign-in (`~/.orca-colab/google-oauth.json`), the credit ledger, and
+the machine's default guardrails. Guardrails that should follow a project to whatever machine it is on live
+in the project ([Guardrails per project](#guardrails-per-project)). The balance itself is the account's and
+is read from Colab.
 
 Limits: "Sync this workspace" from the panel only works for a project whose files are on this computer;
 for a project on a remote server let the agent there run `sync`. Two machines that share a hostname should
 set `ORCA_COLAB_MACHINE` to tell them apart. A job started by an older orca-colab has no record on the
 runtime and shows only on the machine that started it.
+
+## Guardrails per project
+
+Guardrails are looked up in two places, the project first:
+
+1. **The project**: `<project>/.orca/colab.json`, in Orca's hidden folder of the project. The CLI finds it by
+   walking up from the directory it runs in; the MCP server from `workspace_path` (or the client's single
+   root, or the directory it was started in). The nearest file wins, and it applies on whatever machine the
+   project is on: your laptop or an Orca server.
+2. **The machine**: `~/.orca-colab/config.json` plus the monthly budget set with `orca-colab credits budget`
+   or in the panel. It supplies every field the project file leaves out, and everything when there is no
+   file. Without a file nothing changes from earlier versions.
+
+```jsonc
+// <project>/.orca/colab.json — every field is optional; lines starting with // are comments
+{
+  // GPU tiers agents may start from this project: T4, L4, A100, G4, H100, CPU
+  "allowedGpus": ["T4", "CPU"],
+  // runtimes started from this project that may run at once
+  "maxConcurrentSessions": 1,
+  // hard limit on this project's estimated compute units per month; leave out (or 0) to use the machine's budget
+  "monthlyBudgetCu": 50,
+  // idle minutes before a panel stops a runtime of this project; 0 = never
+  "autoStopIdleMinutes": 20
+}
+```
+
+- **Budgets are per project or per machine, never per Google account.** A project's `monthlyBudgetCu` is
+  compared with the estimated compute units of the runtimes started from that project, as recorded in the
+  ledger of the machine that starts them; once it is reached, `up` refuses a new runtime
+  (`code: "BUDGET_REACHED"`, `scope: "project"`). The same project on a second machine counts separately
+  there, and the machine budget (per account label on that machine) is not consulted for a project that has
+  its own. Google's balance for the account is the only account-wide number, and it is not a limit.
+- **Commit or ignore?** Commit `.orca/colab.json` when the limits are the project's (everyone and every
+  machine that checks it out gets them). Add `.orca/colab.json` to `.gitignore` when they are your personal
+  limits. orca-colab never creates `.orca/` by itself: the file appears only when you write it or set
+  something in the panel's Guardrails view, and it is removed again when the last field is cleared.
+- **A broken file stops work**: if the file cannot be parsed or holds a value out of range, `up` and
+  `doctor` fail with the reason instead of falling back to the machine's defaults.
+- **`doctor --json`** shows what applies where you are: `policy.source` is `"project"` (with `policy.file`)
+  or `"machine"`. `credits --json` adds `projectBudget` when the project has one.
+- **In the panel**: for a project on this computer, the Guardrails view edits that project's file (switch
+  to *This computer's default* to edit the machine instead). For a project on an Orca server the panel
+  cannot read or write its files, so it shows, read-only, the guardrails each runtime recorded when it was
+  started (and whether they came from the project file or that machine's default), with a button that opens
+  the file in Orca's editor on the server. If Orca cannot open it (a headless server answers
+  `renderer_unavailable`), the panel shows the exact path to open from Orca's file tree.
 
 ## License
 
