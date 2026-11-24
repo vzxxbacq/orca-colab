@@ -38,8 +38,9 @@ export async function run(
     throw new CliError(err instanceof Error ? err.message : String(err));
   }
   // The account's runtimes at Colab, including ones started from other machines; --local skips the call.
+  let networkError = null;
   if (!opts.local) {
-    await discover({ homeDir, env, fetchImpl }).catch(() => {});
+    networkError = (await discover({ homeDir, env, fetchImpl }).catch(() => null))?.unreachable ?? null;
   }
   const sessions = listSessions(homeDir);
   const now = nowMs();
@@ -64,8 +65,12 @@ export async function run(
 
   const recentlyEnded = listRecentSessionEnds(homeDir, { nowMs: now });
   if (json) {
-    writeJson({ sessions: enriched, recentlyEnded }, stdout);
+    writeJson({ sessions: enriched, recentlyEnded, networkError }, stdout);
     return EXIT_OK;
+  }
+
+  if (networkError) {
+    log(`warning: the list below is what this machine last knew. ${networkError}`, stderr);
   }
 
   for (const ended of recentlyEnded) {

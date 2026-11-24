@@ -131,6 +131,11 @@ export function normalizeConfig(input = {}) {
     config.maxConcurrentSessions = Math.floor(input.maxConcurrentSessions);
   }
 
+  // "off" or a proxy URL; absent means auto (environment, then the system proxy).
+  if (typeof input.proxy === "string" && input.proxy.trim() !== "" && input.proxy.trim().toLowerCase() !== "auto") {
+    config.proxy = input.proxy.trim();
+  }
+
   return config;
 }
 

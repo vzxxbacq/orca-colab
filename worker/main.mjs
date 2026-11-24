@@ -13,6 +13,8 @@ import {
   GRACE_PERIOD_MINUTES,
 } from "../bin/lib/idle-watchdog.mjs";
 import { estimateProjectMonthlyUse, readLedgerEvents } from "../bin/lib/credit-ledger.mjs";
+import { checkNetwork } from "../bin/lib/network-check.mjs";
+import { installNetworkProxy } from "../bin/lib/network-proxy.mjs";
 import { createPanelActions, PANEL_ACTION_NAMES } from "../bin/lib/panel-actions.mjs";
 import { describeProjectGuardrails } from "../bin/lib/project-guardrails.mjs";
 import { createRuntimeChannel } from "../bin/lib/runtime-channel.mjs";
@@ -166,7 +168,7 @@ class AccountDashboard {
       throw new Error(`unknown action: ${action}`);
     }
     const result = await fn(input, hooks);
-    if (action === "authLogin" || action === "authSwitch" || action === "authLogout") {
+    if (action === "authLogin" || action === "authSwitch" || action === "authLogout" || action === "setProxy") {
       this.builder.invalidateDoctor();
       this.builder.lastRuntimeSyncAt = 0;
       this.builder.lastDiscoveryAt = 0;
@@ -317,6 +319,8 @@ class AccountDashboard {
 }
 
 export default async function activate(orca, { homeDir = os.homedir() } = {}) {
+  // Before anything captures `fetch`: the Orca app starts this worker without the shell's proxy variables.
+  installNetworkProxy({ env: process.env, homeDir });
   const paths = ensureColabHome(homeDir);
   const budgetNotifiedKeys = {};
   // ORCA_COLAB_DISABLE_ORCA_CLI=1 keeps tests from touching the real Orca on this machine.
@@ -586,6 +590,9 @@ export default async function activate(orca, { homeDir = os.homedir() } = {}) {
   orca.panels.handle("colab.sessions", async () => withWorkspace(await dashboard.snapshot({ includeLiveMetrics: true })));
 
   orca.panels.handle("colab.doctor", async () => (await dashboard.snapshot()).doctor);
+
+  // Reaches every endpoint from this process, through the proxy the worker itself would use.
+  orca.panels.handle("colab.networkCheck", async () => checkNetwork({ homeDir }));
 
   orca.panels.handle("colab.cliCommand", async () => ({ command: await resolveCliCommand(orca) }));
 

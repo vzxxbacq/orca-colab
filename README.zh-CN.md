@@ -65,6 +65,26 @@ Google 的回复原样返回。它不保存、不记录（请求日志已关闭�
 `ORCA_COLAB_CLIENT_SECRET`，orca-colab 就会直接连接 Google。`orca-colab auth logout` 会先在 Google 侧撤销
 token，再从 `~/.orca-colab` 删除。
 
+### 使用代理上网
+
+如果这台电脑只能通过 HTTP 或 SOCKS 代理访问 Google，orca-colab 的所有请求都会走代理：登录（中转和 Google）、
+Colab API，以及运行时的 HTTPS 和 WebSocket。Node 默认不理会任何代理设置，所以 orca-colab 自己按以下顺序查找：
+
+1. 任意命令上的 `--proxy <auto|off|url>`，或环境变量 `ORCA_COLAB_PROXY`。
+2. 面板里的 **Setup → Network proxy**（Auto / Off / Proxy URL），保存在 `~/.orca-colab/config.json`，
+   这台电脑上的 CLI 和 MCP 服务也会跟着用。
+3. `HTTPS_PROXY`、`HTTP_PROXY`、`ALL_PROXY` 和 `NO_PROXY`（大小写均可）。
+4. macOS（`scutil --proxy`）或 Windows（Internet 设置）的系统代理，因为 Orca 应用启动插件时不带 shell 里的
+   环境变量。Linux 上请设置环境变量或面板里的选项。
+
+支持 `http://`、`https://` 和 `socks5://` 代理，需要认证时把 `user:password@` 写进 URL。不支持自动配置（PAC）
+脚本，请直接填代理地址。会解密 TLS 的代理需要把它的 CA 证书放进 `NODE_EXTRA_CA_CERTS`。本机地址（`127.0.0.1`、
+`localhost`）始终直连。
+
+`orca-colab doctor --network`（或面板里的 **Test connection**）会访问每一个端点，并逐个显示是否连通、耗时，以及
+走的是哪个代理。请求发不出去时，报错是 `Could not reach <host>: <原因代码> …`，并写明正在使用的代理，不再是
+`fetch failed`。
+
 ## 一次 Agent 任务长什么样
 
 在 T4 上跑一次冒烟测试，就是 `colab-gpu` Skill 的标准流程：
@@ -119,6 +139,12 @@ skill 使用它：`npx skills add vzxxbacq/orca-colab`，或把它当作 MCP 服
 Colab 运行时是一次性的，并且有时长限制。结果一产生就及时拉回；运行时没了，`status --json` 会显示出来，Agent 可以重新
 `down`、`up`、`sync`。
 
+### 登录最后显示 "Google Colab sign-in failed" 或 "fetch failed" 怎么办？
+浏览器能访问 Google，但 orca-colab 自己访问不了：登录的最后一步是由这台电脑向登录中转和 Google 发请求，浏览器会走
+系统代理，Node 不会。从 v0.4.2 起，失败页面和面板会写明是哪个主机、什么原因（`ENOTFOUND`、`ECONNREFUSED`、
+`ETIMEDOUT`、证书错误）以及正在使用的代理。打开面板的 **Setup → Network proxy**，点 **Test connection**，
+没有找到代理就填上，然后再点一次 **Sign in**，不需要重启。详见[使用代理上网](#使用代理上网)。
+
 ### 和 Colab 的 VS Code 扩展有什么区别？
 Google 的扩展是把 VS Code 里打开的 notebook 连接到 Colab 运行时，供人使用。本项目是为 Agent 做的：JSON 输出的 CLI、
 带实时日志的任务管理、文件同步和拉回、预算限制，以及 Orca 面板。本项目是社区项目，与 Google 无关联。
@@ -133,7 +159,7 @@ Google 的扩展是把 VS Code 里打开的 notebook 连接到 Colab 运行时�
 
 ```sh
 orca-colab auth [login --add | list | switch <account>] --json
-orca-colab doctor --json
+orca-colab doctor [--network] --json
 orca-colab up --gpu T4 [--new] [--name <name>] [--account <account>] --json
 orca-colab job submit --name "Train" --wait --json -- <cmd>
 orca-colab run --json -- <cmd>
@@ -141,6 +167,7 @@ orca-colab sync [path] --json
 orca-colab pull <remote> <localDir> --json
 orca-colab forward --port <远端端口> [--listen 127.0.0.1:<本地端口>]
 orca-colab down [--all] --json
+orca-colab --proxy <auto|off|url> <command>   # 或 ORCA_COLAB_PROXY，见"使用代理上网"
 ```
 
 **下载结果。** `orca-colab pull outputs ./results --json` 会在运行时上把 `outputs`（相对于同步目录，也可以是

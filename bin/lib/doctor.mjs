@@ -3,6 +3,7 @@ import { readConfig, resolveAccount, resolveAgentPolicy } from "./colab-home.mjs
 import { resolveGuardrails } from "./project-guardrails.mjs";
 import { listOAuthAccounts, readOAuthAccountStatus } from "./colab-oauth.mjs";
 import { findExecutableOnPath } from "./executable-lookup.mjs";
+import { describeProxyPlan, resolveProxyPlan } from "./network-proxy.mjs";
 
 export function runDoctor({
   homeDir = os.homedir(),
@@ -11,6 +12,7 @@ export function runDoctor({
   platform = process.platform,
   nodeVersion = process.versions.node,
   findBinary = findExecutableOnPath,
+  proxyPlan = null,
 } = {}) {
   const actions = [];
   const warnings = [];
@@ -91,6 +93,13 @@ export function runDoctor({
     actions.push(oauthCheck.action);
   }
 
+  // Which proxy requests go through; `doctor --network` adds whether each endpoint answers.
+  const { warning: proxyWarning, ...proxy } = describeProxyPlan(proxyPlan ?? resolveProxyPlan({ env, homeDir, platform }));
+  const proxyCheck = { ok: !proxyWarning, ...proxy };
+  if (proxyWarning) {
+    warnings.push(proxyWarning);
+  }
+
   const ok = nodeCheck.ok && gitCheck.ok && tarCheck.ok && oauthOk && guardrailsCheck?.ok !== false;
 
   return {
@@ -102,6 +111,7 @@ export function runDoctor({
       oauth: oauthCheck,
       git: gitCheck,
       tar: tarCheck,
+      proxy: proxyCheck,
       ...(guardrailsCheck ? { guardrails: guardrailsCheck } : {}),
     },
     actions,

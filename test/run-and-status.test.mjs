@@ -137,6 +137,7 @@ test("status and ls report reachability and ageSeconds in JSON without the runti
       },
     ],
     recentlyEnded: [],
+    networkError: null,
   });
 });
 
@@ -181,5 +182,6 @@ test("status says when and why a session ended, newest first, for the last 24 ho
         reason: "Released with 'down' (CLI, MCP or the panel's Stop button).",
       },
     ],
+    networkError: null,
   });
 });

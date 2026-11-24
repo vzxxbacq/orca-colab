@@ -350,6 +350,12 @@ export async function run(
 
     let ccuInfo = null;
     let activeRuntimes = [];
+    // The sign-in is read from disk; an unreachable Google or Colab is reported next to it, not as signed out.
+    let networkError = null;
+    const unreachable = (fallback) => (err) => {
+      if (err?.code === "NETWORK_UNREACHABLE") networkError = err.message;
+      return fallback;
+    };
     try {
       const accessToken = await getValidAccessToken({
         account: base.account,
@@ -358,12 +364,12 @@ export async function run(
       });
       if (accessToken) {
         [ccuInfo, activeRuntimes] = await Promise.all([
-          getConsumptionUserInfo({ accessToken, fetchImpl, signal }).catch(() => null),
-          listRuntimes({ accessToken, fetchImpl, signal }).catch(() => []),
+          getConsumptionUserInfo({ accessToken, fetchImpl, signal }).catch(unreachable(null)),
+          listRuntimes({ accessToken, fetchImpl, signal }).catch(unreachable([])),
         ]);
       }
-    } catch {
-      // Best-effort status enrichment.
+    } catch (err) {
+      unreachable(null)(err);
     }
 
     const payload = {
@@ -378,11 +384,15 @@ export async function run(
           : null,
       consumptionRateHourly: ccuInfo?.consumptionRateHourly ?? null,
       assignedRuntimesCount: activeRuntimes.length,
+      networkError,
     };
 
     if (json) {
       writeJson(payload, stdout);
     } else {
+      if (networkError) {
+        log(`warning: ${networkError}`, stderr);
+      }
       log(
         `Account '${payload.account}': signed in${payload.email ? ` as ${payload.email}` : ""}${
           payload.subscriptionTier ? ` (${payload.subscriptionTier})` : ""
