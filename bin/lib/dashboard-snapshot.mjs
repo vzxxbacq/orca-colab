@@ -11,7 +11,7 @@ import {
   resolveAgentPolicy,
 } from "./colab-home.mjs";
 import { listOAuthAccounts, readOAuthAccountStatus } from "./colab-oauth.mjs";
-import { projectAccountCredits, readLedgerEvents } from "./credit-ledger.mjs";
+import { listRecentSessionEnds, projectAccountCredits, readLedgerEvents } from "./credit-ledger.mjs";
 import { runDoctor } from "./doctor.mjs";
 import { evaluateSessionIdleState } from "./idle-watchdog.mjs";
 import { readRateTable } from "./rate-table.mjs";
@@ -192,6 +192,7 @@ export class DashboardSnapshotBuilder {
       auth: authByAccount[defaultAccount] || { account: defaultAccount, authenticated: false },
       authByAccount,
       sessions: enrichedSessions,
+      recentlyEnded: listRecentSessionEnds(homeDir),
       credits: creditsByAccount[defaultAccount],
       creditsByAccount,
       tasks,

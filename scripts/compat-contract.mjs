@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Prints the public contract of an orca-colab checkout as JSON: everything AGENTS.md calls breaking when
 // removed or changed (commands, flags, --json fields, exit codes, ~/.orca-colab formats, watch protocol,
-// plugin settings, capabilities, engines.orca). CI runs it on the PR head and on its base and diffs them.
+// plugin settings, capabilities, engines.orca, MCP tools and their arguments). CI runs it on the PR head and on its base and diffs them.
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -220,6 +220,16 @@ function pluginManifest(root) {
   };
 }
 
+// MCP clients and agent prompts address tools and arguments by name.
+async function mcpSurface(root) {
+  const { createColabMcpTools } = await load(root, "bin/lib/mcp-tools.mjs");
+  return {
+    tools: Object.fromEntries(
+      createColabMcpTools().tools.map((tool) => [tool.name, sorted(Object.keys(tool.inputSchema.properties))]),
+    ),
+  };
+}
+
 export async function buildContract(root, { allowMissing = false } = {}) {
   const pkg = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
   const contract = { version: pkg.version };
@@ -229,6 +239,7 @@ export async function buildContract(root, { allowMissing = false } = {}) {
     files: () => fileFormats(root),
     watch: () => watchProtocol(root),
     plugin: () => pluginManifest(root),
+    mcp: () => mcpSurface(root),
   };
   for (const [name, build] of Object.entries(sections)) {
     try {

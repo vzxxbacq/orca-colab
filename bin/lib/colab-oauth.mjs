@@ -419,6 +419,12 @@ export function grantedColabScope(scope) {
   return String(scope || "").split(/\s+/).includes(COLAB_SCOPE);
 }
 
+// Sign-in ends on a loopback address of the machine that runs orca-colab. A browser elsewhere cannot load
+// it; `handOff` says where the user takes the address instead.
+export function remoteBrowserSignInNote(handOff) {
+  return `If the browser is on another machine than orca-colab, the last page (http://127.0.0.1:PORT/...) will not load. That is expected: copy its full address from the address bar and ${handOff}. That address is a one-time key to the Colab account; send it nowhere else.`;
+}
+
 export async function runLoopbackOAuthFlow({
   account = "default",
   addAccount = false,

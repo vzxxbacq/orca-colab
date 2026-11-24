@@ -226,38 +226,13 @@ test("up and execCommandOverTty work with only a Google sign-in", async () => {
     assert.equal(sessionJson.cuPerHour, 1.96);
 
     const chunks = [];
-    class FakeExecWebSocket {
-      constructor() {
-        this.listeners = {};
-        setTimeout(() => this.listeners.open?.({}), 5);
-      }
-      addEventListener(ev, fn) {
-        this.listeners[ev] = fn;
-      }
-      send(raw) {
-        const frame = JSON.parse(raw);
-        if (typeof frame.data === "string" && frame.data.includes("python3 -u")) {
-          const b64Match = frame.data.match(/printf '%s' "([^"]+)"/);
-          const pyCode = Buffer.from(b64Match[1], "base64").toString("utf8");
-          const cfgMatch = pyCode.match(/b64decode\("([^"]+)"\)/);
-          const cfg = JSON.parse(Buffer.from(cfgMatch[1], "base64").toString("utf8"));
-          setTimeout(() => {
-            this.listeners.message?.({
-              data: JSON.stringify({
-                data: `\n${cfg.startMarker}\nEpoch 1/1: loss=0.042\n${cfg.endPrefix}0${cfg.endSuffix}\n`,
-              }),
-            });
-          }, 5);
-        }
-      }
-      close() {}
-    }
-
+    const runtime = fakeRuntime({ output: "Epoch 1/1: loss=0.042\n" });
     const execRes = await execCommandOverTty({
       baseUrl: "https://8080-rt-notail-01.colab.dev",
       proxyToken: "proxy-tok-notail",
       command: "python3 train.py",
-      WebSocketImpl: FakeExecWebSocket,
+      WebSocketImpl: runtime.WebSocketImpl,
+      fetchImpl: runtime.fetchImpl,
       onOutput: (c) => chunks.push(c),
     });
 
@@ -527,4 +502,191 @@ test("Re-running up on the same runtime preserves createdAt and replacing a runt
   } finally {
     rmSync(homeDir, { recursive: true, force: true });
   }
+});
+
+function assignmentApi({ waitAnswers, onDelete = () => {} }) {
+  const calls = [];
+  const answer = (body, status = 200) => ({ ok: status < 400, status, text: async () => JSON.stringify(body) });
+  const pending = { name: "operations/op-slow", metadata: { runtime: "runtimes/r-slow" } };
+  return {
+    calls,
+    fetchImpl: async (url, init = {}) => {
+      const method = init.method || "GET";
+      if (method === "POST") {
+        calls.push("create");
+        return answer(pending);
+      }
+      if (method === "DELETE") {
+        calls.push("delete");
+        onDelete(url);
+        return answer({});
+      }
+      if (url.includes(":wait")) {
+        calls.push("wait");
+        return answer(waitAnswers.length > 1 ? waitAnswers.shift() : waitAnswers[0]);
+      }
+      return answer({ runtimes: [] });
+    },
+  };
+}
+
+test("assignRuntime keeps polling an assignment that stays pending longer than two waits", async () => {
+  const pending = { name: "operations/op-slow" };
+  const api = assignmentApi({
+    waitAnswers: [
+      pending,
+      pending,
+      pending,
+      {
+        name: "operations/op-slow",
+        done: true,
+        response: {
+          name: "runtimes/r-slow",
+          runtimeSpec: { variant: "VARIANT_GPU", accelerator: "G4" },
+          connectionInfo: { url: "https://8080-g4.colab.dev", token: "proxy-g4" },
+        },
+      },
+    ],
+  });
+  const progress = [];
+  const assigned = await assignRuntime({
+    accessToken: "tok",
+    gpu: "G4",
+    reuseExisting: false,
+    fetchImpl: api.fetchImpl,
+    onProgress: (line) => progress.push(line.replace(/\(\d+s\)/, "(Ns)")),
+  });
+  assert.equal(assigned.id, "r-slow");
+  assert.equal(assigned.token, "proxy-g4");
+  assert.deepEqual(api.calls, ["create", "wait", "wait", "wait", "wait"]);
+  assert.deepEqual(progress, Array(3).fill("Colab is still allocating the G4 runtime (Ns)..."));
+});
+
+test("assignRuntime says when Colab has no capacity, and withdraws a request that never settles", async () => {
+  const noRuntimes = assignmentApi({
+    waitAnswers: [
+      {
+        name: "operations/op-slow",
+        done: true,
+        error: { code: 9, message: "CreateAssignment: generic::resource_exhausted: no machines", details: [{ reason: "NO_RUNTIMES" }] },
+      },
+    ],
+  });
+  await assert.rejects(
+    assignRuntime({ accessToken: "tok", gpu: "G4", reuseExisting: false, fetchImpl: noRuntimes.fetchImpl }),
+    {
+      message:
+        "Colab has no G4 runtime available right now (1 attempt; Colab said: CreateAssignment: generic::resource_exhausted: no machines). Nothing was started. Try again in a few minutes or pick another allowed GPU.",
+    },
+  );
+
+  const deleted = [];
+  const stuck = assignmentApi({ waitAnswers: [{ name: "operations/op-slow" }], onDelete: (url) => deleted.push(new URL(url).pathname) });
+  await assert.rejects(
+    assignRuntime({ accessToken: "tok", gpu: "G4", reuseExisting: false, maxWaitMs: 30, fetchImpl: stuck.fetchImpl }),
+    {
+      message:
+        "Colab was still allocating the G4 runtime after 0s, so the request was withdrawn. G4 capacity is probably short: try again later or pick another allowed GPU.",
+    },
+  );
+  assert.deepEqual(deleted, ["/v1beta/runtimes/r-slow"]);
+
+  await assert.rejects(
+    assignRuntime({
+      accessToken: "tok",
+      gpu: "G4",
+      highRam: true,
+      reuseExisting: false,
+      fetchImpl: async () => ({
+        ok: false,
+        status: 400,
+        text: async () => "CreateAssignment: invalid pool ID requested: highmem shape not available for variant/accelerator pair GPU/G4",
+      }),
+    }),
+    { message: "Colab does not offer the high-RAM shape for G4; start it without --high-ram." },
+  );
+});
+
+// A runtime as execCommandOverTty sees it: Jupyter's terminal and contents endpoints plus a websocket
+// that runs the typed runner. `terminals: false` leaves only the shared /colab/tty.
+function fakeRuntime({ terminals = true, output = "", exitCode = 0 } = {}) {
+  const seen = { http: [], sockets: [], configs: [] };
+  let nextTerminal = 7;
+  const fetchImpl = async (url, init = {}) => {
+    const { pathname } = new URL(url);
+    seen.http.push(`${init.method || "GET"} ${pathname}`);
+    if (pathname.startsWith("/api/contents/")) {
+      seen.upload = { ...JSON.parse(init.body), token: init.headers["X-Colab-Runtime-Proxy-Token"] };
+      return { ok: true, status: 201, json: async () => ({}) };
+    }
+    if (!terminals) {
+      return { ok: false, status: 404, json: async () => ({}) };
+    }
+    return { ok: true, status: 200, json: async () => ({ name: String(nextTerminal++) }) };
+  };
+  class WebSocketImpl {
+    constructor(url) {
+      this.listeners = {};
+      this.path = new URL(url).pathname;
+      this.typed = "";
+      seen.sockets.push(this.path);
+      setTimeout(() => this.listeners.open?.({}), 1);
+    }
+    addEventListener(ev, fn) {
+      this.listeners[ev] = fn;
+    }
+    send(raw) {
+      const frame = JSON.parse(raw);
+      const onTerminal = Array.isArray(frame);
+      this.typed += onTerminal ? frame[1] : frame.data;
+      if (!this.typed.endsWith("\n")) return;
+      const pyCode = Buffer.from(this.typed.match(/printf '%s' "([^"]+)"/)[1], "base64").toString("utf8");
+      const cfg = JSON.parse(Buffer.from(pyCode.match(/b64decode\("([^"]+)"\)/)[1], "base64").toString("utf8"));
+      seen.configs.push(cfg);
+      const text = `\n${cfg.startMarker}\n${output}${cfg.endPrefix}${exitCode}${cfg.endSuffix}\n`;
+      setTimeout(() => this.listeners.message?.({ data: JSON.stringify(onTerminal ? ["stdout", text] : { data: text }) }), 1);
+    }
+    close() {}
+  }
+  return { seen, fetchImpl, WebSocketImpl };
+}
+
+test("each command runs in its own Jupyter terminal, which is deleted afterwards", async () => {
+  const runtime = fakeRuntime({ output: "hi\n", exitCode: 3 });
+  const base = { baseUrl: "https://8080-m.colab.dev", proxyToken: "proxy-tok", WebSocketImpl: runtime.WebSocketImpl, fetchImpl: runtime.fetchImpl };
+  const [a, b] = await Promise.all([
+    execCommandOverTty({ ...base, command: "python3 bench.py" }),
+    execCommandOverTty({ ...base, command: "nvidia-smi" }),
+  ]);
+  assert.deepEqual([a.exitCode, a.stdout, b.exitCode, b.stdout], [3, "hi", 3, "hi"]);
+  assert.deepEqual(runtime.seen.sockets, ["/terminals/websocket/7", "/terminals/websocket/8"]);
+  assert.deepEqual(runtime.seen.http.sort(), [
+    "DELETE /api/terminals/7",
+    "DELETE /api/terminals/8",
+    "POST /api/terminals",
+    "POST /api/terminals",
+  ]);
+});
+
+test("stdin is uploaded as a file for a terminal and typed inline only on the shared tty", async () => {
+  const stdinBase64 = Buffer.from("tar-bytes").toString("base64");
+  const runtime = fakeRuntime();
+  const base = { baseUrl: "https://8080-m.colab.dev", proxyToken: "proxy-tok", command: "tar -xzf -", stdinBase64 };
+  await execCommandOverTty({ ...base, WebSocketImpl: runtime.WebSocketImpl, fetchImpl: runtime.fetchImpl });
+  const cfg = runtime.seen.configs[0];
+  assert.match(cfg.stdinFile, /^\/tmp\/orca-colab-stdin-[0-9a-f]{12}$/);
+  assert.equal(cfg.stdinB64, null);
+  assert.deepEqual(runtime.seen.upload, { type: "file", format: "base64", content: stdinBase64, token: "proxy-tok" });
+  assert.deepEqual(runtime.seen.http, [
+    "POST /api/terminals",
+    `PUT /api/contents${cfg.stdinFile}`,
+    "DELETE /api/terminals/7",
+  ]);
+
+  const old = fakeRuntime({ terminals: false, output: "ok\n" });
+  const res = await execCommandOverTty({ ...base, WebSocketImpl: old.WebSocketImpl, fetchImpl: old.fetchImpl });
+  assert.equal(res.stdout, "ok");
+  assert.deepEqual(old.seen.sockets, ["/colab/tty"]);
+  assert.deepEqual(old.seen.http, ["POST /api/terminals"]);
+  assert.deepEqual([old.seen.configs[0].stdinFile, old.seen.configs[0].stdinB64], [null, stdinBase64]);
 });

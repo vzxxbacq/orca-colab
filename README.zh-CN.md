@@ -20,7 +20,8 @@ Colab 账号和计算单元，不需要 VPN、SSH，也不用守着 notebook。
   全部通过同一个 JSON CLI 完成。
 - **Live Output 实时输出**：每个 Agent 任务的输出实时流入 **Colab GPU** 面板，带历史记录、退出码和所用 GPU 标注。
 - **人只设边界**：一键登录 Google，选择允许的 GPU 级别（T4、L4、A100、CPU），限制并发运行时数量和月度计算单元预算，
-  Agent 无法越界。
+  Agent 无法越界：本月估算用量达到预算后，`up` 会拒绝启动新的运行时（已在运行的不受影响），直到你在面板里或用
+  `orca-colab credits budget <cu>` 调高预算。
 - **多运行时、多 Session**：多块 GPU 并行，可命名、可用 `--session` 逐条指定，并支持多个 Google 账号切换。
 - **只用公网接口**：全部通过 HTTPS 访问 Google 的 Colab API 和运行时自带的代理，不需要 VPN、tailnet、SSH 或开放端口；`pull` 可把结果（含二进制文件）下载回本机。
 - **远程 Orca 服务器（Beta）**：项目位于 Orca 服务器上时，面板通过 Bridge Terminal 跟随显示该服务器的运行时、任务和算力。
@@ -92,7 +93,7 @@ orca-colab down --json                                          # 释放运行�
 ### 不用 Orca 可以吗？
 可以。CLI 在任何装了 Node.js 20+ 的机器上都能运行：`npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/<release> <command> --json`
 （每个 [release](https://github.com/vzxxbacq/orca-colab/releases) 里都有固定版本的完整命令）。任何 Agent 都可以通过
-skill 使用它：`npx skills add vzxxbacq/orca-colab`。
+skill 使用它：`npx skills add vzxxbacq/orca-colab`，或把它当作 MCP 服务：见[作为连接器使用（MCP）](#作为连接器使用mcp)。
 
 ### 能用哪些 GPU？
 你的 Colab 账号能用的都可以，通常是 T4、L4、A100，以及 CPU 运行时。在 **Guardrails & CU** 里可以限定 Agent 能开哪些 GPU、最多同时开几台。
@@ -144,6 +145,41 @@ orca-colab down [--all] --json
 `/content/model.pt` 这样的绝对路径）打成 tar.gz，用运行时的代理 token 通过 HTTPS 从运行时自带的 Jupyter
 服务下载，再解压到 `./results/outputs`。任何大小和类型的文件都按字节原样到达，不需要任何内网可达。
 不支持端口转发：要访问运行时上的服务，用 `orca-colab run -- curl -s localhost:<端口>/...`。
+
+## 作为连接器使用（MCP）
+
+`orca-colab mcp` 通过 stdio 把整个 CLI 以 [MCP](https://modelcontextprotocol.io) 工具的形式提供出来，Agent 既不需要
+skill，也不需要 shell。添加到 Orca bot：
+
+```sh
+orca bot tools add "npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/2944ee151e7ef2d08a5598c00c6cce4e3109f13c mcp" --name colab
+```
+
+Claude Code 和 Codex（Orca bot 也会自动获得你自己的 Claude Code 或 Codex 里配置的工具）：
+
+```sh
+claude mcp add colab --scope user -- npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/2944ee151e7ef2d08a5598c00c6cce4e3109f13c mcp
+codex mcp add colab -- npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/2944ee151e7ef2d08a5598c00c6cce4e3109f13c mcp
+```
+
+其他 MCP 客户端：命令 `npx`，参数 `-y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/2944ee151e7ef2d08a5598c00c6cce4e3109f13c mcp`。
+
+- **工具**：`doctor`、`status`、`up`、`sync`、`run`、`job_submit`、`job_list`、`job_logs`、`job_wait`、`job_stop`、
+  `pull`、`down`、`credits`、`credits_calibrate`、`credits_set`、`credits_budget`、`ledger`、`rates`，以及
+  `auth_status`、`auth_login`、`auth_wait`、`auth_redirect`、`auth_list`、`auth_switch`、`auth_logout`。每个工具执行同名的
+  CLI 命令并返回它的 JSON，所以你设的边界（允许的 GPU、运行时上限、月度预算）原样生效：`up` 会以 `step: "policy"` 或 `step: "budget"` 拒绝。
+- **由 Agent 发起登录**：没有 Google 登录时，Agent 调用 `auth_login`，你的浏览器会打开 Google 授权页（Agent 同时拿到链接，
+  可以发给你）；勾选 **Read, write and delete your Colab resources**，Agent 的 `auth_wait` 就会得知登录完成。不需要终端，也不需要面板。
+- **在另一台机器上登录**：登录最后会跳转到运行 `orca-colab` 那台机器上的 `http://127.0.0.1:PORT/...`。如果你的浏览器在另一台机器上
+  （远程 Orca 服务器、SSH），这最后一页打不开，这是正常的：从地址栏复制完整地址交给 Agent（`auth_redirect`），或在那台机器上运行
+  `orca-colab auth redirect <地址>`。这个地址是你 Colab 的一次性密钥，不要发到别处。
+- **与面板状态一致**：服务读写的是和 CLI 相同的 `~/.orca-colab`。运行时、任务及其实时输出、算力余额和登录状态会即时出现在
+  **Colab GPU** 面板里；你在面板里的改动（边界、账号、停止运行时或任务）也是 Agent 下一次调用看到的状态。
+- **路径**：服务不在你的工作区里运行，所以 `sync`、`pull` 和带 `sync` 的 `job_submit` 需要传 `workspace_path`
+  （客户端只暴露一个 MCP root 时可以不传）。
+- **长任务**：`job_submit` 立即返回任务 id，用 `job_wait` 和 `job_logs` 跟进。等待默认 45 秒。Codex 的工具调用 60 秒超时，
+  较慢的 `up` 可能超过：运行时仍会创建（`status` 能看到），或在 `~/.codex/config.toml` 的 `[mcp_servers.colab]` 下设置
+  `tool_timeout_sec = 300`。
 
 ## 远程 Orca 服务器（Beta）
 

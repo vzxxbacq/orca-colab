@@ -204,7 +204,14 @@ export function createPanelActions({
           }
         },
       };
-      await runUpCommand(args, { json: true, stdout: NULL_STREAM, stderr: logStream, env, homeDir });
+      try {
+        await runUpCommand(args, { json: true, stdout: NULL_STREAM, stderr: logStream, env, homeDir });
+      } catch (err) {
+        if (err?.payload?.step === "budget") {
+          throw new Error(`${err.message} Raise the monthly budget under Guardrails & CU to start one.`);
+        }
+        throw err;
+      }
       return { gpu };
     },
 

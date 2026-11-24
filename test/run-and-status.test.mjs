@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { run as runLs } from "../bin/commands/ls.mjs";
 import { run as runCmd } from "../bin/commands/run.mjs";
+import { appendLedgerEvent } from "../bin/lib/credit-ledger.mjs";
 import { writeSession } from "../bin/lib/session-store.mjs";
 
 function makeBuffers() {
@@ -120,6 +121,51 @@ test("status and ls report reachability and ageSeconds in JSON without the runti
         colabRuntime: { id: "r-1", endpoint: "r-1", baseUrl: "https://8080-m.colab.dev", tokenExpiry: null },
         reachable: true,
         ageSeconds: 330,
+      },
+    ],
+    recentlyEnded: [],
+  });
+});
+
+test("status says when and why a session ended, newest first, for the last 24 hours", async (t) => {
+  const tmpHome = mkdtempSync(path.join(os.tmpdir(), "orca-colab-status-"));
+  t.after(() => rmSync(tmpHome, { recursive: true, force: true }));
+  for (const [at, session, cause] of [
+    ["2026-11-08T09:00:00.000Z", "orca-colab-old", "user"],
+    ["2026-11-09T09:00:00.000Z", "orca-colab-a", "user"],
+    ["2026-11-09T09:01:00.000Z", "orca-colab-a", "colab-died"],
+    ["2026-11-09T09:30:00.000Z", "orca-colab-b", "idle-watchdog"],
+    ["2026-11-09T09:58:00.744Z", "orca-colab-h3", "colab-died"],
+  ]) {
+    appendLedgerEvent({ type: "session.end", at, account: "default", session, cause }, tmpHome);
+  }
+
+  const io = makeBuffers();
+  await runLs([], { json: true, stdout: io.stdout, stderr: io.stderr, homeDir: tmpHome, nowMs: () => Date.parse("2026-11-09T10:00:00.000Z") });
+  assert.deepEqual(JSON.parse(io.stdoutText), {
+    sessions: [],
+    recentlyEnded: [
+      {
+        session: "orca-colab-h3",
+        account: "default",
+        endedAt: "2026-11-09T09:58:00.744Z",
+        cause: "colab-died",
+        reason:
+          "Colab no longer had this runtime assigned, so the local session was dropped. orca-colab did not release it: it ended on Colab's side (its web UI, an idle or lifetime limit, or Colab reclaiming it).",
+      },
+      {
+        session: "orca-colab-b",
+        account: "default",
+        endedAt: "2026-11-09T09:30:00.000Z",
+        cause: "idle-watchdog",
+        reason: "Released by the idle auto-stop: no command, job or GPU load for the configured time.",
+      },
+      {
+        session: "orca-colab-a",
+        account: "default",
+        endedAt: "2026-11-09T09:00:00.000Z",
+        cause: "user",
+        reason: "Released with 'down' (CLI, MCP or the panel's Stop button).",
       },
     ],
   });
