@@ -54,7 +54,7 @@ npx skills add vzxxbacq/orca-colab
 orca plugin dev load .
 ```
 
-The CLI needs no install step; agents call it as `npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/b41d4ad47c4a37f45ef05d7b95b974341477336c <command> --json`.
+The CLI needs no install step; agents call it as `npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/49d4f45286a03fdc6b7d537827f98da7915c5320 <command> --json`.
 
 ### 2. Configure
 
@@ -276,17 +276,17 @@ For a one-off query, `orca-colab run -- curl -s localhost:<port>/...` is still t
 needs neither the skill nor a shell. Add it to an Orca bot:
 
 ```sh
-orca bot tools add "npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/b41d4ad47c4a37f45ef05d7b95b974341477336c mcp" --name colab
+orca bot tools add "npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/49d4f45286a03fdc6b7d537827f98da7915c5320 mcp" --name colab
 ```
 
 Claude Code and Codex (Orca bots also pick up the tools of your own Claude Code or Codex setup):
 
 ```sh
-claude mcp add colab --scope user -- npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/b41d4ad47c4a37f45ef05d7b95b974341477336c mcp
-codex mcp add colab -- npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/b41d4ad47c4a37f45ef05d7b95b974341477336c mcp
+claude mcp add colab --scope user -- npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/49d4f45286a03fdc6b7d537827f98da7915c5320 mcp
+codex mcp add colab -- npx -y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/49d4f45286a03fdc6b7d537827f98da7915c5320 mcp
 ```
 
-Any other MCP client: command `npx`, arguments `-y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/b41d4ad47c4a37f45ef05d7b95b974341477336c mcp`.
+Any other MCP client: command `npx`, arguments `-y https://codeload.github.com/vzxxbacq/orca-colab/tar.gz/49d4f45286a03fdc6b7d537827f98da7915c5320 mcp`.
 
 - **Tools**: `doctor`, `status`, `up`, `sync`, `run`, `job_submit`, `job_list`, `job_logs`, `job_wait`,
   `job_stop`, `pull`, `down`, `credits`, `credits_calibrate`, `credits_set`, `credits_budget`, `ledger`,
