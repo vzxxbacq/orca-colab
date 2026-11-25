@@ -20,6 +20,56 @@ export const COLAB_OAUTH_CONFIG = Object.freeze({
 
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
+export const OAUTH_REAUTH_REQUIRED = "OAUTH_REAUTH_REQUIRED";
+// Answers no retry changes: the refresh token is dead, or this client may no longer use it.
+const DEFINITIVE_OAUTH_REFUSALS = new Set(["invalid_grant", "invalid_client", "unauthorized_client"]);
+const COLAB_SCOPE = "https://www.googleapis.com/auth/colaboratory";
+
+function describeRefusal(error, description) {
+  if (error === "client_changed") {
+    return "signed in before orca-colab switched to its own Google OAuth client";
+  }
+  if (error === "colab_scope_missing") {
+    return "the sign-in no longer includes Colab access";
+  }
+  return `Google sign-in expired or was revoked (${[error, description].filter(Boolean).join(": ")})`;
+}
+
+// The saved sign-in cannot be used again; only a new sign-in fixes it. Never built for a network
+// failure or a 5xx.
+export function reauthRequiredError({ account = null, email = null, error, description = null, at = null }) {
+  const who = account ? ` for account '${account}'${email && email !== account ? ` (${email})` : ""}` : "";
+  const reason = describeRefusal(error, description);
+  const message =
+    error === "client_changed" || error === "colab_scope_missing"
+      ? `Google sign-in${who} is no longer usable: ${reason}. Sign in again with 'orca-colab auth login' (tick the Colab permission); no sign-out is needed.`
+      : `${reason}${who}. Sign in again with 'orca-colab auth login' (tick the Colab permission); no sign-out is needed.`;
+  return Object.assign(new Error(message), {
+    name: "OAuthReauthRequiredError",
+    code: OAUTH_REAUTH_REQUIRED,
+    account,
+    email,
+    googleError: error,
+    googleErrorDescription: description,
+    reason,
+    at,
+  });
+}
+
+// What a failed command puts in its --json payload for this error.
+export function reauthErrorPayload(err) {
+  return {
+    ok: false,
+    error: err.message,
+    code: OAUTH_REAUTH_REQUIRED,
+    reauthRequired: true,
+    account: err.account ?? null,
+    googleError: err.googleError ?? null,
+    googleErrorDescription: err.googleErrorDescription ?? null,
+    hint: "Run 'orca-colab auth login' to sign in again; no sign-out is needed.",
+  };
+}
+
 // The plugin's own Desktop OAuth client (GCP project orca-colab-community). Its secret lives
 // only in the token relay (token-relay/), which adds it to the two token requests and keeps nothing.
 const DEFAULT_DESKTOP_CLIENT_ID = "744100990078-mbs5l25fle4cup2b3pphq8ovatdetvnn.apps.googleusercontent.com";
@@ -64,7 +114,8 @@ async function postTokenGrant(grant, { clientId, clientSecret, relayUrl, fetchIm
   });
 }
 
-// Revoking the refresh token also ends every access token derived from it; no client secret needed.
+// Google revokes the grant, not the one token: every refresh token this Google account holds for the
+// OAuth client stops working, on every machine. No client secret needed.
 export async function revokeGoogleToken(token, { fetchImpl = fetch } = {}) {
   if (!token) return false;
   try {
@@ -179,6 +230,10 @@ export function saveOAuthCredentials(account, credentials, homeDir = os.homedir(
     email: credentials.email || null,
     name: credentials.name || null,
     clientId: credentials.clientId || null,
+    // `updatedAt` moves with every refresh; these two say how old the sign-in itself is and when Google
+    // said it would end it (only clients that issue time-limited refresh tokens say so).
+    signedInAt: "signedInAt" in credentials ? credentials.signedInAt || null : new Date().toISOString(),
+    refreshTokenExpiresAt: credentials.refreshTokenExpiresAt || null,
     updatedAt: new Date().toISOString(),
   };
   writeOAuthStore(store, homeDir);
@@ -201,15 +256,40 @@ function issuedByCurrentClient(entry, homeDir) {
   return entry.clientId === resolveOAuthClientConfig(homeDir).clientId;
 }
 
-// Sign-out revokes the refresh token at Google first, so a copy left in a backup or a synced folder stops
-// working too; the local entry is removed even when Google cannot be reached.
-export async function signOutOAuthAccount(account = "default", homeDir = os.homedir(), { fetchImpl = fetch } = {}) {
+// Sign-out removes this machine's entry and leaves Google alone: revoking would sign out every other
+// machine that uses the same Google account (see revokeGoogleToken). `revoke` is that explicit "sign out
+// everywhere"; the local entry is removed even when Google cannot be reached.
+export async function signOutOAuthAccount(
+  account = "default",
+  homeDir = os.homedir(),
+  { fetchImpl = fetch, revoke = false } = {},
+) {
   const store = readOAuthStore(homeDir);
   const key = resolveOAuthAccountKey(account, store, homeDir);
   const entry = store.accounts?.[key];
-  const revoked = entry ? await revokeGoogleToken(entry.refreshToken || entry.accessToken, { fetchImpl }) : false;
+  const revoked =
+    revoke && entry ? await revokeGoogleToken(entry.refreshToken || entry.accessToken, { fetchImpl }) : false;
   const removed = removeOAuthCredentials(key, homeDir);
   return { account: key, removed, revoked };
+}
+
+// Recorded against the refresh token Google refused, so a sign-in that finished meanwhile stays clean.
+function markReauthRequired(account, refusedRefreshToken, { error, description }, homeDir) {
+  const store = readOAuthStore(homeDir);
+  const entry = store.accounts?.[account];
+  if (!entry || entry.refreshToken !== refusedRefreshToken) {
+    return null;
+  }
+  const reauthAt = entry.reauthRequired && entry.reauthError === error ? entry.reauthAt : new Date().toISOString();
+  store.accounts[account] = {
+    ...entry,
+    reauthRequired: true,
+    reauthError: error,
+    reauthDescription: description || null,
+    reauthAt,
+  };
+  writeOAuthStore(store, homeDir);
+  return reauthAt;
 }
 
 export function readOAuthAccountStatus(account = "default", homeDir = os.homedir()) {
@@ -230,9 +310,30 @@ export function readOAuthAccountStatus(account = "default", homeDir = os.homedir
       account: key,
       authenticated: false,
       reauthRequired: true,
+      reauthError: "client_changed",
+      reauthReason: describeRefusal("client_changed"),
+      reauthAt: null,
       email: entry.email || null,
       name: entry.name || null,
       updatedAt: entry.updatedAt || null,
+    };
+  }
+  const lifetime = {
+    signedInAt: entry.signedInAt || null,
+    refreshTokenExpiresAt: entry.refreshTokenExpiresAt || null,
+  };
+  if (entry.reauthRequired) {
+    return {
+      account: key,
+      authenticated: false,
+      reauthRequired: true,
+      reauthError: entry.reauthError || null,
+      reauthReason: describeRefusal(entry.reauthError, entry.reauthDescription),
+      reauthAt: entry.reauthAt || null,
+      email: entry.email || null,
+      name: entry.name || null,
+      updatedAt: entry.updatedAt || null,
+      ...lifetime,
     };
   }
   return {
@@ -241,15 +342,25 @@ export function readOAuthAccountStatus(account = "default", homeDir = os.homedir
     email: entry.email || null,
     name: entry.name || null,
     updatedAt: entry.updatedAt || null,
+    ...lifetime,
   };
 }
 
-export function listOAuthAccounts(homeDir = os.homedir()) {
+// Every account with a saved sign-in, usable or not.
+export function listStoredOAuthAccounts(homeDir = os.homedir()) {
   const store = readOAuthStore(homeDir);
-  const keys = Object.keys(store.accounts || {});
-  return keys
+  return Object.keys(store.accounts || {})
     .map((key) => readOAuthAccountStatus(key, homeDir))
-    .filter((entry) => entry.authenticated);
+    .filter((entry) => entry.authenticated || entry.reauthRequired);
+}
+
+export function listOAuthAccounts(homeDir = os.homedir()) {
+  return listStoredOAuthAccounts(homeDir).filter((entry) => entry.authenticated);
+}
+
+// Accounts whose saved sign-in Google refuses; they need `auth login` again, not a sign-out.
+export function listReauthAccounts(homeDir = os.homedir()) {
+  return listStoredOAuthAccounts(homeDir).filter((entry) => entry.reauthRequired);
 }
 
 export async function exchangeAuthorizationCode({
@@ -284,7 +395,15 @@ export async function exchangeAuthorizationCode({
     refreshToken: tokens.refresh_token,
     expiryDate,
     scope: tokens.scope || COLAB_OAUTH_CONFIG.scopes.join(" "),
+    refreshTokenExpiresAt: refreshTokenExpiry(tokens),
   };
+}
+
+// Google adds `refresh_token_expires_in` only when the refresh token has a fixed lifetime, as with an
+// OAuth client whose consent screen is in "Testing" (7 days).
+function refreshTokenExpiry(tokens) {
+  const seconds = Number(tokens?.refresh_token_expires_in);
+  return Number.isFinite(seconds) && seconds > 0 ? new Date(Date.now() + seconds * 1000).toISOString() : null;
 }
 
 export async function refreshAccessToken({
@@ -300,12 +419,30 @@ export async function refreshAccessToken({
 
   if (!response.ok) {
     const errText = await response.text().catch(() => "");
-    throw new Error(`OAuth token refresh failed (${response.status}): ${errText}`);
+    let refusal = null;
+    try {
+      refusal = JSON.parse(errText);
+    } catch {
+      // Not JSON (a gateway page, an empty body): not Google's verdict on the token.
+    }
+    if (response.status >= 400 && response.status < 500 && DEFINITIVE_OAUTH_REFUSALS.has(refusal?.error)) {
+      throw reauthRequiredError({
+        error: refusal.error,
+        description: typeof refusal.error_description === "string" ? refusal.error_description : null,
+      });
+    }
+    throw Object.assign(new Error(`OAuth token refresh failed (${response.status}): ${errText}`), {
+      code: "OAUTH_REFRESH_FAILED",
+      status: response.status,
+    });
   }
 
   const tokens = await response.json();
   if (!tokens.access_token) {
     throw new Error("OAuth refresh response missing access_token.");
+  }
+  if (typeof tokens.scope === "string" && !grantedColabScope(tokens.scope)) {
+    throw reauthRequiredError({ error: "colab_scope_missing" });
   }
 
   const expiryDate = tokens.expiry_date
@@ -317,6 +454,7 @@ export async function refreshAccessToken({
     refreshToken: tokens.refresh_token || refreshToken,
     expiryDate,
     scope: tokens.scope,
+    refreshTokenExpiresAt: refreshTokenExpiry(tokens),
   };
 }
 
@@ -338,10 +476,15 @@ export async function fetchGoogleUserProfile(accessToken, { fetchImpl = fetch } 
   }
 }
 
+// `recheck` asks Google again about a sign-in already recorded as refused (and clears the record when
+// Google accepts it); `forceRefresh` skips the cached access token, which says nothing about the
+// refresh token.
 export async function getValidAccessToken({
   account = "default",
   homeDir = os.homedir(),
   fetchImpl = fetch,
+  recheck = false,
+  forceRefresh = false,
 } = {}) {
   const store = readOAuthStore(homeDir);
   const resolvedKey = resolveOAuthAccountKey(account, store, homeDir);
@@ -353,8 +496,16 @@ export async function getValidAccessToken({
     return null;
   }
 
+  const refused = (error, description, at) =>
+    reauthRequiredError({ account: resolvedKey, email: stored.email || null, error, description, at });
+  if (stored.reauthRequired && !recheck) {
+    throw refused(stored.reauthError, stored.reauthDescription, stored.reauthAt || null);
+  }
+
   const now = Date.now();
   if (
+    !forceRefresh &&
+    !stored.reauthRequired &&
     stored.accessToken &&
     typeof stored.expiryDate === "number" &&
     stored.expiryDate - TOKEN_REFRESH_BUFFER_MS > now
@@ -362,11 +513,23 @@ export async function getValidAccessToken({
     return stored.accessToken;
   }
 
-  const refreshed = await refreshAccessToken({
-    refreshToken: stored.refreshToken,
-    homeDir,
-    fetchImpl,
-  });
+  let refreshed;
+  try {
+    refreshed = await refreshAccessToken({
+      refreshToken: stored.refreshToken,
+      homeDir,
+      fetchImpl,
+    });
+  } catch (err) {
+    if (err?.code !== OAUTH_REAUTH_REQUIRED) throw err;
+    const at = markReauthRequired(
+      resolvedKey,
+      stored.refreshToken,
+      { error: err.googleError, description: err.googleErrorDescription },
+      homeDir,
+    );
+    throw refused(err.googleError, err.googleErrorDescription, at);
+  }
 
   saveOAuthCredentials(
     resolvedKey,
@@ -375,6 +538,8 @@ export async function getValidAccessToken({
       accessToken: refreshed.accessToken,
       refreshToken: refreshed.refreshToken,
       expiryDate: refreshed.expiryDate,
+      signedInAt: stored.signedInAt || null,
+      refreshTokenExpiresAt: refreshed.refreshTokenExpiresAt || stored.refreshTokenExpiresAt || null,
     },
     homeDir,
   );
@@ -406,8 +571,6 @@ export function resolveTargetAccount({ store, account = "default", addAccount = 
   }
   return targetAccount;
 }
-
-const COLAB_SCOPE = "https://www.googleapis.com/auth/colaboratory";
 
 function callbackPage(title, text, color) {
   return `<!doctype html><meta charset="utf-8"><title>${title}</title><body style="font-family:system-ui,-apple-system,sans-serif;background:#0f172a;color:#f8fafc;display:flex;align-items:center;justify-content:center;height:100vh;margin:0"><div style="background:#1e293b;border:1px solid #334155;border-radius:12px;padding:28px 36px;max-width:440px;text-align:center"><h2 style="margin:0 0 8px;color:${color}">${title}</h2><p style="margin:0;color:#94a3b8;font-size:14px">${text}</p></div></body>`;

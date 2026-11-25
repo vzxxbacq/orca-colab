@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execCommandOverTty } from "./colab-api-client.mjs";
-import { listOAuthAccounts, remoteBrowserSignInNote } from "./colab-oauth.mjs";
+import { listOAuthAccounts, listReauthAccounts, remoteBrowserSignInNote } from "./colab-oauth.mjs";
 import { openUrlInSystemBrowser } from "./open-url.mjs";
 import { liveForwards } from "./port-forward.mjs";
 import { listSessions } from "./session-store.mjs";
@@ -45,6 +45,7 @@ Hygiene
 
 Failures
 - up with step "prerequisites": not signed in, or the Colab permission was not ticked. Call auth_login.
+- Any tool failing with code "OAUTH_REAUTH_REQUIRED", or auth_status / doctor reporting reauthRequired true: Google refused the saved sign-in (googleError, usually invalid_grant: it expired or was revoked, for example by a sign-out everywhere on another machine). Not a network problem and not worth a retry. Call auth_login (no sign-out first) and auth_wait. A sign-in covers one machine: the owner's computer and a server each sign in themselves.
 - up with step "policy": pick a GPU from allowedGpus; or the runtime cap is reached, so reuse a runtime or stop one.
 - up with step "budget" (code "BUDGET_REACHED"): the owner's monthly budget is used up (budgetCu, estimatedMonthlyUsedCu; estimates). Do not retry and do not change the budget yourself. Tell the owner the figures; they can raise it under Guardrails & CU in the Colab GPU panel, or tell you a new number for credits_budget. A runtime that is already running stays usable.
 - up with code "PROVISIONING_IN_PROGRESS": another agent is creating a runtime. Wait retryAfterSeconds and call up again.
@@ -57,6 +58,9 @@ Failures
 
 const SIGN_IN_HINT =
   "Not signed in to Google. Call the auth_login tool: it opens Google's consent page in the owner's browser and returns the URL. Ask the owner to tick the Colab permission (it starts unticked), then call auth_wait.";
+
+const REAUTH_HINT =
+  "The saved Google sign-in expired or was revoked (for example by a sign-out everywhere on another machine); retrying will not help. Call the auth_login tool to sign in again, no sign-out needed: it opens Google's consent page in the owner's browser and returns the URL. Ask the owner to tick the Colab permission (it starts unticked), then call auth_wait. Signing in here does not sign in any other machine.";
 
 const SESSION_PROP = {
   type: "string",
@@ -118,7 +122,7 @@ const TOOL_SPECS = [
     name: "doctor",
     title: "Check prerequisites and guardrails",
     description:
-      "Checks Node, git, tar and the Google sign-in, and returns the owner's guardrails in policy (allowedGpus, maxConcurrentSessions, and monthlyBudgetCu and autoStopIdleMinutes when the project sets them). policy.source says where they come from: \"project\" (policy.file, the project's .orca/colab.json) or \"machine\" (this machine's defaults). They are the owner's to change, not yours. Call it first, with workspace_path. mode is \"direct-api\" once signed in; when checks.oauth.ok is false, call auth_login. checks.guardrails.ok false means the project's guardrails file is broken: tell the owner, nothing can start until it is fixed. checks.proxy says which proxy requests go through (url, source) or that none is in use. With network true it also reaches every endpoint (token relay, Google, Colab, each runtime) and reports per endpoint ok, status or causeCode, latencyMs and the proxy used in checks.network: use it when a tool fails with \"Could not reach <host>\", and relay its action to the owner (the proxy is theirs to set, in the panel under Setup → Network proxy).",
+      "Checks Node, git, tar and the Google sign-in, and returns the owner's guardrails in policy (allowedGpus, maxConcurrentSessions, and monthlyBudgetCu and autoStopIdleMinutes when the project sets them). policy.source says where they come from: \"project\" (policy.file, the project's .orca/colab.json) or \"machine\" (this machine's defaults). They are the owner's to change, not yours. Call it first, with workspace_path. mode is \"direct-api\" once signed in; when checks.oauth.ok is false, call auth_login (checks.oauth.reauthRequired true: Google refused the saved sign-in, see reauthReason). Without network the sign-in is read from disk; with network true each saved sign-in is confirmed with a real token refresh (checks.oauth.refresh). checks.guardrails.ok false means the project's guardrails file is broken: tell the owner, nothing can start until it is fixed. checks.proxy says which proxy requests go through (url, source) or that none is in use. With network true it also reaches every endpoint (token relay, Google, Colab, each runtime) and reports per endpoint ok, status or causeCode, latencyMs and the proxy used in checks.network: use it when a tool fails with \"Could not reach <host>\", and relay its action to the owner (the proxy is theirs to set, in the panel under Setup → Network proxy).",
     inputSchema: schema({
       workspace_path: PROJECT_PROP,
       network: { type: "boolean", description: "Also reach every endpoint and report reachability, latency and the proxy used. Takes up to 10 seconds." },
@@ -129,7 +133,7 @@ const TOOL_SPECS = [
     name: "auth_status",
     title: "Google sign-in status",
     description:
-      "Whether a Google account is signed in, with its email, Colab tier, approximate balance and the number of runtimes assigned at Colab. Also reports a sign-in started with auth_login that is still waiting (signIn).",
+      "Whether a Google account is signed in on this machine, with its email, Colab tier, approximate balance and the number of runtimes assigned at Colab. Asks Google, so authenticated false with reauthRequired true means Google refused the saved sign-in (reauthReason says why): call auth_login again. Also reports a sign-in started with auth_login that is still waiting (signIn).",
     inputSchema: schema({ account: ACCOUNT_PROP }),
     annotations: READ_ONLY,
   },
@@ -187,10 +191,11 @@ const TOOL_SPECS = [
     name: "auth_logout",
     title: "Sign out of Google",
     description:
-      "Revokes the Google token and removes it from this machine. Only when the owner asks. Stop runtimes with down first: without a sign-in they cannot be released from here.",
+      "Removes the Google sign-in from this machine only; other machines signed in with the same Google account stay signed in. Only when the owner asks. Stop runtimes with down first: without a sign-in they cannot be released from here. everywhere true also revokes orca-colab's access at Google, which signs out EVERY machine using that Google account (the owner's own computer included): only when the owner asks for exactly that.",
     inputSchema: schema({
       account: ACCOUNT_PROP,
       all: { type: "boolean", description: "Sign out every account." },
+      everywhere: { type: "boolean", description: "Also revoke access at Google: signs out every machine that uses this Google account. Only when the owner explicitly asks to sign out everywhere." },
     }),
     annotations: DESTRUCTIVE,
   },
@@ -436,7 +441,7 @@ export const CLI_COVERAGE = {
   doctor: { tools: ["doctor"], flags: ["network"] },
   auth: {
     tools: ["auth_status", "auth_login", "auth_wait", "auth_redirect", "auth_list", "auth_switch", "auth_logout"],
-    flags: ["account", "add", "all", "no-browser"],
+    flags: ["account", "add", "all", "everywhere", "no-browser"],
   },
   up: { tools: ["up"], flags: ["name", "account", "gpu", "high-ram", "new", "keep"] },
   status: { tools: ["status"], flags: ["local"] },
@@ -657,7 +662,10 @@ export function createColabMcpTools({
     if (exitCode !== 0 && result.exitCode === undefined) {
       result.exitCode = exitCode;
     }
-    if (signInHint && /orca-colab auth login|Not signed in/.test(JSON.stringify(payload))) {
+    const text = signInHint ? JSON.stringify(payload) : "";
+    if (/"reauthRequired":true/.test(text)) {
+      result.hint = REAUTH_HINT;
+    } else if (/orca-colab auth login|Not signed in/.test(text)) {
       result.hint = SIGN_IN_HINT;
     }
     const lines = log.filter((line) => line !== `error: ${result.error}`);
@@ -797,11 +805,13 @@ export function createColabMcpTools({
   function describeSignIn(state) {
     if (!state) {
       const accounts = listOAuthAccounts(homeDir);
+      const reauthAccounts = listReauthAccounts(homeDir);
       return {
         ok: true,
         state: accounts.length > 0 ? "signed_in" : "not_started",
         accounts,
-        ...(accounts.length > 0 ? {} : { hint: SIGN_IN_HINT }),
+        ...(reauthAccounts.length > 0 ? { reauthAccounts } : {}),
+        ...(accounts.length > 0 ? {} : { hint: reauthAccounts.length > 0 ? REAUTH_HINT : SIGN_IN_HINT }),
       };
     }
     if (!state.outcome) {
@@ -894,7 +904,7 @@ export function createColabMcpTools({
     auth_status: async (args, ctx) => {
       const result = toResult(await runCli(["auth", "status", ...accountFlags(args)], ctx));
       if (result.authenticated === false) {
-        result.hint = SIGN_IN_HINT;
+        result.hint = result.reauthRequired ? REAUTH_HINT : SIGN_IN_HINT;
       }
       if (signIn && !signIn.outcome) {
         result.signIn = describeSignIn(signIn);
@@ -923,7 +933,7 @@ export function createColabMcpTools({
     auth_switch: async (args, ctx) => toResult(await runCli(["auth", "switch", `--account=${args.account}`], ctx)),
 
     auth_logout: async (args, ctx) =>
-      toResult(await runCli(["auth", "logout", ...accountFlags(args), ...(args.all ? ["--all"] : [])], ctx), {
+      toResult(await runCli(["auth", "logout", ...accountFlags(args), ...(args.all ? ["--all"] : []), ...(args.everywhere ? ["--everywhere"] : [])], ctx), {
         signInHint: false,
       }),
 

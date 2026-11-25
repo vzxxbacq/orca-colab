@@ -141,16 +141,26 @@ test("the CLI sends token requests through the relay without a secret, or straig
   });
 });
 
-test("signing out revokes the refresh token at Google before removing it locally", async (t) => {
+test("signing out removes the local token only; revoking at Google is the explicit sign-out everywhere", async (t) => {
   const home = mkdtempSync(path.join(os.tmpdir(), "orca-colab-signout-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
-  saveOAuthCredentials("default", { refreshToken: "1//keep-out", accessToken: "a", expiryDate: 0 }, home);
   const revoked = [];
   const fetchImpl = async (url, init) => {
     revoked.push({ url, token: new URLSearchParams(init.body).get("token") });
     return new Response("", { status: 200 });
   };
+
+  saveOAuthCredentials("default", { refreshToken: "1//keep-out", accessToken: "a", expiryDate: 0 }, home);
   assert.deepEqual(await signOutOAuthAccount("default", home, { fetchImpl }), {
+    account: "default",
+    removed: true,
+    revoked: false,
+  });
+  assert.deepEqual(revoked, []);
+  assert.deepEqual(readOAuthStore(home).accounts, {});
+
+  saveOAuthCredentials("default", { refreshToken: "1//keep-out", accessToken: "a", expiryDate: 0 }, home);
+  assert.deepEqual(await signOutOAuthAccount("default", home, { fetchImpl, revoke: true }), {
     account: "default",
     removed: true,
     revoked: true,

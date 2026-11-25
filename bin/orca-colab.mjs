@@ -9,6 +9,7 @@ import {
   logError,
   writeJson,
 } from "./lib/cli-output.mjs";
+import { OAUTH_REAUTH_REQUIRED, reauthErrorPayload } from "./lib/colab-oauth.mjs";
 import { installNetworkProxy, parseProxySetting } from "./lib/network-proxy.mjs";
 
 const COMMANDS = new Set([
@@ -144,7 +145,9 @@ export async function main(argv = process.argv.slice(2), overrides = {}) {
       const payload =
         err instanceof CliError && err.payload
           ? err.payload
-          : { ok: false, error: message };
+          : err?.code === OAUTH_REAUTH_REQUIRED
+            ? reauthErrorPayload(err)
+            : { ok: false, error: message };
       writeJson(payload, stdout);
     }
     return exitCode;

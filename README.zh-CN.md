@@ -62,8 +62,10 @@ Google 的回复原样返回。它不保存、不记录（请求日志已关闭�
 你的账号。为防止单个客户端耗尽免费额度，它会在内存中按 IP 地址计数（每分钟 30 次、每小时 300 次）。完整源码见 [`token-relay/src/index.mjs`](./token-relay/src/index.mjs)。
 
 如果不想经过它，可以在 Google Cloud 创建自己的桌面应用 OAuth client，设置 `ORCA_COLAB_CLIENT_ID` 和
-`ORCA_COLAB_CLIENT_SECRET`，orca-colab 就会直接连接 Google。`orca-colab auth logout` 会先在 Google 侧撤销
-token，再从 `~/.orca-colab` 删除。
+`ORCA_COLAB_CLIENT_SECRET`，orca-colab 就会直接连接 Google。`orca-colab auth logout` 只从这台机器的
+`~/.orca-colab` 删除 token。`orca-colab auth logout --everywhere`（面板里账号旁的 **Everywhere…**）还会在
+Google 侧撤销 orca-colab 的访问权限；Google 撤销的是整个授权，所以用这个 Google 账号登录的每台机器都会被登出，
+需要重新登录。
 
 ### 使用代理上网
 
@@ -153,6 +155,21 @@ Colab 会收回它认为无人值守的运行时，不管上面在跑什么，�
 系统代理，Node 不会。从 v0.4.2 起，失败页面和面板会写明是哪个主机、什么原因（`ENOTFOUND`、`ECONNREFUSED`、
 `ETIMEDOUT`、证书错误）以及正在使用的代理。打开面板的 **Setup → Network proxy**，点 **Test connection**，
 没有找到代理就填上，然后再点一次 **Sign in**，不需要重启。详见[使用代理上网](#使用代理上网)。
+
+### 面板提示 "Google sign-in expired or was revoked" 怎么办？
+Google 拒绝了这台电脑上保存的 token（`invalid_grant`）。点击 **Sign in again**，或运行
+`orca-colab auth login`，不需要先登出。出现这种情况说明该 Google 账号的授权被撤销了：你在
+[myaccount.google.com/permissions](https://myaccount.google.com/permissions) 移除了
+"Colab GPU (Community) for Orca"，或者有人在另一台机器上带撤销地登出（v0.4.5 之前每次登出都会撤销，
+导致其他机器全部被登出；现在只有 `auth logout --everywhere` 会），或者 token 连续六个月没有使用。
+从 v0.4.5 起，`auth status`、`doctor`、面板和 MCP 工具会报告 `reauthRequired` 和 Google 给出的原因，
+不再把账号显示为已连接；`doctor --network` 会用一次真实的 token 刷新确认每个登录。
+
+### 我在面板里登录了，为什么服务器还是没登录？
+登录只对完成登录的那台电脑有效。面板登录的是运行 Orca 的这台电脑；远程 Orca 服务器（或其他任何机器）
+在自己的 `~/.orca-colab` 里保存自己的 token，需要自己登录：让那里的 Agent 调用 `auth_login`，或在服务器上运行
+`orca-colab auth login --no-browser`，在你的浏览器里打开链接，再把浏览器最后停在的 `http://127.0.0.1:…`
+地址交给 Agent（`auth_redirect`）或服务器上的 `orca-colab auth redirect <地址>`。token 不会在机器之间复制。
 
 ### 和 Colab 的 VS Code 扩展有什么区别？
 Google 的扩展是把 VS Code 里打开的 notebook 连接到 Colab 运行时，供人使用。本项目是为 Agent 做的：JSON 输出的 CLI、

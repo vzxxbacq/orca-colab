@@ -1,7 +1,7 @@
 import os from "node:os";
 import { readConfig, resolveAccount, resolveAgentPolicy } from "./colab-home.mjs";
 import { resolveGuardrails } from "./project-guardrails.mjs";
-import { listOAuthAccounts, readOAuthAccountStatus } from "./colab-oauth.mjs";
+import { listOAuthAccounts, listReauthAccounts, readOAuthAccountStatus } from "./colab-oauth.mjs";
 import { findExecutableOnPath } from "./executable-lookup.mjs";
 import { describeProxyPlan, resolveProxyPlan } from "./network-proxy.mjs";
 
@@ -76,6 +76,11 @@ export function runDoctor({
     ? primaryOAuthStatus
     : allOAuthAccounts[0] || primaryOAuthStatus;
   const oauthOk = Boolean(oauthStatus?.authenticated);
+  const reauthAccounts = listReauthAccounts(homeDir);
+  const signInAgain = (a) =>
+    a.reauthError === "client_changed"
+      ? "Sign in again with 'orca-colab auth login' (orca-colab now uses its own Google OAuth client)."
+      : `${a.reauthReason}${a.email ? ` for ${a.email}` : ""}. Sign in again with 'orca-colab auth login' (tick the Colab permission); no sign-out is needed.`;
   const oauthCheck = {
     ok: oauthOk,
     account: oauthStatus?.account || defaultAcc?.label || "default",
@@ -85,12 +90,34 @@ export function runDoctor({
       account: a.account,
       email: a.email,
     })),
+    reauthRequired: !oauthOk && reauthAccounts.length > 0,
+    reauthAccounts: reauthAccounts.map((a) => ({
+      account: a.account,
+      email: a.email,
+      reauthError: a.reauthError,
+      reauthReason: a.reauthReason,
+      reauthAt: a.reauthAt,
+    })),
   };
   if (!oauthOk) {
-    oauthCheck.action = primaryOAuthStatus?.reauthRequired
-      ? "Sign in again with 'orca-colab auth login' (orca-colab now uses its own Google OAuth client)."
+    const refused = primaryOAuthStatus?.reauthRequired ? primaryOAuthStatus : reauthAccounts[0];
+    if (refused) {
+      oauthCheck.reauthReason = refused.reauthReason;
+    }
+    oauthCheck.action = refused
+      ? signInAgain(refused)
       : "Sign in with 'orca-colab auth login' and tick the Colab permission on Google's consent page.";
     actions.push(oauthCheck.action);
+  } else {
+    // Another account still works, so nothing is blocked; the dead one is still worth a line.
+    for (const a of reauthAccounts) {
+      warnings.push(`Account '${a.account}': ${signInAgain(a)}`);
+    }
+    if (oauthStatus.refreshTokenExpiresAt) {
+      warnings.push(
+        `Google will end the sign-in of ${oauthStatus.email || oauthStatus.account} on ${oauthStatus.refreshTokenExpiresAt}: this OAuth client issues refresh tokens with a fixed lifetime (its consent screen is in "Testing").`,
+      );
+    }
   }
 
   // Which proxy requests go through; `doctor --network` adds whether each endpoint answers.

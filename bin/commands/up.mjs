@@ -22,6 +22,8 @@ import {
 import {
   getValidAccessToken,
   listOAuthAccounts,
+  OAUTH_REAUTH_REQUIRED,
+  reauthErrorPayload,
   readOAuthAccountStatus,
   resolveOAuthAccountKey,
 } from "../lib/colab-oauth.mjs";
@@ -248,8 +250,22 @@ export async function run(
       homeDir,
       fetchImpl,
     });
-  } catch {
-    accessToken = null;
+  } catch (err) {
+    // Each failure keeps its own cause: a refused sign-in and an unreachable network are not "not signed in".
+    if (err?.code === OAUTH_REAUTH_REQUIRED) {
+      throw new CliError(err.message, {
+        exitCode: EXIT_ERROR,
+        payload: { ...reauthErrorPayload(err), step: "prerequisites" },
+      });
+    }
+    if (err?.code === "NETWORK_UNREACHABLE") {
+      throw err;
+    }
+    const errMsg = `Could not refresh the Google sign-in for account '${account.label}': ${err?.message || err}`;
+    throw new CliError(errMsg, {
+      exitCode: EXIT_ERROR,
+      payload: { ok: false, error: errMsg, step: "prerequisites" },
+    });
   }
 
   if (!accessToken) {

@@ -11,7 +11,7 @@ import {
   resolveAccount,
   resolveAgentPolicy,
 } from "./colab-home.mjs";
-import { listOAuthAccounts, readOAuthAccountStatus } from "./colab-oauth.mjs";
+import { listOAuthAccounts, listReauthAccounts, readOAuthAccountStatus } from "./colab-oauth.mjs";
 import { listRecentSessionEnds, projectAccountCredits, readLedgerEvents } from "./credit-ledger.mjs";
 import { runDoctor } from "./doctor.mjs";
 import { evaluateSessionIdleState } from "./idle-watchdog.mjs";
@@ -75,6 +75,7 @@ export class DashboardSnapshotBuilder {
     this.lastCcuSyncAtByAccount = new Map();
     this.inFlightCcuSyncByAccount = new Map();
     this.liveCcuEventByAccount = new Map();
+    this.ccuSyncErrorByAccount = new Map();
     this.cachedDoctor = null;
     this.lastDoctorAt = 0;
   }
@@ -93,13 +94,18 @@ export class DashboardSnapshotBuilder {
         const synced = await syncCreditsFromColabApi({
           account,
           homeDir: this.homeDir,
+          fetchImpl: this.fetchImpl,
           forceRecord: false,
         });
         if (synced?.event) {
           this.liveCcuEventByAccount.set(account, synced.event);
         }
-      } catch {
-        // Ignore transient network errors during background poll.
+        this.ccuSyncErrorByAccount.delete(account);
+      } catch (err) {
+        // The poll goes on, and the snapshot says why the balance is stale. A sign-in Google refused is
+        // on disk by now, so the doctor result cached before it is out of date.
+        this.ccuSyncErrorByAccount.set(account, err?.message || String(err));
+        if (err?.code === "OAUTH_REAUTH_REQUIRED") this.invalidateDoctor();
       } finally {
         this.inFlightCcuSyncByAccount.delete(account);
       }
@@ -124,7 +130,8 @@ export class DashboardSnapshotBuilder {
         // Colab's list changes rarely; the runtimes themselves are asked on every sync.
         if (Date.now() - this.lastDiscoveryAt >= Math.min(maxAgeMs * 3, 60_000)) {
           const changes = await discoverAccountRuntimes({ homeDir, env: this.env, fetchImpl });
-          this.lastDiscoveryError = changes?.unreachable ?? null;
+          this.lastDiscoveryError = changes?.unreachable ?? changes?.reauthRequired ?? null;
+          if (changes?.reauthRequired) this.invalidateDoctor();
           this.lastDiscoveryAt = Date.now();
         }
         const live = listSessions(homeDir).filter(
@@ -196,12 +203,6 @@ export class DashboardSnapshotBuilder {
     const config = readConfig(homeDir);
     const configuredDefault = resolveAccount(config).label;
     const accounts = listKnownAccountLabels(homeDir, config);
-    const oauthAccounts = listOAuthAccounts(homeDir);
-    const defaultAccount =
-      oauthAccounts.some((a) => a.account === configuredDefault) || oauthAccounts.length === 0
-        ? configuredDefault
-        : oauthAccounts[0].account;
-
     const authByAccount = {};
     for (const acc of accounts) {
       authByAccount[acc] = readOAuthAccountStatus(acc, homeDir);
@@ -210,11 +211,22 @@ export class DashboardSnapshotBuilder {
         const ageMs = Date.now() - lastSync;
         if (includeLiveMetrics && ageMs > 5_000) {
           await this.syncAccountCcu(acc);
+          // The sync is what finds out that Google refuses this sign-in.
+          authByAccount[acc] = readOAuthAccountStatus(acc, homeDir);
         } else if (ageMs > 30_000) {
           void this.syncAccountCcu(acc);
         }
+      } else {
+        this.ccuSyncErrorByAccount.delete(acc);
       }
     }
+    // Read after the syncs above, so an account found refused in this build is not listed as connected.
+    const oauthAccounts = listOAuthAccounts(homeDir);
+    const reauthAccounts = listReauthAccounts(homeDir);
+    const defaultAccount =
+      oauthAccounts.some((a) => a.account === configuredDefault) || oauthAccounts.length === 0
+        ? configuredDefault
+        : oauthAccounts[0].account;
 
     const sessions = listSessions(homeDir);
     const tasks = listTasks(homeDir);
@@ -268,9 +280,14 @@ export class DashboardSnapshotBuilder {
       origin: this.origin,
       machine: machineName(this.env),
       runtimeSync: { at: this.lastRuntimeSyncAt || null, error: this.lastRuntimeSyncError },
+      creditsSync: {
+        error: this.ccuSyncErrorByAccount.get(defaultAccount) ?? null,
+        errorByAccount: Object.fromEntries(this.ccuSyncErrorByAccount),
+      },
       defaultAccount,
       accounts,
       oauthAccounts,
+      reauthAccounts,
       doctor: this.doctor(),
       policy: resolveAgentPolicy(config),
       provisioning: effectiveProvisioning,

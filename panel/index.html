@@ -1036,6 +1036,7 @@
             </button>
             <button id="wizardLogoutBtn" class="ghost hidden">Sign out</button>
           </div>
+          <div id="signInScopeNote" class="muted" style="font-size: 10.5px; margin-top: 8px; line-height: 1.45"></div>
         </div>
 
         <!-- Continue Button when Ready -->
@@ -2034,6 +2035,8 @@
         }
       }
 
+      let pendingEverywhere = null;
+
       function renderAll(snap) {
         if (!snap) return;
         dashboardState = snap;
@@ -2055,9 +2058,11 @@
         originBadge.textContent = `⚙ ${snap.machine || snap.origin?.host || "this computer"}`;
         originBadge.parentElement.title =
           "Shows every Colab runtime of the Google account signed in on this computer, whichever machine started it. Click for Setup.";
+        const reauth = !oauthOk && snap.auth?.reauthRequired ? snap.auth : null;
+        const expiredText = "Google sign-in expired or was revoked — sign in again";
         if (!readyToLaunch) {
           dot.className = "status-dot warn";
-          statusTxt.textContent = "Sign-In Required";
+          statusTxt.textContent = reauth ? "Sign-in expired · sign in again" : "Sign-In Required";
         } else if (activeSessions.length === 0) {
           dot.className = "status-dot";
           statusTxt.textContent = "Google Connected · No Active GPU";
@@ -2071,7 +2076,7 @@
         if (snap.runtimeSync?.error) {
           statusTxt.textContent += " · could not refresh from Colab";
         }
-        statusTxt.title = snap.runtimeSync?.error || "";
+        statusTxt.title = snap.runtimeSync?.error || snap.creditsSync?.error || reauth?.reauthReason || "";
         renderProxy(checks.proxy);
         // An unreachable network is the one failure Setup can fix, so its proxy section opens by itself.
         if (/Could not reach /.test(snap.runtimeSync?.error || "")) {
@@ -2113,11 +2118,35 @@
           : oauthOk && snap.auth
             ? [snap.auth]
             : [];
+        const reauthAccounts = Array.isArray(snap.reauthAccounts) ? snap.reauthAccounts : [];
+        // A sign-in Google refuses needs a new sign-in, not a sign-out: the row offers exactly that.
+        const reauthRows = reauthAccounts
+          .map(
+            (acc) => `
+                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm)">
+                  <div style="min-width:0">
+                    <div class="row" style="gap:5px">
+                      <span class="status-dot warn"></span>
+                      <strong style="font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(acc.email || acc.account)}</strong>
+                      <span class="badge warn" style="font-size:9px;padding:1px 5px">SIGN IN AGAIN</span>
+                    </div>
+                    <div class="muted" style="font-size:10px;margin-top:2px" title="${esc(acc.reauthAt ? `Refused by Google at ${acc.reauthAt}` : "")}">
+                      ${esc(acc.reauthReason || "Google sign-in expired or was revoked")}
+                    </div>
+                  </div>
+                  <div class="row" style="gap:4px;flex-shrink:0">
+                    <button class="primary" style="padding:2px 7px;font-size:10px" onclick="window.__addAccountFromBanner(this)">Sign in again</button>
+                    <button class="ghost" style="padding:2px 7px;font-size:10px" title="Remove this sign-in from this computer" onclick="window.__logoutAccount('${esc(acc.account)}')">Remove</button>
+                  </div>
+                </div>
+              `,
+          )
+          .join("");
         const renderAccountsRows = () => {
           if (oauthAccounts.length === 0) {
-            return `<div class="muted" style="font-size:11px">No Google accounts connected yet.</div>`;
+            return reauthRows || `<div class="muted" style="font-size:11px">No Google accounts connected yet.</div>`;
           }
-          return oauthAccounts
+          return reauthRows + oauthAccounts
             .map((acc) => {
               const isDef = acc.account === snap.defaultAccount;
               const accCredits = snap.creditsByAccount?.[acc.account] || {};
@@ -2148,7 +2177,8 @@
                         ? `<button class="ghost" style="padding:2px 7px;font-size:10px" onclick="window.__switchAccount('${esc(acc.account)}')">Use</button>`
                         : ""
                     }
-                    <button class="ghost" style="padding:2px 7px;font-size:10px" onclick="window.__logoutAccount('${esc(acc.account)}')">Sign out</button>
+                    <button class="ghost" style="padding:2px 7px;font-size:10px" title="Removes the sign-in from this computer only. Other machines signed in with this Google account stay signed in." onclick="window.__logoutAccount('${esc(acc.account)}')">Sign out</button>
+                    <button class="ghost" style="padding:2px 7px;font-size:10px" title="Revokes orca-colab's access at Google: every machine signed in with this Google account (servers included) is signed out and must sign in again." onclick="window.__logoutEverywhere(this, '${esc(acc.account)}')">${pendingEverywhere === acc.account ? "Confirm: all machines" : "Everywhere…"}</button>
                   </div>
                 </div>
               `;
@@ -2164,17 +2194,38 @@
 
         document.getElementById("wizardOAuthText").textContent = oauthOk
           ? `✓ ${oauthAccounts.length} Google Colab account${oauthAccounts.length > 1 ? "s" : ""} connected`
-          : "Not signed in yet — click below to sign in with your system browser";
+          : reauth
+            ? `${expiredText}${reauth.email ? ` (${reauth.email})` : ""}`
+            : "Not signed in yet — click below to sign in with your system browser";
         const wizAccListEl = document.getElementById("wizardAccountsList");
         if (wizAccListEl) {
-          wizAccListEl.innerHTML = oauthAccounts.length > 0 ? renderAccountsRows() : "";
+          wizAccListEl.innerHTML = oauthAccounts.length + reauthAccounts.length > 0 ? renderAccountsRows() : "";
         }
+        // A sign-in is per machine: nothing carries it to a server or to another computer.
+        const otherMachines = [
+          ...new Set(
+            activeSessions
+              .flatMap((x) => [x.startedHere ? null : x.origin?.machine, ...(x.inUseBy || []).map((u) => u.machine)])
+              .filter((m) => m && m !== snap.machine),
+          ),
+        ];
+        const scopeNote =
+          snap.workspace?.remote || otherMachines.length > 0
+            ? `<strong>Signs in this computer only${snap.machine ? ` (${esc(snap.machine)})` : ""}.</strong> ${
+                snap.workspace?.remote
+                  ? "The focused project is on a remote Orca server, and agents there use the server's own sign-in."
+                  : `${esc(otherMachines.join(", "))} also use${otherMachines.length === 1 ? "s" : ""} this Google account with a sign-in of its own.`
+              } To sign in a server: ask the agent there to call the <code>auth_login</code> tool, or run <code>orca-colab auth login --no-browser</code> on it; open the URL in a browser here, and when the last page (http://127.0.0.1:…) does not load, give its address back to the agent (<code>auth_redirect</code>) or to <code>orca-colab auth redirect &lt;address&gt;</code> on the server. Signing out here leaves other machines signed in; only “Everywhere…” revokes access for all of them.`
+            : `Signs in this computer only${snap.machine ? ` (${esc(snap.machine)})` : ""}; another machine or an Orca server signs in itself.`;
+        document.getElementById("signInScopeNote").innerHTML = scopeNote;
         document
           .getElementById("wizardLogoutBtn")
           .classList.add("hidden");
         document.getElementById("wizardLoginBtn").textContent = oauthOk
           ? "+ Add Another Google Account"
-          : "🔑 Sign in with Google (Default Browser)";
+          : reauth
+            ? "🔑 Sign in again with Google (Default Browser)"
+            : "🔑 Sign in with Google (Default Browser)";
 
         // Stepper pills
         document.getElementById("stepPill3").className =
@@ -2199,7 +2250,10 @@
             : "Balance uncalibrated";
         document.getElementById("launcherAuthSummary").textContent = oauthOk
           ? `Google Connected · ${balStr}`
-          : `Google Not Signed In · ${balStr}`;
+          : reauth
+            ? expiredText
+            : `Google Not Signed In · ${balStr}`;
+        document.getElementById("launcherLoginBtn").textContent = reauth ? "Sign in again with Google" : "Sign in with Google";
         document
           .getElementById("launcherLoginBtn")
           .classList.toggle("hidden", oauthOk);
@@ -2307,13 +2361,14 @@
                 <span class="row" style="gap: 6px; min-width: 0; flex: 1">
                   <span class="fold-chevron"></span>
                   <span class="status-dot ${oauthOk ? "ok" : "warn"}"></span>
-                  <span style="flex-shrink: 0">Google Colab Accounts (${oauthAccounts.length})</span>
+                  <span style="flex-shrink: 0">Google Colab Accounts (${oauthAccounts.length})${reauthAccounts.length ? ` · ${reauthAccounts.length} to sign in again` : ""}</span>
                   <span class="muted" style="font-weight: 400; font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">· ${esc(defaultAccLabel)} · ${esc(balStr)}</span>
                 </span>
                 <button style="padding: 2px 7px; font-size: 10px; flex-shrink: 0" onclick="event.preventDefault(); event.stopPropagation(); window.__addAccountFromBanner(this)">+ Add Account</button>
               </summary>
               <div style="display: flex; flex-direction: column; gap: 5px; margin-top: 7px">
                 ${renderAccountsRows()}
+                <div class="muted" style="font-size: 10px; line-height: 1.45">${scopeNote}</div>
               </div>
             </details>
           `;
@@ -2846,7 +2901,33 @@
           const res = await callWorker("colab.authLogout", {
             account: accountKey,
           });
-          showNotice(`Signed out ${accountKey}.`, "info");
+          showNotice(`Signed out ${accountKey} on this computer. Other machines stay signed in.`, "info");
+          renderAll(res.dashboard);
+        } catch (err) {
+          showNotice(err?.message || String(err), "error");
+        }
+      };
+
+      // Two clicks: the first one only says what it will do.
+      window.__logoutEverywhere = async (btnEl, accountKey) => {
+        if (pendingEverywhere !== accountKey) {
+          pendingEverywhere = accountKey;
+          btnEl.textContent = "Confirm: all machines";
+          showNotice(
+            `This revokes orca-colab's access to ${accountKey} at Google and signs out EVERY machine that uses this Google account, servers included; each one must sign in again. Click “Confirm: all machines” to go ahead.`,
+            "error",
+          );
+          return;
+        }
+        pendingEverywhere = null;
+        try {
+          const res = await callWorker("colab.authLogout", { account: accountKey, everywhere: true });
+          showNotice(
+            res?.revoked === false
+              ? `Signed out ${accountKey} here, but Google did not confirm the revocation; remove “Colab GPU (Community) for Orca” at myaccount.google.com/permissions to sign out the other machines.`
+              : `Signed out ${accountKey} on every machine.`,
+            "info",
+          );
           renderAll(res.dashboard);
         } catch (err) {
           showNotice(err?.message || String(err), "error");

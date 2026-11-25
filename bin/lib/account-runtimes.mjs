@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { getRuntime, listRuntimes, stripResourcePrefix } from "./colab-api-client.mjs";
 import { getColabPaths } from "./colab-home.mjs";
-import { getValidAccessToken, listOAuthAccounts } from "./colab-oauth.mjs";
+import { getValidAccessToken, listStoredOAuthAccounts, OAUTH_REAUTH_REQUIRED } from "./colab-oauth.mjs";
 import { recordSessionEndEvent, recordSessionStartEvent, resolveDeadSessionEndIso } from "./credit-ledger.mjs";
 import { resolveGpuRate } from "./rate-table.mjs";
 import { directRuntimeChannel, machineName, readRuntimeSessionRecord, sameMachine } from "./runtime-records.mjs";
@@ -68,9 +68,15 @@ export async function discoverAccountRuntimes({
   getRuntimeFn = getRuntime,
   nowMs = () => Date.now(),
 } = {}) {
-  const changes = { adopted: [], dropped: [], accountsListed: [], unreachable: null };
-  for (const { account, authenticated, email } of listOAuthAccounts(homeDir)) {
-    if (!authenticated) continue;
+  const changes = { adopted: [], dropped: [], accountsListed: [], unreachable: null, reauthRequired: null };
+  for (const { account, authenticated, email, reauthError, reauthReason } of listStoredOAuthAccounts(homeDir)) {
+    if (!authenticated) {
+      // Its runtimes cannot be listed until the owner signs in again; say so instead of looking idle.
+      if (reauthError !== "client_changed") {
+        changes.reauthRequired ??= `${reauthReason} for account '${account}'${email && email !== account ? ` (${email})` : ""}. Sign in again with 'orca-colab auth login' (tick the Colab permission); no sign-out is needed.`;
+      }
+      continue;
+    }
     const listStartedMs = nowMs();
     let runtimes;
     let accessToken;
@@ -81,6 +87,7 @@ export async function discoverAccountRuntimes({
     } catch (err) {
       // Offline or signed out: what this machine already knows stays as it is.
       if (err?.code === "NETWORK_UNREACHABLE") changes.unreachable ??= err.message;
+      if (err?.code === OAUTH_REAUTH_REQUIRED) changes.reauthRequired ??= err.message;
       continue;
     }
     changes.accountsListed.push(account);
