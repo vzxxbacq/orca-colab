@@ -124,6 +124,7 @@ milestone. Each item is one PR. Split when a PR would exceed ~300 lines.
       created a second session (`orca-colab-<suffix>`, origin unknown, wrong rate) for the same runtime; it counts
       toward the concurrent-session limit and starts a second ledger entry. Discovery cannot tell this from a
       runtime started elsewhere without a record; `up` could leave a marker before it asks Colab.
+- [x] **A sign-in Google refuses shows as sign-in needed (v0.4.5, D29).** `OAUTH_REAUTH_REQUIRED` from the refresh, recorded per account, reported by `auth status` / `auth list` / `doctor` (`--network` refreshes for real) / the panel / MCP; sign-out no longer revokes at Google (`auth logout --everywhere` does); the panel says a sign-in covers this computer only. — Done: `test/oauth-reauth.test.mjs`.
 - [ ] **Cross-platform verification**: Linux (`xdg-open`, `orca-ide` binary lookup) and Windows (`bsdtar` path handling for `sync`/`pull`).
 
 ## M3 — Drive automation

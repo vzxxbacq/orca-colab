@@ -18,6 +18,9 @@ import {
 import {
   getValidAccessToken,
   listOAuthAccounts,
+  listReauthAccounts,
+  listStoredOAuthAccounts,
+  OAUTH_REAUTH_REQUIRED,
   readOAuthAccountStatus,
   signOutOAuthAccount,
   remoteBrowserSignInNote,
@@ -48,6 +51,7 @@ export async function run(
         account: { type: "string" },
         add: { type: "boolean", default: false },
         all: { type: "boolean", default: false },
+        everywhere: { type: "boolean", default: false },
         "no-browser": { type: "boolean", default: false },
       },
       strict: true,
@@ -209,29 +213,39 @@ export async function run(
   }
 
   if (sub === "logout") {
+    // Without --everywhere only this machine's copy goes: revoking at Google ends the sign-in of every
+    // machine that uses the same Google account.
+    const everywhere = Boolean(parsed.values.everywhere);
+    const elsewhere = everywhere
+      ? "orca-colab's access was revoked at Google: every other machine signed in with the same Google account is signed out too."
+      : "Other machines signed in with the same Google account stay signed in ('--everywhere' revokes access at Google for all of them).";
     if (parsed.values.all) {
-      const all = listOAuthAccounts(homeDir);
+      const all = listStoredOAuthAccounts(homeDir);
       let revokedCount = 0;
       for (const acc of all) {
-        const out = await signOutOAuthAccount(acc.account, homeDir, { fetchImpl });
+        const out = await signOutOAuthAccount(acc.account, homeDir, { fetchImpl, revoke: everywhere });
         if (out.revoked) revokedCount += 1;
       }
       const payload = {
         ok: true,
         removedCount: all.length,
         revokedCount,
+        everywhere,
         authenticated: false,
         accounts: [],
       };
       if (json) {
         writeJson(payload, stdout);
       } else {
-        log(`Signed out all (${all.length}) Google Colab OAuth account(s).`, stderr);
+        log(`Signed out all (${all.length}) Google Colab OAuth account(s) on this machine. ${everywhere && revokedCount < all.length ? `Google confirmed the revocation for ${revokedCount} of them; for the rest remove "Colab GPU (Community) for Orca" at https://myaccount.google.com/permissions.` : elsewhere}`, stderr);
       }
       return EXIT_OK;
     }
 
-    const { account: targetKey, removed, revoked } = await signOutOAuthAccount(account, homeDir, { fetchImpl });
+    const { account: targetKey, removed, revoked } = await signOutOAuthAccount(account, homeDir, {
+      fetchImpl,
+      revoke: everywhere,
+    });
     const remaining = listOAuthAccounts(homeDir);
     if (removed && config?.defaultAccount === targetKey && remaining.length > 0) {
       setDefaultAccount(remaining[0].account, homeDir);
@@ -242,6 +256,7 @@ export async function run(
       authenticated: false,
       removed,
       revoked,
+      everywhere,
       accounts: remaining,
     };
     if (json) {
@@ -249,9 +264,9 @@ export async function run(
     } else {
       log(
         removed
-          ? revoked
-            ? `Signed out account '${targetKey}' and revoked its Google token.`
-            : `Removed account '${targetKey}' locally, but Google could not be reached to revoke the token; remove "Colab GPU (Community) for Orca" at https://myaccount.google.com/permissions.`
+          ? everywhere && !revoked
+            ? `Removed account '${targetKey}' from this machine, but Google did not confirm the revocation; remove "Colab GPU (Community) for Orca" at https://myaccount.google.com/permissions to sign out the other machines.`
+            : `Signed out account '${targetKey}' on this machine. ${elsewhere}`
           : `No Google Colab OAuth credentials stored for account '${targetKey}'.`,
         stderr,
       );
@@ -260,18 +275,20 @@ export async function run(
   }
 
   if (sub === "list") {
-    const allAccounts = listOAuthAccounts(homeDir);
+    const allAccounts = listStoredOAuthAccounts(homeDir);
     const currentDefault = resolveAccount(readConfig(homeDir)).label;
     const enriched = await Promise.all(
       allAccounts.map(async (acc) => {
         let ccuInfo = null;
         let activeRuntimes = [];
         try {
-          const accessToken = await getValidAccessToken({
-            account: acc.account,
-            homeDir,
-            fetchImpl,
-          });
+          const accessToken = acc.authenticated
+            ? await getValidAccessToken({
+                account: acc.account,
+                homeDir,
+                fetchImpl,
+              })
+            : null;
           if (accessToken) {
             [ccuInfo, activeRuntimes] = await Promise.all([
               getConsumptionUserInfo({ accessToken, fetchImpl, signal }).catch(
@@ -281,10 +298,10 @@ export async function run(
             ]);
           }
         } catch {
-          // Best-effort status enrichment.
+          // Best-effort enrichment; a refused sign-in is on disk by now and read back below.
         }
         return {
-          ...acc,
+          ...readOAuthAccountStatus(acc.account, homeDir),
           isDefault: acc.account === currentDefault,
           subscriptionTier: ccuInfo?.subscriptionTier || null,
           estimatedBalanceCu:
@@ -309,8 +326,10 @@ export async function run(
       for (const a of enriched) {
         log(
           `${a.isDefault ? "* " : "  "}${a.account}${a.email && a.email !== a.account ? ` (${a.email})` : ""}${
-            a.estimatedBalanceCu !== null ? ` · ≈${a.estimatedBalanceCu} CU` : ""
-          } · ${a.assignedRuntimesCount} runtime(s)`,
+            a.reauthRequired
+              ? ` · ${a.reauthReason}; run 'orca-colab auth login' to sign in again`
+              : `${a.estimatedBalanceCu !== null ? ` · ≈${a.estimatedBalanceCu} CU` : ""} · ${a.assignedRuntimesCount} runtime(s)`
+          }`,
           stderr,
         );
       }
@@ -319,28 +338,59 @@ export async function run(
   }
 
   if (sub === "status") {
-    const allOAuth = listOAuthAccounts(homeDir);
+    const signedIn = listOAuthAccounts(homeDir);
     const targetAccount =
       !requestedAccount &&
       !readOAuthAccountStatus(account, homeDir).authenticated &&
-      allOAuth.length > 0
-        ? allOAuth[0].account
+      signedIn.length > 0
+        ? signedIn[0].account
         : account;
+    // An unreachable Google or Colab is reported next to the sign-in, not as signed out; a refresh Google
+    // refuses is the one answer that does mean signed out, and it is on disk before the status is read.
+    let networkError = null;
+    let refreshError = null;
+    const unreachable = (fallback) => (err) => {
+      if (err?.code === "NETWORK_UNREACHABLE") networkError = err.message;
+      return fallback;
+    };
+    let accessToken = null;
+    const saved = readOAuthAccountStatus(targetAccount, homeDir);
+    if (saved.authenticated || (saved.reauthRequired && saved.reauthError !== "client_changed")) {
+      try {
+        accessToken = await getValidAccessToken({
+          account: saved.account,
+          homeDir,
+          fetchImpl,
+          recheck: true,
+        });
+      } catch (err) {
+        unreachable(null)(err);
+        if (err?.code !== "NETWORK_UNREACHABLE" && err?.code !== OAUTH_REAUTH_REQUIRED) {
+          refreshError = err?.message || String(err);
+        }
+      }
+    }
     const base = readOAuthAccountStatus(targetAccount, homeDir);
+    const allOAuth = listOAuthAccounts(homeDir);
+    const reauthAccounts = listReauthAccounts(homeDir);
     if (!base.authenticated) {
       const payload = {
         ok: true,
         ...base,
         defaultAccount: account,
         accounts: allOAuth,
+        reauthAccounts,
         assignedRuntimesCount: 0,
+        ...(base.reauthRequired ? { networkError } : {}),
       };
       if (json) {
         writeJson(payload, stdout);
       } else {
         log(
           base.reauthRequired
-            ? `Account '${base.account}': signed in before orca-colab switched to its own Google OAuth client; run 'orca-colab auth login' once more.`
+            ? base.reauthError === "client_changed"
+              ? `Account '${base.account}': signed in before orca-colab switched to its own Google OAuth client; run 'orca-colab auth login' once more.`
+              : `Account '${base.account}'${base.email ? ` (${base.email})` : ""}: ${base.reauthReason}; run 'orca-colab auth login' to sign in again (no sign-out needed).`
             : `Account '${account}': not signed in with Google OAuth (run 'orca-colab auth login').`,
           stderr,
         );
@@ -350,26 +400,11 @@ export async function run(
 
     let ccuInfo = null;
     let activeRuntimes = [];
-    // The sign-in is read from disk; an unreachable Google or Colab is reported next to it, not as signed out.
-    let networkError = null;
-    const unreachable = (fallback) => (err) => {
-      if (err?.code === "NETWORK_UNREACHABLE") networkError = err.message;
-      return fallback;
-    };
-    try {
-      const accessToken = await getValidAccessToken({
-        account: base.account,
-        homeDir,
-        fetchImpl,
-      });
-      if (accessToken) {
-        [ccuInfo, activeRuntimes] = await Promise.all([
-          getConsumptionUserInfo({ accessToken, fetchImpl, signal }).catch(unreachable(null)),
-          listRuntimes({ accessToken, fetchImpl, signal }).catch(unreachable([])),
-        ]);
-      }
-    } catch (err) {
-      unreachable(null)(err);
+    if (accessToken) {
+      [ccuInfo, activeRuntimes] = await Promise.all([
+        getConsumptionUserInfo({ accessToken, fetchImpl, signal }).catch(unreachable(null)),
+        listRuntimes({ accessToken, fetchImpl, signal }).catch(unreachable([])),
+      ]);
     }
 
     const payload = {
@@ -377,6 +412,7 @@ export async function run(
       ...base,
       defaultAccount: account,
       accounts: allOAuth,
+      reauthAccounts,
       subscriptionTier: ccuInfo?.subscriptionTier || null,
       estimatedBalanceCu:
         typeof ccuInfo?.paidComputeUnitsBalance === "number"
@@ -385,13 +421,14 @@ export async function run(
       consumptionRateHourly: ccuInfo?.consumptionRateHourly ?? null,
       assignedRuntimesCount: activeRuntimes.length,
       networkError,
+      refreshError,
     };
 
     if (json) {
       writeJson(payload, stdout);
     } else {
-      if (networkError) {
-        log(`warning: ${networkError}`, stderr);
+      if (networkError || refreshError) {
+        log(`warning: ${networkError || refreshError}`, stderr);
       }
       log(
         `Account '${payload.account}': signed in${payload.email ? ` as ${payload.email}` : ""}${
@@ -410,6 +447,6 @@ export async function run(
   }
 
   throw new CliError(
-    `unknown auth subcommand '${sub}' (expected 'login', 'add', 'list', 'switch', 'status', or 'logout')`,
+    `unknown auth subcommand '${sub}' (expected 'login', 'add', 'list', 'switch', 'status', 'redirect', or 'logout')`,
   );
 }

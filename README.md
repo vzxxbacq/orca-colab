@@ -75,8 +75,10 @@ account by itself. To keep one client from using up its free quota, it counts re
 memory (30 a minute, 300 an hour). Its whole source is [`token-relay/src/index.mjs`](./token-relay/src/index.mjs).
 
 To bypass it, create your own Desktop OAuth client in Google Cloud and set `ORCA_COLAB_CLIENT_ID` and
-`ORCA_COLAB_CLIENT_SECRET`; orca-colab then talks to Google directly. `orca-colab auth logout` revokes
-your token at Google before deleting it from `~/.orca-colab`.
+`ORCA_COLAB_CLIENT_SECRET`; orca-colab then talks to Google directly. `orca-colab auth logout` deletes
+the token from `~/.orca-colab` on that machine only. `orca-colab auth logout --everywhere` (panel:
+**Everywhere…** next to an account) also revokes orca-colab's access at Google; Google revokes the whole
+grant, so every machine signed in with that Google account is signed out and has to sign in again.
 
 ### Behind a proxy
 
@@ -182,6 +184,25 @@ v0.4.2 the page and the panel name the host and the cause (`ENOTFOUND`, `ECONNRE
 certificate error) and the proxy in use. Open **Setup → Network proxy** in the panel, press **Test
 connection**, set the proxy if none was found, then press **Sign in** again; no restart is needed. See
 [Behind a proxy](#behind-a-proxy).
+
+### The panel says "Google sign-in expired or was revoked". What now?
+Google refused the token saved on this computer (`invalid_grant`). Press **Sign in again**, or run
+`orca-colab auth login`; you do not need to sign out first. This happens when access was revoked for the
+Google account: you removed "Colab GPU (Community) for Orca" at
+[myaccount.google.com/permissions](https://myaccount.google.com/permissions), or someone signed out with
+revocation on another machine (before v0.4.5 every sign-out revoked, which signed out all your other
+machines; now only `auth logout --everywhere` does), or the token went unused for six months. From v0.4.5
+`auth status`, `doctor`, the panel and the MCP tools report it as `reauthRequired` with Google's reason
+instead of showing the account as connected, and `doctor --network` confirms each sign-in with a real
+token refresh.
+
+### I signed in from the panel. Why is my server still not signed in?
+A sign-in covers the computer it was made on. The panel signs in the computer Orca runs on; a remote Orca
+server (or any other machine) keeps its own token in its own `~/.orca-colab` and signs in itself: ask the
+agent there to call `auth_login`, or run `orca-colab auth login --no-browser` on the server, open the URL
+in your browser, and give the `http://127.0.0.1:…` address the browser ends on back to the agent
+(`auth_redirect`) or to `orca-colab auth redirect <address>` on the server. Tokens are never copied
+between machines.
 
 ### How is it different from the Colab extension for VS Code?
 Google's extension connects notebooks open in VS Code to a Colab runtime for a person to work in. This
@@ -296,7 +317,9 @@ Any other MCP client: command `npx`, arguments `-y https://codeload.github.com/v
 ## Several machines, one account
 
 A Colab runtime belongs to a Google account, not to a computer. Every machine signed in to that account
-(your laptop, a remote Orca server where an agent works, a second desktop) sees the same runtimes:
+(your laptop, a remote Orca server where an agent works, a second desktop) sees the same runtimes. Each
+machine signs in by itself and keeps its own token; signing in or out on one does not change the others,
+except `auth logout --everywhere`, which revokes access at Google for all of them (see the FAQ).
 
 - **The panel and `orca-colab status` ask Colab** for the account's runtimes each time and show all of
   them, labelled by where they came from: *started here*, *from Claude Code · build-server*, or *unknown

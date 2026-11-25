@@ -219,6 +219,7 @@ export async function run(
   const [subcommand, rawValue] = parsed.positionals;
 
   let liveEvent = null;
+  let syncError = null;
 
   if (subcommand === "set") {
     const balanceCu = Number(rawValue);
@@ -291,8 +292,10 @@ export async function run(
         if (synced) {
           liveEvent = synced.event;
         }
-      } catch {
-        // Offline or token unavailable; use ledger state.
+      } catch (err) {
+        // The ledger still answers; the figures are older than they look, so say why.
+        syncError = err?.message || String(err);
+        log(`warning: balance not refreshed from Colab: ${syncError}`, stderr);
       }
     }
   } else {
@@ -332,7 +335,7 @@ export async function run(
   }
 
   if (json) {
-    writeJson(projectBudget ? { ...projection, projectBudget } : projection, stdout);
+    writeJson({ ...projection, ...(projectBudget ? { projectBudget } : {}), ...(syncError ? { syncError } : {}) }, stdout);
     return EXIT_OK;
   }
 

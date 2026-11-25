@@ -102,12 +102,13 @@ export function createPanelActions({
       const target = input?.account
         ? resolveOAuthAccountKey(input.account, null, homeDir)
         : resolveAccount(config).label;
-      await signOutOAuthAccount(target, homeDir);
+      // `everywhere` is the one path that revokes at Google, which signs out every machine on the account.
+      const { revoked } = await signOutOAuthAccount(target, homeDir, { revoke: Boolean(input?.everywhere) });
       const remaining = listOAuthAccounts(homeDir);
       if (remaining.length > 0 && resolveAccount(config).label === target) {
         setDefaultAccount(remaining[0].account, homeDir);
       }
-      return {};
+      return { revoked };
     },
 
     async updatePolicy(input = {}) {

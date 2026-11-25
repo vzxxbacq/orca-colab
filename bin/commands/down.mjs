@@ -150,6 +150,7 @@ export async function run(
     }
     let deletedByApi = false;
     let apiAccessToken = null;
+    let deleteError = null;
     if (session.colabRuntime?.id) {
       try {
         const accessToken = await getValidAccessToken({
@@ -167,8 +168,9 @@ export async function run(
           });
           deletedByApi = true;
         }
-      } catch {
+      } catch (err) {
         // Reported below as a zombie the user can delete in Colab.
+        deleteError = err?.message || String(err);
       }
     }
 
@@ -228,7 +230,7 @@ export async function run(
       const action =
         "Run 'orca-colab auth login' and retry 'orca-colab down', or delete the runtime at colab.research.google.com (Runtime -> Disconnect and delete runtime).";
       log(
-        `warning: could not release ${session.name} through the Colab API; marked state=zombie. ${action}`,
+        `warning: could not release ${session.name} through the Colab API${deleteError ? ` (${deleteError})` : ""}; marked state=zombie. ${action}`,
         stderr,
       );
       results.push({
@@ -237,6 +239,7 @@ export async function run(
         released: false,
         state: "zombie",
         reason: "api-delete-failed",
+        ...(deleteError ? { error: deleteError } : {}),
         action,
       });
     }
